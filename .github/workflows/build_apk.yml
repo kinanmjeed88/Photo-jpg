@@ -41,7 +41,7 @@ jobs:
         id: build_step
         run: |
           set -o pipefail
-          flutter build apk --release | tee build_log.txt
+          flutter build apk --release 2>&1 | tee build_log.txt
 
       - name: Upload APK Artifact
         if: success()
@@ -56,7 +56,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -f build_log.txt ]; then
-            ERROR_DETAILS=$(grep -iE "error|exception|failure|what went wrong" -C 10 build_log.txt | head -n 100)
+            # تحسين البحث لالتقاط أخطاء Dart البرمجية تحديداً مع 15 سطر لتوضيح السياق
+            ERROR_DETAILS=$(grep -iE "error:|exception|failure|what went wrong" -C 15 build_log.txt | head -n 100)
             if [ -z "$ERROR_DETAILS" ]; then
               ERROR_DETAILS=$(tail -n 50 build_log.txt)
             fi
