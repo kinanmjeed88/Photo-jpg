@@ -50,8 +50,9 @@ class AppState {
       hasNationalId || hasHousingCard || hasRationCard || hasPassport;
 }
 
-class AppStateNotifier extends StateNotifier<AppState> {
-  AppStateNotifier() : super(AppState());
+class AppStateNotifier extends Notifier<AppState> {
+  @override
+  AppState build() => AppState();
 
   void updateWorkMode(WorkMode mode) => state = state.copyWith(workMode: mode);
 
@@ -67,6 +68,6 @@ class AppStateNotifier extends StateNotifier<AppState> {
   void updateFileName(String name) => state = state.copyWith(fileName: name);
 }
 
-final appStateProvider = StateNotifierProvider<AppStateNotifier, AppState>((ref) {
+final appStateProvider = NotifierProvider<AppStateNotifier, AppState>(() {
   return AppStateNotifier();
 });

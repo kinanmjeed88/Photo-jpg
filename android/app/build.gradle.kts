@@ -7,7 +7,7 @@ plugins {
 
 android {
     namespace = "com.jules.docscanner.doc_scanner_app"
-    compileSdk = 34
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
