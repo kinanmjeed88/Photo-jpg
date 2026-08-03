@@ -56,7 +56,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -f build_log.txt ]; then
-            ERROR_DETAILS=$(tail -n 100 build_log.txt)
+            ERROR_DETAILS=$(grep -iE "error|exception|failure|what went wrong" -C 10 build_log.txt | head -n 100)
+            if [ -z "$ERROR_DETAILS" ]; then
+              ERROR_DETAILS=$(tail -n 50 build_log.txt)
+            fi
           else
             ERROR_DETAILS="Build log file not found. The error occurred before or during the build command execution."
           fi
