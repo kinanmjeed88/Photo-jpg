@@ -36,7 +36,7 @@ class _DocScannerAppState extends State<DocScannerApp> {
       });
       authenticated = await auth.authenticate(
         localizedReason: 'يرجى المصادقة للوصول إلى المستمسكات',
-        options: const AuthenticationOptions(
+        options: AuthenticationOptions(
           stickyAuth: true,
           biometricOnly: false,
         ),
