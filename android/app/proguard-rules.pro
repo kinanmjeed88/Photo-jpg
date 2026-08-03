@@ -8,3 +8,4 @@
 
 # Dart
 -keep class androidx.lifecycle.DefaultLifecycleObserver
+-dontwarn com.google.android.play.core.**
