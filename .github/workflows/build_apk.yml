@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write # ⚠️ مهم جداً: تم تغييرها إلى write ليتمكن البوت من رفع التعديلات
   issues: write
 
 jobs:
@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # ضروري ليتمكن البوت من عمل push
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -50,30 +52,93 @@ jobs:
           name: release-apk
           path: build/app/outputs/flutter-apk/app-release.apk
 
-      - name: Auto-Report Error to Jules
+      - name: 🤖 Autonomous AI Self-Healing
         if: failure()
         env:
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # 1. التقاط الخطأ بدقة
           if [ -f build_log.txt ]; then
-            # تحسين البحث لالتقاط أخطاء Dart البرمجية تحديداً مع 15 سطر لتوضيح السياق
             ERROR_DETAILS=$(grep -iE "error:|exception|failure|what went wrong" -C 15 build_log.txt | head -n 100)
             if [ -z "$ERROR_DETAILS" ]; then
               ERROR_DETAILS=$(tail -n 50 build_log.txt)
             fi
           else
-            ERROR_DETAILS="Build log file not found. The error occurred before or during the build command execution."
+            ERROR_DETAILS="Build log file not found."
           fi
 
-          gh issue create \
-            --title "🚨 Build Failed: Auto-Fix Required by Jules" \
-            --body "Role: Principal Software Engineer.
+          export ERROR_DETAILS="$ERROR_DETAILS"
 
-            @google-labs-jules[bot] The CI/CD GitHub Actions build failed.
-            Analyze the following build error log and fix the code immediately using modern best practices. Do NOT use temporary workarounds or patches. Fix the root cause and ensure compatibility with compileSdk 36 and modern package APIs.
+          # 2. إنشاء سكربت بايثون للاتصال بـ API جولز وإصلاح الملفات تلقائياً
+          cat << 'EOF' > auto_fix.py
+          import os, json, urllib.request
 
-            **Error Log:**
-            \`\`\`text
-            $ERROR_DETAILS
-            \`\`\`
-            "
+          api_key = os.environ.get("JULES_API_KEY")
+          error_log = os.environ.get("ERROR_DETAILS")
+
+          if not api_key:
+              print("Error: JULES_API_KEY is missing!")
+              exit(1)
+
+          prompt = f"""
+          You are a Principal Software Engineer. The Flutter Android build failed.
+          Analyze this error log carefully:
+          {error_log}
+          
+          Identify the exact file causing the error (e.g., lib/main.dart or android/app/proguard-rules.pro).
+          Provide the FULL corrected code for that file. Do NOT use workarounds.
+          If it's a local_auth options error, remove 'AuthenticationOptions' and use the legacy parameters.
+          If it's an R8/ProGuard play core error, the file is 'android/app/proguard-rules.pro' and the fix is '-dontwarn com.google.android.play.core.**'.
+
+          Return ONLY a valid JSON object matching this exact structure, with no markdown tags or extra text:
+          {{
+              "file_path": "the/exact/path/to/the/file",
+              "fixed_code": "the complete source code to replace the file"
+          }}
+          """
+
+          url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+          data = json.dumps({
+              "contents": [{"parts": [{"text": prompt}]}]
+          }).encode('utf-8')
+
+          req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
+
+          try:
+              with urllib.request.urlopen(req) as response:
+                  res_body = json.loads(response.read().decode('utf-8'))
+                  ai_text = res_body['candidates'][0]['content']['parts'][0]['text'].strip()
+                  
+                  # تنظيف الرد إذا احتوى على علامات Markdown
+                  if ai_text.startswith('```json'): ai_text = ai_text[7:]
+                  if ai_text.startswith('```'): ai_text = ai_text[3:]
+                  if ai_text.endswith('```'): ai_text = ai_text[:-3]
+                  
+                  fix_data = json.loads(ai_text.strip())
+                  
+                  file_path = fix_data['file_path']
+                  fixed_code = fix_data['fixed_code']
+                  
+                  # التأكد من وجود المجلد
+                  os.makedirs(os.path.dirname(file_path) or '.', exist_ok=True)
+                  
+                  # كتابة الكود الجديد في الملف
+                  with open(file_path, 'w', encoding='utf-8') as f:
+                      f.write(fixed_code)
+                  
+                  print(f"✅ AI successfully patched: {file_path}")
+          except Exception as e:
+              print(f"❌ AI Fix Failed: {e}")
+              exit(1)
+          EOF
+
+          # تشغيل السكربت
+          python3 auto_fix.py
+
+          # 3. رفع التعديل (Push) لتشغيل البناء من جديد
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "🤖 auto-fix: AI resolved build error automatically"
+          git push
