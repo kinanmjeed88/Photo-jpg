@@ -1,0 +1,75 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - main
+      - feature/*
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Clean Workspace & Get Packages
+        run: |
+          flutter clean
+          flutter pub get
+
+      - name: Build Release APK
+        id: build_step
+        run: |
+          set -o pipefail
+          flutter build apk --release | tee build_log.txt
+
+      - name: Upload APK Artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Auto-Report Error to Jules
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -f build_log.txt ]; then
+            ERROR_DETAILS=$(tail -n 100 build_log.txt)
+          else
+            ERROR_DETAILS="Build log file not found. The error occurred before or during the build command execution."
+          fi
+
+          gh issue create \
+            --title "🚨 Build Failed: Auto-Fix Required by Jules" \
+            --body "Role: Principal Software Engineer.
+
+            @google-labs-jules[bot] The CI/CD GitHub Actions build failed.
+            Analyze the following build error log and fix the code immediately using modern best practices. Do NOT use temporary workarounds or patches. Fix the root cause and ensure compatibility with compileSdk 36 and modern package APIs.
+
+            **Error Log:**
+            \`\`\`text
+            $ERROR_DETAILS
+            \`\`\`
+            "
