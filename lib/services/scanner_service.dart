@@ -7,8 +7,8 @@ import 'package:image/image.dart' as img;
 class ScannerService {
   final ImagePicker _picker = ImagePicker();
 
-  Future<File?> scanDocument() async {
-    final XFile? image = await _picker.pickImage(source: ImageSource.camera);
+  Future<File?> scanDocument({ImageSource source = ImageSource.camera}) async {
+    final XFile? image = await _picker.pickImage(source: source);
     if (image == null) return null;
 
     final CroppedFile? croppedFile = await ImageCropper().cropImage(

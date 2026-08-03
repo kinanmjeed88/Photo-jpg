@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/app_state.dart';
 import '../services/scanner_service.dart';
+import 'package:image_picker/image_picker.dart';
 import '../services/pdf_service.dart';
 import 'archive_screen.dart';
 
@@ -19,8 +20,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
   final List<File> _scannedImages = [];
   bool _isProcessing = false;
 
-  Future<void> _scanImage() async {
-    final file = await _scannerService.scanDocument();
+  Future<void> _scanImage(ImageSource source) async {
+    final file = await _scannerService.scanDocument(source: source);
     if (file != null) {
       setState(() {
         _isProcessing = true;
@@ -36,6 +37,36 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
         _isProcessing = false;
       });
     }
+  }
+
+  void _showImageSourceOptions() {
+    showModalBottomSheet(
+      context: context,
+      builder: (BuildContext context) {
+        return SafeArea(
+          child: Wrap(
+            children: <Widget>[
+              ListTile(
+                leading: const Icon(Icons.camera_alt),
+                title: const Text('التقاط صورة'),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _scanImage(ImageSource.camera);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library),
+                title: const Text('اختيار من المعرض'),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _scanImage(ImageSource.gallery);
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _generatePdf() async {
@@ -132,7 +163,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                     children: [
                       Expanded(
                         child: ElevatedButton.icon(
-                          onPressed: _scanImage,
+                          onPressed: _showImageSourceOptions,
                           icon: const Icon(Icons.camera_alt),
                           label: const Text('إضافة صورة'),
                         ),
