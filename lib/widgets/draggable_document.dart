@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:math' as math;
 import '../providers/app_state.dart';
 
 class DraggableResizableDocument extends StatefulWidget {
@@ -65,11 +66,8 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
       dy += details.delta.dy;
 
       // Strict bounds clamping for drag
-      if (dx < 0) dx = 0;
-      if (dx > widget.canvasWidth - width) dx = widget.canvasWidth - width;
-
-      if (dy < 0) dy = 0;
-      if (dy > widget.canvasHeight - height) dy = widget.canvasHeight - height;
+      dx = math.max(0.0, math.min(dx, widget.canvasWidth - width));
+      dy = math.max(0.0, math.min(dy, widget.canvasHeight - height));
     });
   }
 
@@ -89,8 +87,8 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
       if (newHeight < 50) newHeight = 50;
 
       // Ensure resize doesn't push the document out of bounds
-      if (dx + newWidth > widget.canvasWidth) newWidth = widget.canvasWidth - dx;
-      if (dy + newHeight > widget.canvasHeight) newHeight = widget.canvasHeight - dy;
+      newWidth = math.min(newWidth, widget.canvasWidth - dx);
+      newHeight = math.min(newHeight, widget.canvasHeight - dy);
 
       width = newWidth;
       height = newHeight;
