@@ -8,8 +8,41 @@ enum DocumentType { nationalId, housingCard, rationCard, passport, unknown }
 class ScannedDocument {
   final File file;
   final DocumentType type;
+  final double dx;
+  final double dy;
+  final double width;
+  final double height;
+  final int pageIndex;
 
-  ScannedDocument({required this.file, this.type = DocumentType.unknown});
+  ScannedDocument({
+    required this.file,
+    this.type = DocumentType.unknown,
+    this.dx = 0,
+    this.dy = 0,
+    this.width = 200,
+    this.height = 200,
+    this.pageIndex = 0,
+  });
+
+  ScannedDocument copyWith({
+    File? file,
+    DocumentType? type,
+    double? dx,
+    double? dy,
+    double? width,
+    double? height,
+    int? pageIndex,
+  }) {
+    return ScannedDocument(
+      file: file ?? this.file,
+      type: type ?? this.type,
+      dx: dx ?? this.dx,
+      dy: dy ?? this.dy,
+      width: width ?? this.width,
+      height: height ?? this.height,
+      pageIndex: pageIndex ?? this.pageIndex,
+    );
+  }
 }
 
 class ScannedDocumentsNotifier extends Notifier<List<ScannedDocument>> {
@@ -17,7 +50,22 @@ class ScannedDocumentsNotifier extends Notifier<List<ScannedDocument>> {
   List<ScannedDocument> build() => [];
 
   void addDocument(ScannedDocument doc) {
-    state = [...state, doc];
+    // Basic automatic placement for new documents
+    int newPageIndex = 0;
+    double newDy = 0.0;
+    if (state.isNotEmpty) {
+      final lastDoc = state.last;
+      newPageIndex = lastDoc.pageIndex;
+      newDy = lastDoc.dy + lastDoc.height + 20;
+      // If it exceeds a reasonable A4 height estimate in UI, move to next page
+      if (newDy > 600) {
+        newPageIndex++;
+        newDy = 0;
+      }
+    }
+
+    final newDoc = doc.copyWith(pageIndex: newPageIndex, dy: newDy);
+    state = [...state, newDoc];
   }
 
   void removeDocumentAt(int index) {
@@ -32,6 +80,20 @@ class ScannedDocumentsNotifier extends Notifier<List<ScannedDocument>> {
       for (int i = 0; i < state.length; i++)
         if (i == index) newDoc else state[i]
     ];
+  }
+
+  void updateDocumentLayout(int index, {double? dx, double? dy, double? width, double? height, int? pageIndex}) {
+    if (index >= 0 && index < state.length) {
+      final doc = state[index];
+      final newDoc = doc.copyWith(
+        dx: dx,
+        dy: dy,
+        width: width,
+        height: height,
+        pageIndex: pageIndex,
+      );
+      updateDocumentAt(index, newDoc);
+    }
   }
 
   void clear() {
@@ -53,7 +115,6 @@ class AppState {
   final bool addFrame;
   final String fileName;
   final bool smartRecognition;
-  final bool autoDeskew;
 
   AppState({
     this.workMode = WorkMode.single,
@@ -65,7 +126,6 @@ class AppState {
     this.addFrame = false,
     this.fileName = 'مستمسكاتي',
     this.smartRecognition = false,
-    this.autoDeskew = false,
   });
 
   AppState copyWith({
@@ -78,7 +138,6 @@ class AppState {
     bool? addFrame,
     String? fileName,
     bool? smartRecognition,
-    bool? autoDeskew,
   }) {
     return AppState(
       workMode: workMode ?? this.workMode,
@@ -90,7 +149,6 @@ class AppState {
       addFrame: addFrame ?? this.addFrame,
       fileName: fileName ?? this.fileName,
       smartRecognition: smartRecognition ?? this.smartRecognition,
-      autoDeskew: autoDeskew ?? this.autoDeskew,
     );
   }
 
@@ -116,7 +174,6 @@ class AppStateNotifier extends Notifier<AppState> {
   void updateFileName(String name) => state = state.copyWith(fileName: name);
 
   void toggleSmartRecognition(bool value) => state = state.copyWith(smartRecognition: value);
-  void toggleAutoDeskew(bool value) => state = state.copyWith(autoDeskew: value);
 }
 
 final appStateProvider = NotifierProvider<AppStateNotifier, AppState>(() {

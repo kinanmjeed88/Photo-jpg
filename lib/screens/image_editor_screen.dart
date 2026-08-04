@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:extended_image/extended_image.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:opencv_dart/opencv_dart.dart' as cv;
+import 'package:image_gallery_saver/image_gallery_saver.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../providers/app_state.dart';
 
 class ImageEditorScreen extends ConsumerStatefulWidget {
@@ -24,6 +26,83 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
   double _saturation = 1;
   bool _isProcessing = false;
 
+  Future<void> _saveToGallery() async {
+    final status = await Permission.storage.request();
+    if (!status.isGranted && !await Permission.photos.request().isGranted) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('الرجاء منح صلاحية الوصول إلى المعرض')),
+        );
+      }
+      return;
+    }
+
+    setState(() => _isProcessing = true);
+    try {
+      final doc = ref.read(scannedDocumentsProvider)[widget.documentIndex];
+      final bytes = await doc.file.readAsBytes();
+
+      final rect = editorKey.currentState?.getCropRect();
+      final rectLeft = rect?.left.toInt();
+      final rectTop = rect?.top.toInt();
+      final rectWidth = rect?.width.toInt();
+      final rectHeight = rect?.height.toInt();
+
+      final contrast = _contrast;
+      final brightness = _brightness;
+
+      final processedBytes = await Isolate.run(() {
+        cv.Mat? src;
+        cv.Mat? scaled;
+        cv.Mat? cropped;
+        try {
+          src = cv.imdecode(bytes, cv.IMREAD_COLOR);
+
+          if (contrast != 1.0 || brightness != 0.0) {
+            scaled = cv.convertScaleAbs(src, alpha: contrast, beta: brightness);
+            src.dispose();
+            src = scaled;
+          }
+
+          if (rectLeft != null && rectTop != null && rectWidth != null && rectHeight != null) {
+            cropped = src.region(cv.Rect(rectLeft, rectTop, rectWidth, rectHeight));
+            final (_, encodedBytes) = cv.imencode('.jpg', cropped);
+            return encodedBytes;
+          } else {
+            final (_, encodedBytes) = cv.imencode('.jpg', src);
+            return encodedBytes;
+          }
+        } catch (e) {
+          print('Gallery save OpenCV failed: $e');
+          return bytes;
+        } finally {
+          src?.dispose();
+          cropped?.dispose();
+        }
+      });
+
+      final result = await ImageGallerySaver.saveImage(
+        processedBytes,
+        quality: 100,
+        name: "scanned_${DateTime.now().millisecondsSinceEpoch}"
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(result['isSuccess'] == true ? 'تم الحفظ في المعرض' : 'فشل الحفظ')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('حدث خطأ أثناء الحفظ: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isProcessing = false);
+    }
+  }
+
   void _applyChanges() async {
     setState(() => _isProcessing = true);
     try {
@@ -41,12 +120,16 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
       final contrast = _contrast;
       final brightness = _brightness;
 
+      final String docPath = doc.file.path;
       final editedPath = await Isolate.run(() {
         cv.Mat? src;
         cv.Mat? scaled;
         cv.Mat? cropped;
         try {
           src = cv.imdecode(bytes, cv.IMREAD_COLOR);
+          if (src.isEmpty) {
+            return docPath;
+          }
 
           if (contrast != 1.0 || brightness != 0.0) {
             scaled = cv.convertScaleAbs(src, alpha: contrast, beta: brightness);
@@ -62,6 +145,9 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
             cv.imwrite(outPath, src);
           }
           return outPath;
+        } catch (e) {
+          print('OpenCV Isolate failed: $e');
+          return docPath;
         } finally {
           src?.dispose();
           cropped?.dispose();
@@ -93,6 +179,11 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
         title: const Text('تعديل الصورة'),
         actions: [
           IconButton(
+            icon: const Icon(Icons.save_alt),
+            tooltip: 'حفظ في المعرض',
+            onPressed: _isProcessing ? null : _saveToGallery,
+          ),
+          IconButton(
             icon: const Icon(Icons.check),
             tooltip: 'تطبيق التعديلات',
             onPressed: _isProcessing ? null : _applyChanges,
@@ -104,18 +195,26 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
         : Column(
             children: [
               Expanded(
-                child: ExtendedImage.file(
-                  doc.file,
-                  fit: BoxFit.contain,
-                  mode: ExtendedImageMode.editor,
-                  extendedImageEditorKey: editorKey,
-                  initEditorConfigHandler: (ExtendedImageState? state) {
-                    return EditorConfig(
-                      maxScale: 8.0,
-                      cropRectPadding: const EdgeInsets.all(20.0),
-                      hitTestSize: 20.0,
-                    );
-                  },
+                child: ColorFiltered(
+                  colorFilter: ColorFilter.matrix([
+                    _contrast, 0, 0, 0, _brightness,
+                    0, _contrast, 0, 0, _brightness,
+                    0, 0, _contrast, 0, _brightness,
+                    0, 0, 0, 1, 0,
+                  ]),
+                  child: ExtendedImage.file(
+                    doc.file,
+                    fit: BoxFit.contain,
+                    mode: ExtendedImageMode.editor,
+                    extendedImageEditorKey: editorKey,
+                    initEditorConfigHandler: (ExtendedImageState? state) {
+                      return EditorConfig(
+                        maxScale: 8.0,
+                        cropRectPadding: const EdgeInsets.all(20.0),
+                        hitTestSize: 20.0,
+                      );
+                    },
+                  ),
                 ),
               ),
               Container(

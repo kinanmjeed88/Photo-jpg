@@ -113,12 +113,6 @@ class SettingsScreen extends ConsumerWidget {
               onChanged: notifier.toggleSmartRecognition,
               activeColor: const Color(0xFFF59E0B),
             ),
-            SwitchListTile(
-              title: const Text('تعديل تلقائي للميلان'),
-              value: state.autoDeskew,
-              onChanged: notifier.toggleAutoDeskew,
-              activeColor: const Color(0xFFF59E0B),
-            ),
             const Divider(),
             const Text('إخراج الملف:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFFF59E0B))),
             SwitchListTile(
