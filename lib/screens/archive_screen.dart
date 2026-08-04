@@ -22,7 +22,8 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
 
   Future<void> _loadFiles() async {
     final dir = await getApplicationDocumentsDirectory();
-    final files = dir.listSync().where((item) => item.path.endsWith('.pdf')).toList();
+    final allFiles = await dir.list().toList();
+    final files = allFiles.where((item) => item.path.endsWith('.pdf')).toList();
     setState(() {
       _files = files;
     });
