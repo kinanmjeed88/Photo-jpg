@@ -5,9 +5,91 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:extended_image/extended_image.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:opencv_dart/opencv_dart.dart' as cv;
+import 'dart:typed_data';
 import 'package:gal/gal.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../providers/app_state.dart';
+
+Uint8List _processGalleryImage(Map<String, dynamic> args) {
+  final Uint8List bytes = args['bytes'];
+  final int? rectLeft = args['rectLeft'];
+  final int? rectTop = args['rectTop'];
+  final int? rectWidth = args['rectWidth'];
+  final int? rectHeight = args['rectHeight'];
+  final double contrast = args['contrast'];
+  final double brightness = args['brightness'];
+
+  cv.Mat? src;
+  cv.Mat? scaled;
+  cv.Mat? cropped;
+  try {
+    src = cv.imdecode(bytes, cv.IMREAD_COLOR);
+
+    if (contrast != 1.0 || brightness != 0.0) {
+      scaled = cv.convertScaleAbs(src, alpha: contrast, beta: brightness);
+      src.dispose();
+      src = scaled;
+    }
+
+    if (rectLeft != null && rectTop != null && rectWidth != null && rectHeight != null) {
+      cropped = src.region(cv.Rect(rectLeft, rectTop, rectWidth, rectHeight));
+      final (_, encodedBytes) = cv.imencode('.jpg', cropped);
+      return encodedBytes;
+    } else {
+      final (_, encodedBytes) = cv.imencode('.jpg', src);
+      return encodedBytes;
+    }
+  } catch (e) {
+    print('Gallery save OpenCV failed: $e');
+    return bytes;
+  } finally {
+    src?.dispose();
+    cropped?.dispose();
+  }
+}
+
+String _processEditedImage(Map<String, dynamic> args) {
+  final Uint8List bytes = args['bytes'];
+  final int? rectLeft = args['rectLeft'];
+  final int? rectTop = args['rectTop'];
+  final int? rectWidth = args['rectWidth'];
+  final int? rectHeight = args['rectHeight'];
+  final double contrast = args['contrast'];
+  final double brightness = args['brightness'];
+  final String tempPath = args['tempPath'];
+  final String docPath = args['docPath'];
+
+  cv.Mat? src;
+  cv.Mat? scaled;
+  cv.Mat? cropped;
+  try {
+    src = cv.imdecode(bytes, cv.IMREAD_COLOR);
+    if (src.isEmpty) {
+      return docPath;
+    }
+
+    if (contrast != 1.0 || brightness != 0.0) {
+      scaled = cv.convertScaleAbs(src, alpha: contrast, beta: brightness);
+      src.dispose();
+      src = scaled;
+    }
+
+    final outPath = '$tempPath/edited_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    if (rectLeft != null && rectTop != null && rectWidth != null && rectHeight != null) {
+      cropped = src.region(cv.Rect(rectLeft, rectTop, rectWidth, rectHeight));
+      cv.imwrite(outPath, cropped);
+    } else {
+      cv.imwrite(outPath, src);
+    }
+    return outPath;
+  } catch (e) {
+    print('OpenCV Isolate failed: $e');
+    return docPath;
+  } finally {
+    src?.dispose();
+    cropped?.dispose();
+  }
+}
 
 class ImageEditorScreen extends ConsumerStatefulWidget {
   final int documentIndex;
@@ -48,38 +130,17 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
       final rectWidth = rect?.width.toInt();
       final rectHeight = rect?.height.toInt();
 
-      final contrast = _contrast;
-      final brightness = _brightness;
+      final args = {
+        'bytes': bytes,
+        'rectLeft': rectLeft,
+        'rectTop': rectTop,
+        'rectWidth': rectWidth,
+        'rectHeight': rectHeight,
+        'contrast': _contrast,
+        'brightness': _brightness,
+      };
 
-      final processedBytes = await Isolate.run(() {
-        cv.Mat? src;
-        cv.Mat? scaled;
-        cv.Mat? cropped;
-        try {
-          src = cv.imdecode(bytes, cv.IMREAD_COLOR);
-
-          if (contrast != 1.0 || brightness != 0.0) {
-            scaled = cv.convertScaleAbs(src, alpha: contrast, beta: brightness);
-            src.dispose();
-            src = scaled;
-          }
-
-          if (rectLeft != null && rectTop != null && rectWidth != null && rectHeight != null) {
-            cropped = src.region(cv.Rect(rectLeft, rectTop, rectWidth, rectHeight));
-            final (_, encodedBytes) = cv.imencode('.jpg', cropped);
-            return encodedBytes;
-          } else {
-            final (_, encodedBytes) = cv.imencode('.jpg', src);
-            return encodedBytes;
-          }
-        } catch (e) {
-          print('Gallery save OpenCV failed: $e');
-          return bytes;
-        } finally {
-          src?.dispose();
-          cropped?.dispose();
-        }
-      });
+      final processedBytes = await Isolate.run(() => _processGalleryImage(args));
 
       await Gal.putImageBytes(
         processedBytes,
@@ -120,38 +181,20 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
       final brightness = _brightness;
 
       final String docPath = doc.file.path;
-      final editedPath = await Isolate.run(() {
-        cv.Mat? src;
-        cv.Mat? scaled;
-        cv.Mat? cropped;
-        try {
-          src = cv.imdecode(bytes, cv.IMREAD_COLOR);
-          if (src.isEmpty) {
-            return docPath;
-          }
 
-          if (contrast != 1.0 || brightness != 0.0) {
-            scaled = cv.convertScaleAbs(src, alpha: contrast, beta: brightness);
-            src.dispose();
-            src = scaled;
-          }
+      final args = {
+        'bytes': bytes,
+        'rectLeft': rectLeft,
+        'rectTop': rectTop,
+        'rectWidth': rectWidth,
+        'rectHeight': rectHeight,
+        'contrast': contrast,
+        'brightness': brightness,
+        'tempPath': tempPath,
+        'docPath': docPath,
+      };
 
-          final outPath = '$tempPath/edited_${DateTime.now().millisecondsSinceEpoch}.jpg';
-          if (rectLeft != null && rectTop != null && rectWidth != null && rectHeight != null) {
-            cropped = src.region(cv.Rect(rectLeft, rectTop, rectWidth, rectHeight));
-            cv.imwrite(outPath, cropped);
-          } else {
-            cv.imwrite(outPath, src);
-          }
-          return outPath;
-        } catch (e) {
-          print('OpenCV Isolate failed: $e');
-          return docPath;
-        } finally {
-          src?.dispose();
-          cropped?.dispose();
-        }
-      });
+      final editedPath = await Isolate.run(() => _processEditedImage(args));
 
       final newDoc = ScannedDocument(file: File(editedPath), type: doc.type);
       ref.read(scannedDocumentsProvider.notifier).updateDocumentAt(widget.documentIndex, newDoc);

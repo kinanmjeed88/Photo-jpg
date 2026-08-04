@@ -17,10 +17,10 @@ class ScannedDocument {
   ScannedDocument({
     required this.file,
     this.type = DocumentType.unknown,
-    this.dx = 0,
-    this.dy = 0,
-    this.width = 200,
-    this.height = 200,
+    this.dx = 20,
+    this.dy = 20,
+    this.width = 300,
+    this.height = 400,
     this.pageIndex = 0,
   });
 

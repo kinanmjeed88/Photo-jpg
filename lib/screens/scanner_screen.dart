@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 import '../services/pdf_service.dart';
 import 'archive_screen.dart';
 import 'image_editor_screen.dart';
+import '../widgets/draggable_document.dart';
 
 class ScannerScreen extends ConsumerStatefulWidget {
   const ScannerScreen({super.key});
@@ -19,6 +20,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
   final ScannerService _scannerService = ScannerService();
   final PdfService _pdfService = PdfService();
   bool _isProcessing = false;
+  int? _selectedDocIndex;
 
   Future<void> _scanImage(ImageSource source) async {
     final state = ref.read(appStateProvider);
@@ -180,46 +182,38 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                       final canvasWidth = constraints.maxWidth;
                                       final canvasHeight = constraints.maxHeight;
 
-                                      return Stack(
-                                        children: [
-                                          ...docsOnPage.map((entry) {
-                                            final docIndex = entry.key;
-                                            final doc = entry.value;
+                                      // Sort docs so selected one is drawn last (on top)
+                                      final sortedDocs = List.of(docsOnPage);
+                                      sortedDocs.sort((a, b) {
+                                        if (a.key == _selectedDocIndex) return 1;
+                                        if (b.key == _selectedDocIndex) return -1;
+                                        return 0;
+                                      });
 
-                                            return Positioned(
-                                              left: doc.dx,
-                                              top: doc.dy,
-                                              child: GestureDetector(
-                                                onPanUpdate: (details) {
-                                                  final newDx = doc.dx + details.delta.dx;
-                                                  final newDy = doc.dy + details.delta.dy;
+                                      return GestureDetector(
+                                        behavior: HitTestBehavior.translucent,
+                                        onTap: () {
+                                          // Deselect if tapping empty space
+                                          setState(() => _selectedDocIndex = null);
+                                        },
+                                        child: Stack(
+                                          clipBehavior: Clip.none,
+                                          children: [
+                                            ...sortedDocs.map((entry) {
+                                              final docIndex = entry.key;
+                                              final doc = entry.value;
 
-                                                  // Auto-pagination logic
-                                                  if (newDy > canvasHeight - doc.height * 0.5) {
-                                                    // Move to next page
-                                                    ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
-                                                      docIndex,
-                                                      dx: newDx,
-                                                      dy: 0,
-                                                      pageIndex: doc.pageIndex + 1,
-                                                    );
-                                                  } else if (newDy < -doc.height * 0.5 && doc.pageIndex > 0) {
-                                                    // Move to previous page
-                                                    ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
-                                                      docIndex,
-                                                      dx: newDx,
-                                                      dy: canvasHeight - doc.height,
-                                                      pageIndex: doc.pageIndex - 1,
-                                                    );
-                                                  } else {
-                                                    ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
-                                                      docIndex,
-                                                      dx: newDx,
-                                                      dy: newDy,
-                                                    );
-                                                  }
+                                              return DraggableResizableDocument(
+                                                key: ValueKey(doc.file.path),
+                                                document: doc,
+                                                index: docIndex,
+                                                isSelected: _selectedDocIndex == docIndex,
+                                                canvasWidth: canvasWidth,
+                                                canvasHeight: canvasHeight,
+                                                onTap: () {
+                                                  setState(() => _selectedDocIndex = docIndex);
                                                 },
-                                                onDoubleTap: () {
+                                                onEdit: () {
                                                   Navigator.push(
                                                     context,
                                                     MaterialPageRoute(
@@ -227,54 +221,45 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                     ),
                                                   );
                                                 },
-                                                child: Stack(
-                                                  children: [
-                                                    Container(
-                                                      width: doc.width,
-                                                      height: doc.height,
-                                                      decoration: BoxDecoration(
-                                                        border: Border.all(color: Colors.blueAccent.withOpacity(0.5), width: 2),
-                                                      ),
-                                                      child: Image.file(doc.file, fit: BoxFit.contain),
-                                                    ),
-                                                    Positioned(
-                                                      top: 0,
-                                                      right: 0,
-                                                      child: GestureDetector(
-                                                        onTap: () {
-                                                          showDialog(
-                                                            context: context,
-                                                            builder: (context) => AlertDialog(
-                                                              title: const Text('تأكيد الحذف'),
-                                                              content: const Text('هل أنت متأكد من أنك تريد حذف هذا المستمسك؟'),
-                                                              actions: [
-                                                                TextButton(
-                                                                  onPressed: () => Navigator.pop(context),
-                                                                  child: const Text('إلغاء'),
-                                                                ),
-                                                                TextButton(
-                                                                  onPressed: () {
-                                                                    ref.read(scannedDocumentsProvider.notifier).removeDocumentAt(docIndex);
-                                                                    Navigator.pop(context);
-                                                                  },
-                                                                  child: const Text('حذف', style: TextStyle(color: Colors.red)),
-                                                                ),
-                                                              ],
-                                                            ),
-                                                          );
-                                                        },
-                                                        child: Container(
-                                                          color: Colors.redAccent,
-                                                          child: const Icon(Icons.close, color: Colors.white, size: 20),
+                                                onDelete: () {
+                                                  showDialog(
+                                                    context: context,
+                                                    builder: (context) => AlertDialog(
+                                                      title: const Text('تأكيد الحذف'),
+                                                      content: const Text('هل أنت متأكد من أنك تريد حذف هذا المستمسك؟'),
+                                                      actions: [
+                                                        TextButton(
+                                                          onPressed: () => Navigator.pop(context),
+                                                          child: const Text('إلغاء'),
                                                         ),
-                                                      ),
+                                                        TextButton(
+                                                          onPressed: () {
+                                                            ref.read(scannedDocumentsProvider.notifier).removeDocumentAt(docIndex);
+                                                            if (_selectedDocIndex == docIndex) {
+                                                              setState(() => _selectedDocIndex = null);
+                                                            }
+                                                            Navigator.pop(context);
+                                                          },
+                                                          child: const Text('حذف', style: TextStyle(color: Colors.red)),
+                                                        ),
+                                                      ],
                                                     ),
-                                                  ],
-                                                ),
-                                              ),
-                                            );
-                                          }).toList(),
-                                        ],
+                                                  );
+                                                },
+                                                onLayoutUpdate: (index, dx, dy, width, height, newPageIndex) {
+                                                  ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
+                                                    index,
+                                                    dx: dx,
+                                                    dy: dy,
+                                                    width: width,
+                                                    height: height,
+                                                    pageIndex: newPageIndex,
+                                                  );
+                                                },
+                                              );
+                                            }).toList(),
+                                          ],
+                                        ),
                                       );
                                     },
                                   ),

@@ -10,6 +10,73 @@ import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart
 import 'package:path_provider/path_provider.dart';
 import '../providers/app_state.dart';
 
+Future<List<File>> _isolateProcessSmartRecognition(Map<String, String> args) async {
+  final String tempPath = args['tempPath']!;
+  final String imagePath = args['imagePath']!;
+
+  cv.Mat? src;
+  cv.Mat? srcClone;
+  cv.Mat? gray;
+  cv.Mat? blurred;
+  cv.Mat? edges;
+  cv.Contours? contours;
+  cv.VecVec4i? hierarchy;
+
+  try {
+    final bytes = File(imagePath).readAsBytesSync();
+    src = cv.imdecode(bytes, cv.IMREAD_COLOR);
+
+    if (src.isEmpty) {
+      return [File(imagePath)];
+    }
+
+    srcClone = src.clone();
+
+    gray = cv.cvtColor(src, cv.COLOR_BGR2GRAY);
+    blurred = cv.gaussianBlur(gray, (5, 5), 0);
+
+    final (_, edgesOut) = cv.threshold(blurred, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+    edges = edgesOut;
+
+    final (conts, hier) = cv.findContours(edges, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    contours = conts;
+    hierarchy = hier;
+
+    List<File> croppedFiles = [];
+    double minArea = 10000;
+    int count = 0;
+
+    for (var contour in contours) {
+      final area = cv.contourArea(contour);
+      if (area > minArea) {
+        final rect = cv.boundingRect(contour);
+        final croppedMat = srcClone.region(rect);
+        final croppedPath = '$tempPath/smart_cropped_${DateTime.now().millisecondsSinceEpoch}_$count.jpg';
+        cv.imwrite(croppedPath, croppedMat);
+        croppedFiles.add(File(croppedPath));
+        croppedMat.dispose();
+        count++;
+      }
+    }
+
+    if (croppedFiles.isEmpty) {
+      return [File(imagePath)];
+    }
+    return croppedFiles;
+  } catch (e) {
+    print('Smart recognition failed: $e');
+    return [File(imagePath)];
+  } finally {
+    src?.dispose();
+    srcClone?.dispose();
+    gray?.dispose();
+    blurred?.dispose();
+    edges?.dispose();
+    contours?.dispose();
+    hierarchy?.dispose();
+  }
+}
+
 class ScannerService {
   final ImagePicker _picker = ImagePicker();
 
@@ -63,69 +130,12 @@ class ScannerService {
     final tempPath = tempDir.path;
     final imagePath = imageFile.path;
 
-    return await Isolate.run(() async {
-      cv.Mat? src;
-      cv.Mat? srcClone;
-      cv.Mat? gray;
-      cv.Mat? blurred;
-      cv.Mat? edges;
-      cv.Contours? contours;
-      cv.VecVec4i? hierarchy;
+    final args = {
+      'tempPath': tempPath,
+      'imagePath': imagePath,
+    };
 
-      try {
-        final bytes = File(imagePath).readAsBytesSync();
-        src = cv.imdecode(bytes, cv.IMREAD_COLOR);
-
-        if (src.isEmpty) {
-          return [File(imagePath)];
-        }
-
-        srcClone = src.clone();
-
-        gray = cv.cvtColor(src, cv.COLOR_BGR2GRAY);
-        blurred = cv.gaussianBlur(gray, (5, 5), 0);
-
-        final (_, edgesOut) = cv.threshold(blurred, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
-        edges = edgesOut;
-
-        final (conts, hier) = cv.findContours(edges, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-        contours = conts;
-        hierarchy = hier;
-
-        List<File> croppedFiles = [];
-        double minArea = 10000;
-        int count = 0;
-
-        for (var contour in contours) {
-          final area = cv.contourArea(contour);
-          if (area > minArea) {
-            final rect = cv.boundingRect(contour);
-            final croppedMat = srcClone.region(rect);
-            final croppedPath = '$tempPath/smart_cropped_${DateTime.now().millisecondsSinceEpoch}_$count.jpg';
-            cv.imwrite(croppedPath, croppedMat);
-            croppedFiles.add(File(croppedPath));
-            croppedMat.dispose();
-            count++;
-          }
-        }
-
-        if (croppedFiles.isEmpty) {
-          return [File(imagePath)];
-        }
-        return croppedFiles;
-      } catch (e) {
-        print('Smart recognition failed: $e');
-        return [File(imagePath)];
-      } finally {
-        src?.dispose();
-        srcClone?.dispose();
-        gray?.dispose();
-        blurred?.dispose();
-        edges?.dispose();
-        contours?.dispose();
-        hierarchy?.dispose();
-      }
-    });
+    return await Isolate.run(() => _isolateProcessSmartRecognition(args));
   }
 
   Future<DocumentType> classifyDocument(File imageFile) async {
