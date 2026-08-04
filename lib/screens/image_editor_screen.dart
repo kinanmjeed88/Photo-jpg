@@ -25,41 +25,38 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
 
   void _applyChanges() async {
     setState(() => _isProcessing = true);
+    cv.Mat? src;
+    cv.Mat? scaled;
+    cv.Mat? cropped;
     try {
       final doc = ref.read(scannedDocumentsProvider)[widget.documentIndex];
       final bytes = await doc.file.readAsBytes();
 
-      var src = cv.imdecode(bytes, cv.IMREAD_COLOR);
+      src = cv.imdecode(bytes, cv.IMREAD_COLOR);
 
-      // Saturation (convert to HSV, modify S, convert back)
-      if (_saturation != 1.0) {
-        var hsv = cv.cvtColor(src, cv.COLOR_BGR2HSV);
-        final hsvPlanes = cv.split(hsv);
-
-        // OpenCV dart might not have direct scalar multiply on Mats in this version,
-        // so we'll adjust using addWeighted for brightness/contrast directly on BGR first.
-      }
-
-      // Brightness and Contrast
-      // alpha = contrast (1.0 = no change)
-      // beta = brightness (0 = no change)
       if (_contrast != 1.0 || _brightness != 0.0) {
-          src = cv.convertScaleAbs(src, alpha: _contrast, beta: _brightness);
+          scaled = cv.convertScaleAbs(src, alpha: _contrast, beta: _brightness);
+          src.dispose();
+          src = scaled;
       }
 
-      // Extended Image cropping
       final rect = editorKey.currentState?.getCropRect();
       if (rect != null) {
-          final cropped = src.region(cv.Rect(rect.left.toInt(), rect.top.toInt(), rect.width.toInt(), rect.height.toInt()));
-          src = cropped;
+          cropped = src.region(cv.Rect(rect.left.toInt(), rect.top.toInt(), rect.width.toInt(), rect.height.toInt()));
+          final tempDir = await getTemporaryDirectory();
+          final editedPath = '${tempDir.path}/edited_${DateTime.now().millisecondsSinceEpoch}.jpg';
+          cv.imwrite(editedPath, cropped);
+
+          final newDoc = ScannedDocument(file: File(editedPath), type: doc.type);
+          ref.read(scannedDocumentsProvider.notifier).updateDocumentAt(widget.documentIndex, newDoc);
+      } else {
+          final tempDir = await getTemporaryDirectory();
+          final editedPath = '${tempDir.path}/edited_${DateTime.now().millisecondsSinceEpoch}.jpg';
+          cv.imwrite(editedPath, src);
+
+          final newDoc = ScannedDocument(file: File(editedPath), type: doc.type);
+          ref.read(scannedDocumentsProvider.notifier).updateDocumentAt(widget.documentIndex, newDoc);
       }
-
-      final tempDir = await getTemporaryDirectory();
-      final editedPath = '${tempDir.path}/edited_${DateTime.now().millisecondsSinceEpoch}.jpg';
-      cv.imwrite(editedPath, src);
-
-      final newDoc = ScannedDocument(file: File(editedPath), type: doc.type);
-      ref.read(scannedDocumentsProvider.notifier).updateDocumentAt(widget.documentIndex, newDoc);
 
       if (mounted) {
         Navigator.pop(context);
@@ -67,6 +64,8 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
     } catch (e) {
       print('Editor failed: $e');
     } finally {
+      src?.dispose();
+      cropped?.dispose();
       if (mounted) setState(() => _isProcessing = false);
     }
   }

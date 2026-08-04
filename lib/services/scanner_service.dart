@@ -1,5 +1,7 @@
 import 'dart:io';
+import 'dart:isolate';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:image_cropper/image_cropper.dart';
 import 'package:image/image.dart' as img;
@@ -11,8 +13,6 @@ import '../providers/app_state.dart';
 class ScannerService {
   final ImagePicker _picker = ImagePicker();
 
-  // Note: we can remove image_cropper usage if auto deskew handles it,
-  // but we might keep it as a fallback for standard picking.
   Future<File?> scanDocument({ImageSource source = ImageSource.camera}) async {
     final XFile? image = await _picker.pickImage(source: source);
     if (image == null) return null;
@@ -59,151 +59,186 @@ class ScannerService {
   }
 
   Future<List<File>> processSmartRecognition(File imageFile) async {
-    try {
-      final bytes = await imageFile.readAsBytes();
-      final src = cv.imdecode(bytes, cv.IMREAD_COLOR);
+    final tempDir = await getTemporaryDirectory();
+    final tempPath = tempDir.path;
+    final imagePath = imageFile.path;
 
-      final gray = cv.cvtColor(src, cv.COLOR_BGR2GRAY);
-      final blurred = cv.gaussianBlur(gray, (5, 5), 0);
+    return await Isolate.run(() async {
+      cv.Mat? src;
+      cv.Mat? srcClone;
+      cv.Mat? gray;
+      cv.Mat? blurred;
+      cv.Mat? edges;
 
-      // The threshold function returns a tuple. We only need the Mat.
-      final (_, edges) = cv.threshold(blurred, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+      try {
+        final bytes = File(imagePath).readAsBytesSync();
+        src = cv.imdecode(bytes, cv.IMREAD_COLOR);
+        srcClone = src.clone();
 
-      final (contours, _) = cv.findContours(edges, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+        gray = cv.cvtColor(src, cv.COLOR_BGR2GRAY);
+        blurred = cv.gaussianBlur(gray, (5, 5), 0);
 
-      List<File> croppedFiles = [];
-      final tempDir = await getTemporaryDirectory();
+        final (_, edgesOut) = cv.threshold(blurred, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+        edges = edgesOut;
 
-      double minArea = 10000; // Adjust as needed for document size
+        final (contours, _) = cv.findContours(edges, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-      int count = 0;
-      for (var contour in contours) {
-        final area = cv.contourArea(contour);
-        if (area > minArea) {
-          final rect = cv.boundingRect(contour);
+        List<File> croppedFiles = [];
+        double minArea = 10000;
+        int count = 0;
 
-          final croppedMat = src.region(rect);
-
-          final croppedPath = '${tempDir.path}/smart_cropped_${DateTime.now().millisecondsSinceEpoch}_$count.jpg';
-          cv.imwrite(croppedPath, croppedMat);
-
-          croppedFiles.add(File(croppedPath));
-          count++;
+        for (var contour in contours) {
+          final area = cv.contourArea(contour);
+          if (area > minArea) {
+            final rect = cv.boundingRect(contour);
+            final croppedMat = srcClone.region(rect);
+            final croppedPath = '$tempPath/smart_cropped_${DateTime.now().millisecondsSinceEpoch}_$count.jpg';
+            cv.imwrite(croppedPath, croppedMat);
+            croppedFiles.add(File(croppedPath));
+            croppedMat.dispose();
+            count++;
+          }
         }
-      }
 
-      if (croppedFiles.isEmpty) {
-        return [imageFile]; // Fallback to original if no contours found
+        if (croppedFiles.isEmpty) {
+          return [File(imagePath)];
+        }
+        return croppedFiles;
+      } catch (e) {
+        print('Smart recognition failed: $e');
+        return [File(imagePath)];
+      } finally {
+        src?.dispose();
+        srcClone?.dispose();
+        gray?.dispose();
+        blurred?.dispose();
+        edges?.dispose();
       }
-
-      return croppedFiles;
-    } catch (e) {
-      print('Smart recognition failed: $e');
-      return [imageFile]; // Fallback
-    }
+    });
   }
 
   Future<DocumentType> classifyDocument(File imageFile) async {
-    try {
-      final inputImage = InputImage.fromFilePath(imageFile.path);
-      // Fallback to latin/default script since arabic is not defined in TextRecognitionScript enum in this version
+    final imagePath = imageFile.path;
+    final rootToken = RootIsolateToken.instance!;
+
+    return await Isolate.run(() async {
+      BackgroundIsolateBinaryMessenger.ensureInitialized(rootToken);
+      final inputImage = InputImage.fromFilePath(imagePath);
       final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
 
-      final RecognizedText recognizedText = await textRecognizer.processImage(inputImage);
-      final text = recognizedText.text;
+      try {
+        final RecognizedText recognizedText = await textRecognizer.processImage(inputImage);
+        final text = recognizedText.text;
 
-      textRecognizer.close();
+        if (text.contains('البطاقة الوطنية')) {
+          return DocumentType.nationalId;
+        } else if (text.contains('بطاقة السكن')) {
+          return DocumentType.housingCard;
+        } else if (text.contains('البطاقة التموينية')) {
+          return DocumentType.rationCard;
+        } else if (text.contains('جواز السفر')) {
+          return DocumentType.passport;
+        }
 
-      if (text.contains('البطاقة الوطنية')) {
-        return DocumentType.nationalId;
-      } else if (text.contains('بطاقة السكن')) {
-        return DocumentType.housingCard;
-      } else if (text.contains('البطاقة التموينية')) {
-        return DocumentType.rationCard;
-      } else if (text.contains('جواز السفر')) {
-        return DocumentType.passport;
+        return DocumentType.unknown;
+      } catch (e) {
+        print('Text recognition failed: $e');
+        return DocumentType.unknown;
+      } finally {
+        textRecognizer.close();
       }
-
-      return DocumentType.unknown;
-    } catch (e) {
-      print('Text recognition failed: $e');
-      return DocumentType.unknown;
-    }
+    });
   }
 
   Future<File> processAutoDeskew(File imageFile) async {
-    try {
-      final bytes = await imageFile.readAsBytes();
-      final src = cv.imdecode(bytes, cv.IMREAD_COLOR);
+    final tempDir = await getTemporaryDirectory();
+    final tempPath = tempDir.path;
+    final imagePath = imageFile.path;
 
-      final gray = cv.cvtColor(src, cv.COLOR_BGR2GRAY);
-      final blurred = cv.gaussianBlur(gray, (5, 5), 0);
-      final edges = cv.canny(blurred, 75.0, 200.0);
+    return await Isolate.run(() async {
+      cv.Mat? src;
+      cv.Mat? srcClone;
+      cv.Mat? gray;
+      cv.Mat? blurred;
+      cv.Mat? edges;
+      cv.Mat? m;
+      cv.Mat? warped;
 
-      final (contours, _) = cv.findContours(edges, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+      try {
+        final bytes = File(imagePath).readAsBytesSync();
+        src = cv.imdecode(bytes, cv.IMREAD_COLOR);
+        srcClone = src.clone();
 
-      // Sort contours by area in descending order
-      final sortedContours = contours.toList()..sort((a, b) => cv.contourArea(b).compareTo(cv.contourArea(a)));
+        gray = cv.cvtColor(src, cv.COLOR_BGR2GRAY);
+        blurred = cv.gaussianBlur(gray, (5, 5), 0);
+        edges = cv.canny(blurred, 75.0, 200.0);
 
-      cv.VecPoint? docContour;
+        final (contours, _) = cv.findContours(edges, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+        final sortedContours = contours.toList()..sort((a, b) => cv.contourArea(b).compareTo(cv.contourArea(a)));
 
-      for (var contour in sortedContours) {
-        final peri = cv.arcLength(contour, true);
-        final approx = cv.approxPolyDP(contour, 0.02 * peri, true);
+        cv.VecPoint? docContour;
 
-        if (approx.length == 4) {
-          docContour = approx;
-          break;
+        for (var contour in sortedContours) {
+          final peri = cv.arcLength(contour, true);
+          final approx = cv.approxPolyDP(contour, 0.02 * peri, true);
+
+          if (approx.length == 4) {
+            docContour = approx;
+            break;
+          }
         }
+
+        if (docContour != null) {
+          final points = docContour.toList();
+
+          points.sort((a, b) => (a.x + a.y).compareTo(b.x + b.y));
+          final tl = points[0];
+          final br = points[3];
+
+          final remaining = [points[1], points[2]];
+          remaining.sort((a, b) => (a.x - a.y).compareTo(b.x - b.y));
+          final tr = remaining[1];
+          final bl = remaining[0];
+
+          final widthA = (tr.x - tl.x).abs().toDouble();
+          final widthB = (br.x - bl.x).abs().toDouble();
+          final maxWidth = widthA > widthB ? widthA : widthB;
+
+          final heightA = (bl.y - tl.y).abs().toDouble();
+          final heightB = (br.y - tr.y).abs().toDouble();
+          final maxHeight = heightA > heightB ? heightA : heightB;
+
+          final dstPoints = [
+            cv.Point(0, 0),
+            cv.Point(maxWidth.toInt() - 1, 0),
+            cv.Point(maxWidth.toInt() - 1, maxHeight.toInt() - 1),
+            cv.Point(0, maxHeight.toInt() - 1),
+          ];
+
+          final srcPoints = [tl, tr, br, bl];
+
+          m = cv.getPerspectiveTransform(cv.VecPoint.fromList(srcPoints), cv.VecPoint.fromList(dstPoints));
+          warped = cv.warpPerspective(srcClone, m, (maxWidth.toInt(), maxHeight.toInt()));
+
+          final deskewedPath = '$tempPath/deskewed_${DateTime.now().millisecondsSinceEpoch}.jpg';
+          cv.imwrite(deskewedPath, warped);
+
+          return File(deskewedPath);
+        }
+
+        return File(imagePath);
+      } catch (e) {
+        print('Auto deskew failed: $e');
+        return File(imagePath);
+      } finally {
+        src?.dispose();
+        srcClone?.dispose();
+        gray?.dispose();
+        blurred?.dispose();
+        edges?.dispose();
+        m?.dispose();
+        warped?.dispose();
       }
-
-      if (docContour != null) {
-        // Order points: top-left, top-right, bottom-right, bottom-left
-        final points = docContour.toList();
-
-        // Very basic ordering based on sum and difference of coordinates
-        points.sort((a, b) => (a.x + a.y).compareTo(b.x + b.y));
-        final tl = points[0];
-        final br = points[3];
-
-        final remaining = [points[1], points[2]];
-        remaining.sort((a, b) => (a.x - a.y).compareTo(b.x - b.y));
-        final tr = remaining[1];
-        final bl = remaining[0];
-
-        // Calculate dimensions
-        final widthA = (tr.x - tl.x).abs().toDouble();
-        final widthB = (br.x - bl.x).abs().toDouble();
-        final maxWidth = widthA > widthB ? widthA : widthB;
-
-        final heightA = (bl.y - tl.y).abs().toDouble();
-        final heightB = (br.y - tr.y).abs().toDouble();
-        final maxHeight = heightA > heightB ? heightA : heightB;
-
-        final dstPoints = [
-          cv.Point(0, 0),
-          cv.Point(maxWidth.toInt() - 1, 0),
-          cv.Point(maxWidth.toInt() - 1, maxHeight.toInt() - 1),
-          cv.Point(0, maxHeight.toInt() - 1),
-        ];
-
-        final srcPoints = [tl, tr, br, bl];
-
-        // Note: Use VecPoint as input directly depending on opencv_dart API version
-        final m = cv.getPerspectiveTransform(cv.VecPoint.fromList(srcPoints), cv.VecPoint.fromList(dstPoints));
-        final warped = cv.warpPerspective(src, m, (maxWidth.toInt(), maxHeight.toInt()));
-
-        final tempDir = await getTemporaryDirectory();
-        final deskewedPath = '${tempDir.path}/deskewed_${DateTime.now().millisecondsSinceEpoch}.jpg';
-        cv.imwrite(deskewedPath, warped);
-
-        return File(deskewedPath);
-      }
-
-      return imageFile; // Fallback if no 4-point contour found
-    } catch (e) {
-      print('Auto deskew failed: $e');
-      return imageFile;
-    }
+    });
   }
 }

@@ -28,24 +28,27 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
         _isProcessing = true;
       });
 
-      File processedFile = file;
+      List<File> initialFiles = [file];
 
-      if (state.autoDeskew) {
-        processedFile = await _scannerService.processAutoDeskew(processedFile);
+      // 1. First Segment if Smart Recognition is active
+      if (state.smartRecognition) {
+        initialFiles = await _scannerService.processSmartRecognition(file);
       }
 
-      final filteredFile = await _scannerService.applyFilter(processedFile, true);
-      processedFile = filteredFile ?? processedFile;
-
-      if (state.smartRecognition) {
-        final croppedFiles = await _scannerService.processSmartRecognition(processedFile);
-
-        for (var croppedFile in croppedFiles) {
-          final type = await _scannerService.classifyDocument(croppedFile);
-          ref.read(scannedDocumentsProvider.notifier).addDocument(ScannedDocument(file: croppedFile, type: type));
+      // 2. Loop over segments (or original) and apply deskew individually
+      for (var processedFile in initialFiles) {
+        if (state.autoDeskew) {
+          processedFile = await _scannerService.processAutoDeskew(processedFile);
         }
-      } else {
-        ref.read(scannedDocumentsProvider.notifier).addDocument(ScannedDocument(file: processedFile));
+
+        // Removed the eager applyFilter call that breaks the editor colors
+
+        if (state.smartRecognition) {
+          final type = await _scannerService.classifyDocument(processedFile);
+          ref.read(scannedDocumentsProvider.notifier).addDocument(ScannedDocument(file: processedFile, type: type));
+        } else {
+          ref.read(scannedDocumentsProvider.notifier).addDocument(ScannedDocument(file: processedFile));
+        }
       }
 
       setState(() {
