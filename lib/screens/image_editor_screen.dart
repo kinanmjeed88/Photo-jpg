@@ -10,6 +10,14 @@ import 'package:gal/gal.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../providers/app_state.dart';
 
+Future<Uint8List> _runGalleryIsolate(Map<String, dynamic> args) {
+  return Isolate.run(() => _processGalleryImage(args));
+}
+
+Future<String> _runEditedIsolate(Map<String, dynamic> args) {
+  return Isolate.run(() => _processEditedImage(args));
+}
+
 Uint8List _processGalleryImage(Map<String, dynamic> args) {
   final Uint8List bytes = args['bytes'];
   final int? rectLeft = args['rectLeft'];
@@ -140,7 +148,7 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
         'brightness': _brightness,
       };
 
-      final processedBytes = await Isolate.run(() => _processGalleryImage(args));
+      final processedBytes = await _runGalleryIsolate(args);
 
       await Gal.putImageBytes(
         processedBytes,
@@ -194,7 +202,7 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
         'docPath': docPath,
       };
 
-      final editedPath = await Isolate.run(() => _processEditedImage(args));
+      final editedPath = await _runEditedIsolate(args);
 
       final newDoc = ScannedDocument(file: File(editedPath), type: doc.type);
       ref.read(scannedDocumentsProvider.notifier).updateDocumentAt(widget.documentIndex, newDoc);
