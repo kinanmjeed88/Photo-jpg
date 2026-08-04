@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:extended_image/extended_image.dart';
@@ -25,38 +26,50 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
 
   void _applyChanges() async {
     setState(() => _isProcessing = true);
-    cv.Mat? src;
-    cv.Mat? scaled;
-    cv.Mat? cropped;
     try {
       final doc = ref.read(scannedDocumentsProvider)[widget.documentIndex];
       final bytes = await doc.file.readAsBytes();
 
-      src = cv.imdecode(bytes, cv.IMREAD_COLOR);
-
-      if (_contrast != 1.0 || _brightness != 0.0) {
-          scaled = cv.convertScaleAbs(src, alpha: _contrast, beta: _brightness);
-          src.dispose();
-          src = scaled;
-      }
-
       final rect = editorKey.currentState?.getCropRect();
-      if (rect != null) {
-          cropped = src.region(cv.Rect(rect.left.toInt(), rect.top.toInt(), rect.width.toInt(), rect.height.toInt()));
-          final tempDir = await getTemporaryDirectory();
-          final editedPath = '${tempDir.path}/edited_${DateTime.now().millisecondsSinceEpoch}.jpg';
-          cv.imwrite(editedPath, cropped);
+      final rectLeft = rect?.left.toInt();
+      final rectTop = rect?.top.toInt();
+      final rectWidth = rect?.width.toInt();
+      final rectHeight = rect?.height.toInt();
 
-          final newDoc = ScannedDocument(file: File(editedPath), type: doc.type);
-          ref.read(scannedDocumentsProvider.notifier).updateDocumentAt(widget.documentIndex, newDoc);
-      } else {
-          final tempDir = await getTemporaryDirectory();
-          final editedPath = '${tempDir.path}/edited_${DateTime.now().millisecondsSinceEpoch}.jpg';
-          cv.imwrite(editedPath, src);
+      final tempDir = await getTemporaryDirectory();
+      final tempPath = tempDir.path;
+      final contrast = _contrast;
+      final brightness = _brightness;
 
-          final newDoc = ScannedDocument(file: File(editedPath), type: doc.type);
-          ref.read(scannedDocumentsProvider.notifier).updateDocumentAt(widget.documentIndex, newDoc);
-      }
+      final editedPath = await Isolate.run(() {
+        cv.Mat? src;
+        cv.Mat? scaled;
+        cv.Mat? cropped;
+        try {
+          src = cv.imdecode(bytes, cv.IMREAD_COLOR);
+
+          if (contrast != 1.0 || brightness != 0.0) {
+            scaled = cv.convertScaleAbs(src, alpha: contrast, beta: brightness);
+            src.dispose();
+            src = scaled;
+          }
+
+          final outPath = '$tempPath/edited_${DateTime.now().millisecondsSinceEpoch}.jpg';
+          if (rectLeft != null && rectTop != null && rectWidth != null && rectHeight != null) {
+            cropped = src.region(cv.Rect(rectLeft, rectTop, rectWidth, rectHeight));
+            cv.imwrite(outPath, cropped);
+          } else {
+            cv.imwrite(outPath, src);
+          }
+          return outPath;
+        } finally {
+          src?.dispose();
+          cropped?.dispose();
+        }
+      });
+
+      final newDoc = ScannedDocument(file: File(editedPath), type: doc.type);
+      ref.read(scannedDocumentsProvider.notifier).updateDocumentAt(widget.documentIndex, newDoc);
 
       if (mounted) {
         Navigator.pop(context);
@@ -64,8 +77,6 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
     } catch (e) {
       print('Editor failed: $e');
     } finally {
-      src?.dispose();
-      cropped?.dispose();
       if (mounted) setState(() => _isProcessing = false);
     }
   }
