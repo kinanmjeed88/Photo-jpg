@@ -1,0 +1,3 @@
+## 2024-06-25 - Destructive Action Confirmation in Transient Data Context
+**Learning:** The scanner screen had a delete button on newly captured images without confirmation. Because these images haven't been saved to a PDF or permanent storage yet, accidental deletion forces the user to physically rescan the document. This is a higher friction recovery path than restoring a deleted item from a standard list.
+**Action:** Always add confirmation dialogs to destructive actions that discard unsaved, user-generated (or captured) data, especially when recreating that data requires physical effort (like scanning a document).

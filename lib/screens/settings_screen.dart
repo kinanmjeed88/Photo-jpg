@@ -18,6 +18,7 @@ class SettingsScreen extends ConsumerWidget {
         actions: [
           IconButton(
             icon: const Icon(Icons.folder),
+            tooltip: 'الأرشيف',
             onPressed: () {
               Navigator.push(
                 context,
