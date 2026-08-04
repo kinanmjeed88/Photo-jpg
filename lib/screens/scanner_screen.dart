@@ -174,8 +174,28 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                     right: 0,
                                     child: IconButton(
                                       icon: const Icon(Icons.delete, color: Colors.red),
+                                      tooltip: 'حذف',
                                       onPressed: () {
-                                        ref.read(scannedDocumentsProvider.notifier).removeDocumentAt(index);
+                                        showDialog(
+                                          context: context,
+                                          builder: (context) => AlertDialog(
+                                            title: const Text('تأكيد الحذف'),
+                                            content: const Text('هل أنت متأكد من أنك تريد حذف هذا المستمسك؟'),
+                                            actions: [
+                                              TextButton(
+                                                onPressed: () => Navigator.pop(context),
+                                                child: const Text('إلغاء'),
+                                              ),
+                                              TextButton(
+                                                onPressed: () {
+                                                  ref.read(scannedDocumentsProvider.notifier).removeDocumentAt(index);
+                                                  Navigator.pop(context);
+                                                },
+                                                child: const Text('حذف', style: TextStyle(color: Colors.red)),
+                                              ),
+                                            ],
+                                          ),
+                                        );
                                       },
                                     ),
                                   ),

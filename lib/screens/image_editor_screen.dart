@@ -94,6 +94,7 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.check),
+            tooltip: 'تطبيق التعديلات',
             onPressed: _isProcessing ? null : _applyChanges,
           ),
         ],
