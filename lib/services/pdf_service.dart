@@ -13,63 +13,84 @@ class PdfService {
     final output = await getApplicationDocumentsDirectory();
     final outputPath = '${output.path}/${state.fileName}.pdf';
 
-    final imagePaths = scannedDocuments.map((doc) => doc.file.path).toList();
-    final displayMethod = state.displayMethod;
-    final addFrame = state.addFrame;
+    // Map document data to primitives to pass to the isolate securely
+    final docData = scannedDocuments.map((doc) => {
+      'path': doc.file.path,
+      'dx': doc.dx,
+      'dy': doc.dy,
+      'width': doc.width,
+      'height': doc.height,
+      'pageIndex': doc.pageIndex,
+    }).toList();
 
     return await Isolate.run(() async {
       final pdf = pw.Document();
 
-      // Filter documents based on settings if necessary.
-      // For now, we'll just include all scanned documents, but organize them based on displayMethod.
+      // Organize documents by pageIndex
+      Map<int, List<Map<String, dynamic>>> pagesData = {};
+      for (var data in docData) {
+        final int pageIndex = data['pageIndex'] as int;
+        if (!pagesData.containsKey(pageIndex)) {
+          pagesData[pageIndex] = [];
+        }
+        pagesData[pageIndex]!.add(data);
+      }
 
-      // Sort or filter if required by the state.
-      // For simplicity, we process what is provided.
+      final sortedPageIndices = pagesData.keys.toList()..sort();
 
-      final List<pw.MemoryImage> pdfImages = imagePaths
-          .map((path) => pw.MemoryImage(File(path).readAsBytesSync()))
-          .toList();
+      // UI coordinates vs PDF coordinates mapping
+      // UI assumes aspect ratio 1 / 1.414, we need to map to PdfPageFormat.a4
+      final pdfA4Width = PdfPageFormat.a4.width;
+      final pdfA4Height = PdfPageFormat.a4.height;
 
-      if (displayMethod == DisplayMethod.onePage && pdfImages.length >= 2) {
-        // Front and back on one page
+      // Calculate scaling based on UI reference dimensions
+      // (assuming standard screen width mapping, e.g., max canvas width in UI was roughly 350-400 based on device)
+      // To ensure accurate PDF generation, we determine relative positioning.
+      // In UI, canvasWidth = constraints.maxWidth, canvasHeight = canvasWidth * 1.414
+      // We will normalize the coordinates. Let's assume UI was width 400.
+      final uiReferenceWidth = 400.0;
+      final uiReferenceHeight = uiReferenceWidth * 1.414;
+
+      final scaleX = pdfA4Width / uiReferenceWidth;
+      final scaleY = pdfA4Height / uiReferenceHeight;
+
+      for (var pageIndex in sortedPageIndices) {
+        final docsOnPage = pagesData[pageIndex]!;
+
         pdf.addPage(
           pw.Page(
             pageFormat: PdfPageFormat.a4,
             build: (pw.Context context) {
-              return pw.Container(
-                decoration: addFrame ? pw.BoxDecoration(border: pw.Border.all(color: PdfColors.black, width: 2)) : null,
-                padding: const pw.EdgeInsets.all(20),
-                child: pw.Column(
-                  mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
-                  crossAxisAlignment: pw.CrossAxisAlignment.center,
-                  children: [
-                    pw.Expanded(child: pw.Image(pdfImages[0], fit: pw.BoxFit.contain)),
-                    pw.SizedBox(height: 20),
-                    pw.Expanded(child: pw.Image(pdfImages[1], fit: pw.BoxFit.contain)),
-                  ],
-                ),
+              return pw.Stack(
+                children: docsOnPage.map((docData) {
+                  final String path = docData['path'] as String;
+                  final double dx = docData['dx'] as double;
+                  final double dy = docData['dy'] as double;
+                  final double docWidth = docData['width'] as double;
+                  final double docHeight = docData['height'] as double;
+
+                  final memoryImage = pw.MemoryImage(File(path).readAsBytesSync());
+
+                  // PDF origin is bottom-left, UI origin is top-left
+                  final pdfX = dx * scaleX;
+                  final pdfY = pdfA4Height - ((dy + docHeight) * scaleY);
+                  final pdfWidth = docWidth * scaleX;
+                  final pdfHeight = docHeight * scaleY;
+
+                  return pw.Positioned(
+                    left: pdfX,
+                    bottom: pdfY,
+                    child: pw.Container(
+                      width: pdfWidth,
+                      height: pdfHeight,
+                      child: pw.Image(memoryImage, fit: pw.BoxFit.contain),
+                    ),
+                  );
+                }).toList(),
               );
             },
           ),
         );
-      } else {
-        // One image per page (for twoPages or frontOnly, or if only 1 image provided)
-        for (var img in pdfImages) {
-          pdf.addPage(
-            pw.Page(
-              pageFormat: PdfPageFormat.a4,
-              build: (pw.Context context) {
-                return pw.Container(
-                  decoration: addFrame ? pw.BoxDecoration(border: pw.Border.all(color: PdfColors.black, width: 2)) : null,
-                  padding: const pw.EdgeInsets.all(20),
-                  child: pw.Center(
-                    child: pw.Image(img, fit: pw.BoxFit.contain),
-                  ),
-                );
-              },
-            ),
-          );
-        }
       }
 
       final file = File(outputPath);

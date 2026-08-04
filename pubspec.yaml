@@ -51,6 +51,8 @@ dependencies:
   google_mlkit_text_recognition: ^0.16.0
   extended_image: ^10.1.0
   path: ^1.9.1
+  image_gallery_saver: ^2.0.3
+  permission_handler: ^13.0.0
 
 dev_dependencies:
   flutter_test:
