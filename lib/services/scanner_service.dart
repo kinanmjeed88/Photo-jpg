@@ -69,10 +69,17 @@ class ScannerService {
       cv.Mat? gray;
       cv.Mat? blurred;
       cv.Mat? edges;
+      cv.Contours? contours;
+      cv.VecVec4i? hierarchy;
 
       try {
         final bytes = File(imagePath).readAsBytesSync();
         src = cv.imdecode(bytes, cv.IMREAD_COLOR);
+
+        if (src.isEmpty) {
+          return [File(imagePath)];
+        }
+
         srcClone = src.clone();
 
         gray = cv.cvtColor(src, cv.COLOR_BGR2GRAY);
@@ -81,7 +88,9 @@ class ScannerService {
         final (_, edgesOut) = cv.threshold(blurred, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
         edges = edgesOut;
 
-        final (contours, _) = cv.findContours(edges, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+        final (conts, hier) = cv.findContours(edges, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+        contours = conts;
+        hierarchy = hier;
 
         List<File> croppedFiles = [];
         double minArea = 10000;
@@ -113,41 +122,38 @@ class ScannerService {
         gray?.dispose();
         blurred?.dispose();
         edges?.dispose();
+        contours?.dispose();
+        hierarchy?.dispose();
       }
     });
   }
 
   Future<DocumentType> classifyDocument(File imageFile) async {
     final imagePath = imageFile.path;
-    final rootToken = RootIsolateToken.instance!;
+    final inputImage = InputImage.fromFilePath(imagePath);
+    final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
 
-    return await Isolate.run(() async {
-      BackgroundIsolateBinaryMessenger.ensureInitialized(rootToken);
-      final inputImage = InputImage.fromFilePath(imagePath);
-      final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
+    try {
+      final RecognizedText recognizedText = await textRecognizer.processImage(inputImage);
+      final text = recognizedText.text;
 
-      try {
-        final RecognizedText recognizedText = await textRecognizer.processImage(inputImage);
-        final text = recognizedText.text;
-
-        if (text.contains('البطاقة الوطنية')) {
-          return DocumentType.nationalId;
-        } else if (text.contains('بطاقة السكن')) {
-          return DocumentType.housingCard;
-        } else if (text.contains('البطاقة التموينية')) {
-          return DocumentType.rationCard;
-        } else if (text.contains('جواز السفر')) {
-          return DocumentType.passport;
-        }
-
-        return DocumentType.unknown;
-      } catch (e) {
-        print('Text recognition failed: $e');
-        return DocumentType.unknown;
-      } finally {
-        textRecognizer.close();
+      if (text.contains('البطاقة الوطنية')) {
+        return DocumentType.nationalId;
+      } else if (text.contains('بطاقة السكن')) {
+        return DocumentType.housingCard;
+      } else if (text.contains('البطاقة التموينية')) {
+        return DocumentType.rationCard;
+      } else if (text.contains('جواز السفر')) {
+        return DocumentType.passport;
       }
-    });
+
+      return DocumentType.unknown;
+    } catch (e) {
+      print('Text recognition failed: $e');
+      return DocumentType.unknown;
+    } finally {
+      textRecognizer.close();
+    }
   }
 
   Future<File> processAutoDeskew(File imageFile) async {
@@ -163,17 +169,27 @@ class ScannerService {
       cv.Mat? edges;
       cv.Mat? m;
       cv.Mat? warped;
+      cv.Contours? contours;
+      cv.VecVec4i? hierarchy;
+      List<cv.VecPoint> approxToDispose = [];
 
       try {
         final bytes = File(imagePath).readAsBytesSync();
         src = cv.imdecode(bytes, cv.IMREAD_COLOR);
+        if (src.isEmpty) {
+          return File(imagePath);
+        }
+
         srcClone = src.clone();
 
         gray = cv.cvtColor(src, cv.COLOR_BGR2GRAY);
         blurred = cv.gaussianBlur(gray, (5, 5), 0);
         edges = cv.canny(blurred, 75.0, 200.0);
 
-        final (contours, _) = cv.findContours(edges, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+        final (conts, hier) = cv.findContours(edges, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+        contours = conts;
+        hierarchy = hier;
+
         final sortedContours = contours.toList()..sort((a, b) => cv.contourArea(b).compareTo(cv.contourArea(a)));
 
         cv.VecPoint? docContour;
@@ -185,6 +201,8 @@ class ScannerService {
           if (approx.length == 4) {
             docContour = approx;
             break;
+          } else {
+            approxToDispose.add(approx);
           }
         }
 
@@ -238,6 +256,11 @@ class ScannerService {
         edges?.dispose();
         m?.dispose();
         warped?.dispose();
+        contours?.dispose();
+        hierarchy?.dispose();
+        for (var approx in approxToDispose) {
+          approx.dispose();
+        }
       }
     });
   }
