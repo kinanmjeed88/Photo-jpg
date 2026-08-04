@@ -47,6 +47,10 @@ dependencies:
   open_filex: ^4.7.0
   flutter_localizations:
     sdk: flutter
+  opencv_dart: ^1.4.5
+  google_mlkit_text_recognition: ^0.16.0
+  extended_image: ^10.1.0
+  path: ^1.9.1
 
 dev_dependencies:
   flutter_test:

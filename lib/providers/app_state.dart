@@ -1,7 +1,47 @@
+import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 enum WorkMode { single, family }
 enum DisplayMethod { onePage, twoPages, frontOnly }
+enum DocumentType { nationalId, housingCard, rationCard, passport, unknown }
+
+class ScannedDocument {
+  final File file;
+  final DocumentType type;
+
+  ScannedDocument({required this.file, this.type = DocumentType.unknown});
+}
+
+class ScannedDocumentsNotifier extends Notifier<List<ScannedDocument>> {
+  @override
+  List<ScannedDocument> build() => [];
+
+  void addDocument(ScannedDocument doc) {
+    state = [...state, doc];
+  }
+
+  void removeDocumentAt(int index) {
+    state = [
+      for (int i = 0; i < state.length; i++)
+        if (i != index) state[i]
+    ];
+  }
+
+  void updateDocumentAt(int index, ScannedDocument newDoc) {
+    state = [
+      for (int i = 0; i < state.length; i++)
+        if (i == index) newDoc else state[i]
+    ];
+  }
+
+  void clear() {
+    state = [];
+  }
+}
+
+final scannedDocumentsProvider = NotifierProvider<ScannedDocumentsNotifier, List<ScannedDocument>>(() {
+  return ScannedDocumentsNotifier();
+});
 
 class AppState {
   final WorkMode workMode;
@@ -12,6 +52,8 @@ class AppState {
   final DisplayMethod displayMethod;
   final bool addFrame;
   final String fileName;
+  final bool smartRecognition;
+  final bool autoDeskew;
 
   AppState({
     this.workMode = WorkMode.single,
@@ -22,6 +64,8 @@ class AppState {
     this.displayMethod = DisplayMethod.onePage,
     this.addFrame = false,
     this.fileName = 'مستمسكاتي',
+    this.smartRecognition = false,
+    this.autoDeskew = false,
   });
 
   AppState copyWith({
@@ -33,6 +77,8 @@ class AppState {
     DisplayMethod? displayMethod,
     bool? addFrame,
     String? fileName,
+    bool? smartRecognition,
+    bool? autoDeskew,
   }) {
     return AppState(
       workMode: workMode ?? this.workMode,
@@ -43,6 +89,8 @@ class AppState {
       displayMethod: displayMethod ?? this.displayMethod,
       addFrame: addFrame ?? this.addFrame,
       fileName: fileName ?? this.fileName,
+      smartRecognition: smartRecognition ?? this.smartRecognition,
+      autoDeskew: autoDeskew ?? this.autoDeskew,
     );
   }
 
@@ -66,6 +114,9 @@ class AppStateNotifier extends Notifier<AppState> {
   void toggleAddFrame(bool value) => state = state.copyWith(addFrame: value);
 
   void updateFileName(String name) => state = state.copyWith(fileName: name);
+
+  void toggleSmartRecognition(bool value) => state = state.copyWith(smartRecognition: value);
+  void toggleAutoDeskew(bool value) => state = state.copyWith(autoDeskew: value);
 }
 
 final appStateProvider = NotifierProvider<AppStateNotifier, AppState>(() {
