@@ -41,6 +41,31 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
     _loadFiles();
   }
 
+  void _showDeleteConfirmationDialog(File file) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('تأكيد الحذف'),
+          content: const Text('هل أنت متأكد من أنك تريد حذف هذا الملف؟'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('إلغاء'),
+            ),
+            TextButton(
+              onPressed: () {
+                _deleteFile(file);
+                Navigator.pop(context);
+              },
+              child: const Text('حذف', style: TextStyle(color: Colors.red)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Future<void> _renameFile(File file, String newName) async {
     final dir = file.parent.path;
     final newPath = '$dir/$newName.pdf';
@@ -101,15 +126,18 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
                     children: [
                       IconButton(
                         icon: const Icon(Icons.share, color: Colors.blue),
+                        tooltip: 'مشاركة',
                         onPressed: () => _shareFile(file.path),
                       ),
                       IconButton(
                         icon: const Icon(Icons.edit, color: Colors.orange),
+                        tooltip: 'إعادة تسمية',
                         onPressed: () => _showRenameDialog(file),
                       ),
                       IconButton(
                         icon: const Icon(Icons.delete, color: Colors.red),
-                        onPressed: () => _deleteFile(file),
+                        tooltip: 'حذف',
+                        onPressed: () => _showDeleteConfirmationDialog(file),
                       ),
                     ],
                   ),
