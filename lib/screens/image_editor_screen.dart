@@ -5,7 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:extended_image/extended_image.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:opencv_dart/opencv_dart.dart' as cv;
-import 'package:image_gallery_saver/image_gallery_saver.dart';
+import 'package:gal/gal.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../providers/app_state.dart';
 
@@ -81,15 +81,14 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
         }
       });
 
-      final result = await ImageGallerySaver.saveImage(
+      await Gal.putImageBytes(
         processedBytes,
-        quality: 100,
         name: "scanned_${DateTime.now().millisecondsSinceEpoch}"
       );
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(result['isSuccess'] == true ? 'تم الحفظ في المعرض' : 'فشل الحفظ')),
+          const SnackBar(content: Text('تم الحفظ في المعرض')),
         );
       }
     } catch (e) {
