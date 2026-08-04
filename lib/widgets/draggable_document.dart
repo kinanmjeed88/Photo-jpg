@@ -63,6 +63,13 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
     setState(() {
       dx += details.delta.dx;
       dy += details.delta.dy;
+
+      // Strict bounds clamping for drag
+      if (dx < 0) dx = 0;
+      if (dx > widget.canvasWidth - width) dx = widget.canvasWidth - width;
+
+      if (dy < 0) dy = 0;
+      if (dy > widget.canvasHeight - height) dy = widget.canvasHeight - height;
     });
   }
 
@@ -74,12 +81,19 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
     setState(() {
       // Allow scale up to aspect ratio or freeform?
       // Since it's a 2D resize handle on the bottom right:
-      final double newWidth = width + details.delta.dx;
-      final double newHeight = height + details.delta.dy;
+      double newWidth = width + details.delta.dx;
+      double newHeight = height + details.delta.dy;
 
       // Enforce minimum size
-      if (newWidth > 50) width = newWidth;
-      if (newHeight > 50) height = newHeight;
+      if (newWidth < 50) newWidth = 50;
+      if (newHeight < 50) newHeight = 50;
+
+      // Ensure resize doesn't push the document out of bounds
+      if (dx + newWidth > widget.canvasWidth) newWidth = widget.canvasWidth - dx;
+      if (dy + newHeight > widget.canvasHeight) newHeight = widget.canvasHeight - dy;
+
+      width = newWidth;
+      height = newHeight;
     });
   }
 
@@ -88,21 +102,8 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
   }
 
   void _triggerLayoutUpdate() {
-    int finalPageIndex = pageIndex;
-    double finalDy = dy;
-
-    // Auto-pagination logic based on center of document
-    final docCenterY = dy + (height / 2);
-
-    if (docCenterY > widget.canvasHeight) {
-      finalPageIndex += 1;
-      finalDy = 0; // wrap to top of next page
-    } else if (docCenterY < 0 && pageIndex > 0) {
-      finalPageIndex -= 1;
-      finalDy = widget.canvasHeight - height; // wrap to bottom of prev page
-    }
-
-    widget.onLayoutUpdate(widget.index, dx, finalDy, width, height, finalPageIndex);
+    // We enforce strictly no automatic cross-page drag. Document stays on current page.
+    widget.onLayoutUpdate(widget.index, dx, dy, width, height, pageIndex);
   }
 
   @override

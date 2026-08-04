@@ -8,6 +8,8 @@ import '../providers/app_state.dart';
 Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
   final String outputPath = args['outputPath'];
   final List<Map<String, dynamic>> docData = List<Map<String, dynamic>>.from(args['docData']);
+  final double uiReferenceWidth = args['uiCanvasWidth'] as double;
+  final double uiReferenceHeight = args['uiCanvasHeight'] as double;
 
   final pdf = pw.Document();
 
@@ -28,14 +30,7 @@ Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
   final pdfA4Width = PdfPageFormat.a4.width;
   final pdfA4Height = PdfPageFormat.a4.height;
 
-  // Calculate scaling based on UI reference dimensions
-  // (assuming standard screen width mapping, e.g., max canvas width in UI was roughly 350-400 based on device)
-  // To ensure accurate PDF generation, we determine relative positioning.
-  // In UI, canvasWidth = constraints.maxWidth, canvasHeight = canvasWidth * 1.414
-  // We will normalize the coordinates. Let's assume UI was width 400.
-  final uiReferenceWidth = 400.0;
-  final uiReferenceHeight = uiReferenceWidth * 1.414;
-
+  // Calculate scaling based on UI reference dimensions explicitly provided
   final scaleX = pdfA4Width / uiReferenceWidth;
   final scaleY = pdfA4Height / uiReferenceHeight;
 
@@ -45,6 +40,7 @@ Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
     pdf.addPage(
       pw.Page(
         pageFormat: PdfPageFormat.a4,
+        margin: pw.EdgeInsets.zero, // Crucial for perfect origin alignment
         build: (pw.Context context) {
           return pw.Stack(
             children: docsOnPage.map((docData) {
@@ -88,6 +84,8 @@ class PdfService {
   Future<File> generatePdf({
     required List<ScannedDocument> scannedDocuments,
     required AppState state,
+    required double uiCanvasWidth,
+    required double uiCanvasHeight,
   }) async {
     final output = await getApplicationDocumentsDirectory();
     final outputPath = '${output.path}/${state.fileName}.pdf';
@@ -105,6 +103,8 @@ class PdfService {
     final args = {
       'outputPath': outputPath,
       'docData': docData,
+      'uiCanvasWidth': uiCanvasWidth,
+      'uiCanvasHeight': uiCanvasHeight,
     };
 
     return await Isolate.run(() => _isolateGeneratePdf(args));

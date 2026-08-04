@@ -61,20 +61,23 @@ class ScannedDocumentsNotifier extends Notifier<List<ScannedDocument>> {
       // Try to place horizontally next to the last document
       double potentialDx = lastDoc.dx + lastDoc.width + 20.0;
 
-      // Assuming a standard A4 canvas UI width is roughly around 350-400 max
-      if (potentialDx + doc.width < 380) {
+      const double canvasWidth = 380.0;
+      const double canvasHeight = 537.32; // 380 * 1.414
+
+      if (potentialDx + doc.width <= canvasWidth) {
         newDx = potentialDx;
         newDy = lastDoc.dy; // Stay on same row
       } else {
         // Wrap to new row
         newDx = 20.0;
         newDy = lastDoc.dy + lastDoc.height + 20.0;
+      }
 
-        // If it exceeds a reasonable A4 height estimate in UI, move to next page
-        if (newDy > 600) {
-          newPageIndex++;
-          newDy = 20.0;
-        }
+      // Vertical Pagination
+      if (newDy + doc.height > canvasHeight) {
+        newPageIndex++;
+        newDy = 20.0;
+        newDx = 20.0;
       }
     } else {
       // First document uses the default properties in doc, but force safe padding if zero
