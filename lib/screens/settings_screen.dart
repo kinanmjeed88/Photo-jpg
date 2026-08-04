@@ -105,6 +105,20 @@ class SettingsScreen extends ConsumerWidget {
               activeColor: const Color(0xFFF59E0B),
             ),
             const Divider(),
+            const Text('ميزات الذكاء الاصطناعي:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFFF59E0B))),
+            SwitchListTile(
+              title: const Text('التعرف الذكي (قص وتصنيف تلقائي)'),
+              value: state.smartRecognition,
+              onChanged: notifier.toggleSmartRecognition,
+              activeColor: const Color(0xFFF59E0B),
+            ),
+            SwitchListTile(
+              title: const Text('تعديل تلقائي للميلان'),
+              value: state.autoDeskew,
+              onChanged: notifier.toggleAutoDeskew,
+              activeColor: const Color(0xFFF59E0B),
+            ),
+            const Divider(),
             const Text('إخراج الملف:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFFF59E0B))),
             SwitchListTile(
               title: const Text('إضافة إطار حول الصور'),

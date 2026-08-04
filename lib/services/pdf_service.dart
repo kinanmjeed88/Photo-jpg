@@ -6,25 +6,29 @@ import '../providers/app_state.dart';
 
 class PdfService {
   Future<File> generatePdf({
-    required List<File> images,
-    required DisplayMethod displayMethod,
-    required bool addFrame,
-    required String fileName,
+    required List<ScannedDocument> scannedDocuments,
+    required AppState state,
   }) async {
     final pdf = pw.Document();
 
-    final List<pw.MemoryImage> pdfImages = images
-        .map((f) => pw.MemoryImage(f.readAsBytesSync()))
+    // Filter documents based on settings if necessary.
+    // For now, we'll just include all scanned documents, but organize them based on displayMethod.
+
+    // Sort or filter if required by the state.
+    // For simplicity, we process what is provided.
+
+    final List<pw.MemoryImage> pdfImages = scannedDocuments
+        .map((doc) => pw.MemoryImage(doc.file.readAsBytesSync()))
         .toList();
 
-    if (displayMethod == DisplayMethod.onePage && pdfImages.length >= 2) {
+    if (state.displayMethod == DisplayMethod.onePage && pdfImages.length >= 2) {
       // Front and back on one page
       pdf.addPage(
         pw.Page(
           pageFormat: PdfPageFormat.a4,
           build: (pw.Context context) {
             return pw.Container(
-              decoration: addFrame ? pw.BoxDecoration(border: pw.Border.all(color: PdfColors.black, width: 2)) : null,
+              decoration: state.addFrame ? pw.BoxDecoration(border: pw.Border.all(color: PdfColors.black, width: 2)) : null,
               padding: const pw.EdgeInsets.all(20),
               child: pw.Column(
                 mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
@@ -47,7 +51,7 @@ class PdfService {
             pageFormat: PdfPageFormat.a4,
             build: (pw.Context context) {
               return pw.Container(
-                decoration: addFrame ? pw.BoxDecoration(border: pw.Border.all(color: PdfColors.black, width: 2)) : null,
+                decoration: state.addFrame ? pw.BoxDecoration(border: pw.Border.all(color: PdfColors.black, width: 2)) : null,
                 padding: const pw.EdgeInsets.all(20),
                 child: pw.Center(
                   child: pw.Image(img, fit: pw.BoxFit.contain),
@@ -60,7 +64,7 @@ class PdfService {
     }
 
     final output = await getApplicationDocumentsDirectory();
-    final file = File('${output.path}/$fileName.pdf');
+    final file = File('${output.path}/${state.fileName}.pdf');
     await file.writeAsBytes(await pdf.save());
     return file;
   }
