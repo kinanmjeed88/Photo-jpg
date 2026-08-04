@@ -108,32 +108,40 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
   @override
   Widget build(BuildContext context) {
     return Positioned(
-      left: dx,
-      top: dy,
+      left: dx - 12,
+      top: dy - 12,
       child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
         onTap: widget.onTap,
         onPanUpdate: _onPanUpdate,
         onPanEnd: _onPanEnd,
         child: Container(
-          width: width,
-          height: height,
-          decoration: BoxDecoration(
-            border: widget.isSelected
-                ? Border.all(color: Colors.blueAccent, width: 3)
-                : null,
-          ),
+          width: width + 24,
+          height: height + 24,
           child: Stack(
             clipBehavior: Clip.none,
             children: [
-              Positioned.fill(
-                child: Image.file(widget.document.file, fit: BoxFit.contain),
+              Positioned(
+                left: 12,
+                top: 12,
+                width: width,
+                height: height,
+                child: Container(
+                  decoration: BoxDecoration(
+                    border: widget.isSelected
+                        ? Border.all(color: Colors.blueAccent, width: 3)
+                        : null,
+                  ),
+                  child: Image.file(widget.document.file, fit: BoxFit.contain),
+                ),
               ),
               if (widget.isSelected) ...[
                 // Top Right: Delete Button
                 Positioned(
-                  top: -12,
-                  right: -12,
+                  top: 0,
+                  right: 0,
                   child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
                     onTap: widget.onDelete,
                     child: Container(
                       padding: const EdgeInsets.all(4),
@@ -147,9 +155,10 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
                 ),
                 // Top Left: Edit Button
                 Positioned(
-                  top: -12,
-                  left: -12,
+                  top: 0,
+                  left: 0,
                   child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
                     onTap: widget.onEdit,
                     child: Container(
                       padding: const EdgeInsets.all(4),
@@ -163,9 +172,10 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
                 ),
                 // Bottom Right: Resize Handle
                 Positioned(
-                  bottom: -12,
-                  right: -12,
+                  bottom: 0,
+                  right: 0,
                   child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
                     onPanUpdate: _onResizeUpdate,
                     onPanEnd: _onResizeEnd,
                     child: Container(

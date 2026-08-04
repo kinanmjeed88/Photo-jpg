@@ -39,13 +39,30 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
       // 2. Loop over segments (or original)
       for (var processedFile in initialFiles) {
+        // Calculate smart default size
+        final bytes = await processedFile.readAsBytes();
+        final image = await decodeImageFromList(bytes);
+
+        // Default target width (to fit two horizontally on typical ~380 width canvas)
+        double targetWidth = 150.0;
+        double targetHeight = targetWidth / (image.width / image.height);
+
         // Removed the eager applyFilter call that breaks the editor colors
 
         if (state.smartRecognition) {
           final type = await _scannerService.classifyDocument(processedFile);
-          ref.read(scannedDocumentsProvider.notifier).addDocument(ScannedDocument(file: processedFile, type: type));
+          ref.read(scannedDocumentsProvider.notifier).addDocument(ScannedDocument(
+            file: processedFile,
+            type: type,
+            width: targetWidth,
+            height: targetHeight,
+          ));
         } else {
-          ref.read(scannedDocumentsProvider.notifier).addDocument(ScannedDocument(file: processedFile));
+          ref.read(scannedDocumentsProvider.notifier).addDocument(ScannedDocument(
+            file: processedFile,
+            width: targetWidth,
+            height: targetHeight,
+          ));
         }
       }
 
@@ -156,117 +173,137 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                 Expanded(
                   child: scannedDocuments.isEmpty
                       ? const Center(child: Text('لم يتم مسح أي مستمسكات بعد'))
-                      : ListView.builder(
+                      : SingleChildScrollView(
                           padding: const EdgeInsets.all(16),
-                          itemCount: totalPages,
-                          itemBuilder: (context, pageIndex) {
-                            final docsOnPage = scannedDocuments.asMap().entries.where((e) => e.value.pageIndex == pageIndex).toList();
-
-                            return Center(
-                              child: Container(
-                                margin: const EdgeInsets.only(bottom: 24),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withOpacity(0.1),
-                                      blurRadius: 10,
-                                      spreadRadius: 2,
-                                    )
-                                  ],
-                                ),
-                                child: AspectRatio(
-                                  aspectRatio: 1 / 1.414, // A4 format
-                                  child: LayoutBuilder(
-                                    builder: (context, constraints) {
-                                      final canvasWidth = constraints.maxWidth;
-                                      final canvasHeight = constraints.maxHeight;
-
-                                      // Sort docs so selected one is drawn last (on top)
-                                      final sortedDocs = List.of(docsOnPage);
-                                      sortedDocs.sort((a, b) {
-                                        if (a.key == _selectedDocIndex) return 1;
-                                        if (b.key == _selectedDocIndex) return -1;
-                                        return 0;
-                                      });
-
-                                      return GestureDetector(
-                                        behavior: HitTestBehavior.translucent,
-                                        onTap: () {
-                                          // Deselect if tapping empty space
-                                          setState(() => _selectedDocIndex = null);
-                                        },
-                                        child: Stack(
-                                          clipBehavior: Clip.none,
-                                          children: [
-                                            ...sortedDocs.map((entry) {
-                                              final docIndex = entry.key;
-                                              final doc = entry.value;
-
-                                              return DraggableResizableDocument(
-                                                key: ValueKey(doc.file.path),
-                                                document: doc,
-                                                index: docIndex,
-                                                isSelected: _selectedDocIndex == docIndex,
-                                                canvasWidth: canvasWidth,
-                                                canvasHeight: canvasHeight,
-                                                onTap: () {
-                                                  setState(() => _selectedDocIndex = docIndex);
-                                                },
-                                                onEdit: () {
-                                                  Navigator.push(
-                                                    context,
-                                                    MaterialPageRoute(
-                                                      builder: (context) => ImageEditorScreen(documentIndex: docIndex),
-                                                    ),
-                                                  );
-                                                },
-                                                onDelete: () {
-                                                  showDialog(
-                                                    context: context,
-                                                    builder: (context) => AlertDialog(
-                                                      title: const Text('تأكيد الحذف'),
-                                                      content: const Text('هل أنت متأكد من أنك تريد حذف هذا المستمسك؟'),
-                                                      actions: [
-                                                        TextButton(
-                                                          onPressed: () => Navigator.pop(context),
-                                                          child: const Text('إلغاء'),
-                                                        ),
-                                                        TextButton(
-                                                          onPressed: () {
-                                                            ref.read(scannedDocumentsProvider.notifier).removeDocumentAt(docIndex);
-                                                            if (_selectedDocIndex == docIndex) {
-                                                              setState(() => _selectedDocIndex = null);
-                                                            }
-                                                            Navigator.pop(context);
-                                                          },
-                                                          child: const Text('حذف', style: TextStyle(color: Colors.red)),
-                                                        ),
-                                                      ],
-                                                    ),
-                                                  );
-                                                },
-                                                onLayoutUpdate: (index, dx, dy, width, height, newPageIndex) {
-                                                  ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
-                                                    index,
-                                                    dx: dx,
-                                                    dy: dy,
-                                                    width: width,
-                                                    height: height,
-                                                    pageIndex: newPageIndex,
-                                                  );
-                                                },
-                                              );
-                                            }).toList(),
-                                          ],
-                                        ),
-                                      );
-                                    },
-                                  ),
-                                ),
+                          child: Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              // Background Layer (A4 Papers)
+                              Column(
+                                children: List.generate(totalPages, (pageIndex) {
+                                  return Center(
+                                    child: Container(
+                                      margin: const EdgeInsets.only(bottom: 24),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.black.withOpacity(0.1),
+                                            blurRadius: 10,
+                                            spreadRadius: 2,
+                                          )
+                                        ],
+                                      ),
+                                      child: AspectRatio(
+                                        aspectRatio: 1 / 1.414, // A4 format
+                                      ),
+                                    ),
+                                  );
+                                }),
                               ),
-                            );
-                          },
+                              // Foreground Layer (Documents)
+                              Column(
+                                children: List.generate(totalPages, (pageIndex) {
+                                  final docsOnPage = scannedDocuments.asMap().entries.where((e) => e.value.pageIndex == pageIndex).toList();
+
+                                  return Center(
+                                    child: Container(
+                                      margin: const EdgeInsets.only(bottom: 24),
+                                      child: AspectRatio(
+                                        aspectRatio: 1 / 1.414, // A4 format
+                                        child: LayoutBuilder(
+                                          builder: (context, constraints) {
+                                            final canvasWidth = constraints.maxWidth;
+                                            final canvasHeight = constraints.maxHeight;
+
+                                            // Sort docs so selected one is drawn last (on top)
+                                            final sortedDocs = List.of(docsOnPage);
+                                            sortedDocs.sort((a, b) {
+                                              if (a.key == _selectedDocIndex) return 1;
+                                              if (b.key == _selectedDocIndex) return -1;
+                                              return 0;
+                                            });
+
+                                            return GestureDetector(
+                                              behavior: HitTestBehavior.translucent,
+                                              onTap: () {
+                                                // Deselect if tapping empty space
+                                                setState(() => _selectedDocIndex = null);
+                                              },
+                                              child: Stack(
+                                                clipBehavior: Clip.none,
+                                                children: [
+                                                  ...sortedDocs.map((entry) {
+                                                    final docIndex = entry.key;
+                                                    final doc = entry.value;
+
+                                                    return DraggableResizableDocument(
+                                                      key: ValueKey(doc.file.path),
+                                                      document: doc,
+                                                      index: docIndex,
+                                                      isSelected: _selectedDocIndex == docIndex,
+                                                      canvasWidth: canvasWidth,
+                                                      canvasHeight: canvasHeight,
+                                                      onTap: () {
+                                                        setState(() => _selectedDocIndex = docIndex);
+                                                      },
+                                                      onEdit: () {
+                                                        Navigator.push(
+                                                          context,
+                                                          MaterialPageRoute(
+                                                            builder: (context) => ImageEditorScreen(documentIndex: docIndex),
+                                                          ),
+                                                        );
+                                                      },
+                                                      onDelete: () {
+                                                        showDialog(
+                                                          context: context,
+                                                          builder: (context) => AlertDialog(
+                                                            title: const Text('تأكيد الحذف'),
+                                                            content: const Text('هل أنت متأكد من أنك تريد حذف هذا المستمسك؟'),
+                                                            actions: [
+                                                              TextButton(
+                                                                onPressed: () => Navigator.pop(context),
+                                                                child: const Text('إلغاء'),
+                                                              ),
+                                                              TextButton(
+                                                                onPressed: () {
+                                                                  ref.read(scannedDocumentsProvider.notifier).removeDocumentAt(docIndex);
+                                                                  if (_selectedDocIndex == docIndex) {
+                                                                    setState(() => _selectedDocIndex = null);
+                                                                  }
+                                                                  Navigator.pop(context);
+                                                                },
+                                                                child: const Text('حذف', style: TextStyle(color: Colors.red)),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        );
+                                                      },
+                                                      onLayoutUpdate: (index, dx, dy, width, height, newPageIndex) {
+                                                        ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
+                                                          index,
+                                                          dx: dx,
+                                                          dy: dy,
+                                                          width: width,
+                                                          height: height,
+                                                          pageIndex: newPageIndex,
+                                                        );
+                                                      },
+                                                    );
+                                                  }).toList(),
+                                                ],
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                }),
+                              ),
+                            ],
+                          ),
                         ),
                 ),
                 Padding(
