@@ -52,19 +52,37 @@ class ScannedDocumentsNotifier extends Notifier<List<ScannedDocument>> {
   void addDocument(ScannedDocument doc) {
     // Basic automatic placement for new documents
     int newPageIndex = 0;
-    double newDy = 0.0;
+    double newDx = 20.0;
+    double newDy = 20.0;
     if (state.isNotEmpty) {
       final lastDoc = state.last;
       newPageIndex = lastDoc.pageIndex;
-      newDy = lastDoc.dy + lastDoc.height + 20;
-      // If it exceeds a reasonable A4 height estimate in UI, move to next page
-      if (newDy > 600) {
-        newPageIndex++;
-        newDy = 0;
+
+      // Try to place horizontally next to the last document
+      double potentialDx = lastDoc.dx + lastDoc.width + 20.0;
+
+      // Assuming a standard A4 canvas UI width is roughly around 350-400 max
+      if (potentialDx + doc.width < 380) {
+        newDx = potentialDx;
+        newDy = lastDoc.dy; // Stay on same row
+      } else {
+        // Wrap to new row
+        newDx = 20.0;
+        newDy = lastDoc.dy + lastDoc.height + 20.0;
+
+        // If it exceeds a reasonable A4 height estimate in UI, move to next page
+        if (newDy > 600) {
+          newPageIndex++;
+          newDy = 20.0;
+        }
       }
+    } else {
+      // First document uses the default properties in doc, but force safe padding if zero
+      newDx = doc.dx;
+      newDy = doc.dy;
     }
 
-    final newDoc = doc.copyWith(pageIndex: newPageIndex, dy: newDy);
+    final newDoc = doc.copyWith(pageIndex: newPageIndex, dx: newDx, dy: newDy);
     state = [...state, newDoc];
   }
 
