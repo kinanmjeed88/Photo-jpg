@@ -50,7 +50,6 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
     const double canvasWidth = 380.0;
     const double canvasHeight = 537.32; // 380 * 1.414
     const double margin = 20.0;
-    final double scaleFactor = (canvasWidth * 0.45) / 85.6;
 
     // Determine type from doc.type if known, else from appState
     DocumentType effectiveType = doc.type != DocumentType.unknown
@@ -62,37 +61,53 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
 
     switch (effectiveType) {
       case DocumentType.nationalId:
-        newDocWidth = 85.6 * scaleFactor;
-        newDocHeight = 54.0 * scaleFactor;
+        newDocWidth = canvasWidth * 0.45;
+        newDocHeight = newDocWidth / (85.6 / 54.0);
         break;
       case DocumentType.passport:
-        newDocWidth = 176.0 * scaleFactor;
-        newDocHeight = 125.0 * scaleFactor;
+        newDocWidth = canvasWidth * 0.90;
+        newDocHeight = newDocWidth / (176.0 / 125.0);
         break;
       case DocumentType.rationCard:
-        newDocWidth = 210.0 * scaleFactor;
-        newDocHeight = 148.0 * scaleFactor;
+        newDocWidth = canvasWidth * 0.95;
+        newDocHeight = newDocWidth / (210.0 / 148.0);
         break;
       case DocumentType.housingCard:
-        newDocWidth = 105.0 * scaleFactor;
-        newDocHeight = 75.0 * scaleFactor;
+        // Use ratio 105/75 for housing card, size between ID and Passport
+        newDocWidth = canvasWidth * 0.60;
+        newDocHeight = newDocWidth / (105.0 / 75.0);
         break;
       default:
-        newDocWidth = 85.6 * scaleFactor;
-        newDocHeight = 54.0 * scaleFactor;
+        newDocWidth = canvasWidth * 0.45;
+        newDocHeight = newDocWidth / (85.6 / 54.0);
     }
 
-    // Constrain width and height to canvas limits
-    newDocWidth = math.min(newDocWidth, canvasWidth - margin * 2);
-    newDocHeight = math.min(newDocHeight, canvasHeight - margin * 2);
+    // Constrain width and height to canvas limits while maintaining aspect ratio
+    if (newDocWidth > canvasWidth - margin * 2) {
+      double ratio = newDocWidth / newDocHeight;
+      newDocWidth = canvasWidth - margin * 2;
+      newDocHeight = newDocWidth / ratio;
+    }
+    if (newDocHeight > canvasHeight - margin * 2) {
+      double ratio = newDocWidth / newDocHeight;
+      newDocHeight = canvasHeight - margin * 2;
+      newDocWidth = newDocHeight * ratio;
+    }
 
     // Enforce display method limits early
     if (appState.displayMethod == DisplayMethod.frontOnly && state.isNotEmpty && (state[0] ?? []).isNotEmpty) {
       return;
     }
 
+    // Ensure effective type is updated in doc
+    ScannedDocument newDoc = doc.copyWith(
+      type: effectiveType,
+      width: newDocWidth,
+      height: newDocHeight,
+    );
+
     if (state.isEmpty) {
-      state = {0: [doc.copyWith(dx: margin, dy: margin, width: newDocWidth, height: newDocHeight)]};
+      state = {0: [newDoc.copyWith(dx: margin, dy: margin)]};
       return;
     }
 
@@ -103,7 +118,7 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
       pageIndex++;
       state = {
         ...state,
-        pageIndex: [doc.copyWith(dx: margin, dy: margin, width: newDocWidth, height: newDocHeight)]
+        pageIndex: [newDoc.copyWith(dx: margin, dy: margin)]
       };
       return;
     }
@@ -111,7 +126,7 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
     if (pageDocs.isEmpty) {
       state = {
         ...state,
-        pageIndex: [doc.copyWith(dx: margin, dy: margin, width: newDocWidth, height: newDocHeight)],
+        pageIndex: [newDoc.copyWith(dx: margin, dy: margin)],
       };
       return;
     }
@@ -122,25 +137,29 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
 
     // Calculate layout up to the current documents to find insertion point
     for (var existingDoc in pageDocs) {
+      // First, simulate placing the existing document to see if it wraps
       if (currentDx + existingDoc.width + margin > canvasWidth) {
         currentDx = margin;
         currentDy += currentRowMaxHeight + margin;
         currentRowMaxHeight = 0;
       }
+
+      // Update variables based on where the document actually placed
       currentDx += existingDoc.width + margin;
       if (existingDoc.height > currentRowMaxHeight) {
         currentRowMaxHeight = existingDoc.height;
       }
     }
 
-    // Check wrapping for new document
+    // Now, apply the pure flow algorithm for the NEW document
+    // Horizontal Check & Row Wrap
     if (currentDx + newDocWidth + margin > canvasWidth) {
       currentDx = margin;
       currentDy += currentRowMaxHeight + margin;
       currentRowMaxHeight = 0;
     }
 
-    // Check strict page break
+    // Page Break Check (Stop Bleeding)
     if (currentDy + newDocHeight + margin > canvasHeight) {
       pageIndex++;
       currentDx = margin;
@@ -148,12 +167,12 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
 
       state = {
         ...state,
-        pageIndex: [doc.copyWith(dx: currentDx, dy: currentDy, width: newDocWidth, height: newDocHeight)]
+        pageIndex: [newDoc.copyWith(dx: currentDx, dy: currentDy)]
       };
     } else {
       state = {
         ...state,
-        pageIndex: [...pageDocs, doc.copyWith(dx: currentDx, dy: currentDy, width: newDocWidth, height: newDocHeight)]
+        pageIndex: [...pageDocs, newDoc.copyWith(dx: currentDx, dy: currentDy)]
       };
     }
   }
