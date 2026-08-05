@@ -62,23 +62,23 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
     switch (effectiveType) {
       case DocumentType.nationalId:
         newDocWidth = VIRTUAL_A4_WIDTH * 0.42;
-        newDocHeight = newDocWidth / (85.6 / 54.0);
+        newDocHeight = newDocWidth / 1.58;
         break;
       case DocumentType.passport:
         newDocWidth = VIRTUAL_A4_WIDTH * 0.85;
-        newDocHeight = newDocWidth / (176.0 / 125.0);
+        newDocHeight = newDocWidth / 1.408;
         break;
       case DocumentType.rationCard:
         newDocWidth = VIRTUAL_A4_WIDTH * 0.90;
-        newDocHeight = newDocWidth / (210.0 / 148.0);
+        newDocHeight = newDocWidth / 1.418;
         break;
       case DocumentType.housingCard:
         newDocWidth = VIRTUAL_A4_WIDTH * 0.42;
-        newDocHeight = newDocWidth / (105.0 / 75.0);
+        newDocHeight = newDocWidth / 1.58;
         break;
       default:
         newDocWidth = VIRTUAL_A4_WIDTH * 0.42;
-        newDocHeight = newDocWidth / (85.6 / 54.0);
+        newDocHeight = newDocWidth / 1.58;
     }
 
     // Constrain width and height to canvas limits while maintaining aspect ratio
