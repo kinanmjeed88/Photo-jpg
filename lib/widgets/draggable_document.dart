@@ -76,20 +76,42 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
     _triggerLayoutUpdate();
   }
 
+  double get _documentAspectRatio {
+    switch (widget.document.type) {
+      case DocumentType.nationalId:
+        return 85.6 / 54.0;
+      case DocumentType.passport:
+        return 176.0 / 125.0;
+      case DocumentType.rationCard:
+        return 210.0 / 148.0;
+      case DocumentType.housingCard:
+        return 105.0 / 75.0;
+      default:
+        return 85.6 / 54.0;
+    }
+  }
+
   void _onResizeUpdate(DragUpdateDetails details) {
     setState(() {
-      // Allow scale up to aspect ratio or freeform?
+      // Allow scale up to aspect ratio strictly
       // Since it's a 2D resize handle on the bottom right:
       double newWidth = width + details.delta.dx;
-      double newHeight = height + details.delta.dy;
 
       // Enforce minimum size
       if (newWidth < 50) newWidth = 50;
-      if (newHeight < 50) newHeight = 50;
+
+      double newHeight = newWidth / _documentAspectRatio;
 
       // Ensure resize doesn't push the document out of bounds
-      newWidth = math.min(newWidth, widget.canvasWidth - dx);
-      newHeight = math.min(newHeight, widget.canvasHeight - dy);
+      if (newWidth > widget.canvasWidth - dx) {
+        newWidth = widget.canvasWidth - dx;
+        newHeight = newWidth / _documentAspectRatio;
+      }
+
+      if (newHeight > widget.canvasHeight - dy) {
+        newHeight = widget.canvasHeight - dy;
+        newWidth = newHeight * _documentAspectRatio;
+      }
 
       width = newWidth;
       height = newHeight;
@@ -126,13 +148,18 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
                 top: 12,
                 width: width,
                 height: height,
-                child: Container(
-                  decoration: BoxDecoration(
-                    border: widget.isSelected
-                        ? Border.all(color: Colors.blueAccent, width: 3)
-                        : (widget.addFrame ? Border.all(color: Colors.black, width: 1.0) : null),
+                child: Center(
+                  child: AspectRatio(
+                    aspectRatio: _documentAspectRatio,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        border: widget.isSelected
+                            ? Border.all(color: Colors.blueAccent, width: 3)
+                            : (widget.addFrame ? Border.all(color: Colors.black, width: 1.0) : null),
+                      ),
+                      child: Image.file(widget.document.file, fit: BoxFit.fill),
+                    ),
                   ),
-                  child: Image.file(widget.document.file, fit: BoxFit.contain),
                 ),
               ),
               if (widget.isSelected) ...[
