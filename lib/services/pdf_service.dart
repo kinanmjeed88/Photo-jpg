@@ -25,6 +25,11 @@ Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
 
   final sortedPageIndices = pagesData.keys.toList()..sort();
 
+  // Ensure there's at least one page if we have any data, or ensure max pageIndex is covered
+  // Even if a page is empty but an earlier and later page exist, we should probably output blank pages.
+  // We'll iterate from 0 up to max page index
+  final int maxPageIndex = sortedPageIndices.isNotEmpty ? sortedPageIndices.last : 0;
+
   // UI coordinates vs PDF coordinates mapping
   // UI assumes aspect ratio 1 / 1.414, we need to map to PdfPageFormat.a4
   final pdfA4Width = PdfPageFormat.a4.width;
@@ -34,8 +39,8 @@ Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
   final scaleX = pdfA4Width / uiReferenceWidth;
   final scaleY = pdfA4Height / uiReferenceHeight;
 
-  for (var pageIndex in sortedPageIndices) {
-    final docsOnPage = pagesData[pageIndex]!;
+  for (int pageIndex = 0; pageIndex <= maxPageIndex; pageIndex++) {
+    final docsOnPage = pagesData[pageIndex] ?? [];
 
     pdf.addPage(
       pw.Page(
@@ -45,6 +50,7 @@ Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
           return pw.Stack(
             children: docsOnPage.map((docData) {
               final String path = docData['path'] as String;
+              // UI coordinates
               final double dx = docData['dx'] as double;
               final double dy = docData['dy'] as double;
               final double docWidth = docData['width'] as double;

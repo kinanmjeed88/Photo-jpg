@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 enum WorkMode { single, family }
@@ -54,6 +55,17 @@ class ScannedDocumentsNotifier extends Notifier<List<ScannedDocument>> {
     int newPageIndex = 0;
     double newDx = 20.0;
     double newDy = 20.0;
+
+    const double canvasWidth = 380.0;
+    const double canvasHeight = 537.32; // 380 * 1.414
+
+    // Clamp initial document size to not exceed canvas bounds (with padding)
+    double safeWidth = math.min(doc.width, canvasWidth - 40.0);
+    double safeHeight = math.min(doc.height, canvasHeight - 40.0);
+
+    if (safeWidth < 50) safeWidth = 50;
+    if (safeHeight < 50) safeHeight = 50;
+
     if (state.isNotEmpty) {
       final lastDoc = state.last;
       newPageIndex = lastDoc.pageIndex;
@@ -61,10 +73,7 @@ class ScannedDocumentsNotifier extends Notifier<List<ScannedDocument>> {
       // Try to place horizontally next to the last document
       double potentialDx = lastDoc.dx + lastDoc.width + 20.0;
 
-      const double canvasWidth = 380.0;
-      const double canvasHeight = 537.32; // 380 * 1.414
-
-      if (potentialDx + doc.width <= canvasWidth) {
+      if (potentialDx + safeWidth <= canvasWidth) {
         newDx = potentialDx;
         newDy = lastDoc.dy; // Stay on same row
       } else {
@@ -74,7 +83,7 @@ class ScannedDocumentsNotifier extends Notifier<List<ScannedDocument>> {
       }
 
       // Vertical Pagination
-      if (newDy + doc.height > canvasHeight) {
+      if (newDy + safeHeight > canvasHeight) {
         newPageIndex++;
         newDy = 20.0;
         newDx = 20.0;
@@ -85,7 +94,11 @@ class ScannedDocumentsNotifier extends Notifier<List<ScannedDocument>> {
       newDy = doc.dy;
     }
 
-    final newDoc = doc.copyWith(pageIndex: newPageIndex, dx: newDx, dy: newDy);
+    // Double check that it doesn't overflow the canvas, adjust dx and dy just in case
+    newDx = math.max(0.0, math.min(newDx, canvasWidth - safeWidth));
+    newDy = math.max(0.0, math.min(newDy, canvasHeight - safeHeight));
+
+    final newDoc = doc.copyWith(pageIndex: newPageIndex, dx: newDx, dy: newDy, width: safeWidth, height: safeHeight);
     state = [...state, newDoc];
   }
 
