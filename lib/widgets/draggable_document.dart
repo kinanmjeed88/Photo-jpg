@@ -7,6 +7,7 @@ class DraggableResizableDocument extends StatefulWidget {
   final int pageIndex;
   final int docIndex;
   final bool isSelected;
+  final bool addFrame;
   final VoidCallback onTap;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
@@ -20,6 +21,7 @@ class DraggableResizableDocument extends StatefulWidget {
     required this.pageIndex,
     required this.docIndex,
     required this.isSelected,
+    required this.addFrame,
     required this.onTap,
     required this.onEdit,
     required this.onDelete,
@@ -128,7 +130,7 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
                   decoration: BoxDecoration(
                     border: widget.isSelected
                         ? Border.all(color: Colors.blueAccent, width: 3)
-                        : null,
+                        : (widget.addFrame ? Border.all(color: Colors.black, width: 1.0) : null),
                   ),
                   child: Image.file(widget.document.file, fit: BoxFit.contain),
                 ),

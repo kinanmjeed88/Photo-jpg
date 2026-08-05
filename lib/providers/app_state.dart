@@ -58,15 +58,46 @@ class ScannedDocumentsNotifier extends Notifier<List<PageModel>> {
   @override
   List<PageModel> build() => [];
 
-  void addDocument(ScannedDocument doc) {
+  void addDocument(ScannedDocument doc, AppState appState) {
     const double canvasWidth = 380.0;
     const double canvasHeight = 537.32; // 380 * 1.414
-
-    double forcedWidth = canvasWidth * 0.45;
-    double aspectRatio = doc.height == 0 ? 1 : doc.width / doc.height;
-    double forcedHeight = forcedWidth / aspectRatio;
-
     const double margin = 20.0;
+    final double pixelPerMm = canvasWidth / 210.0;
+
+    // Apply real-world dimensions based on selected documents
+    double targetWidthMm = 85.6; // National ID default
+    double targetHeightMm = 54.0;
+
+    int selectedCount = 0;
+    if (appState.hasNationalId) selectedCount++;
+    if (appState.hasHousingCard) selectedCount++;
+    if (appState.hasRationCard) selectedCount++;
+    if (appState.hasPassport) selectedCount++;
+
+    if (selectedCount > 1) {
+      // Multiple selected -> fallback to National ID size
+      targetWidthMm = 85.6;
+      targetHeightMm = 54.0;
+    } else {
+      if (appState.hasRationCard) {
+        targetWidthMm = 210.0;
+        targetHeightMm = 148.0;
+      } else if (appState.hasHousingCard) {
+        targetWidthMm = 105.0;
+        targetHeightMm = 75.0;
+      } else if (appState.hasNationalId) {
+        targetWidthMm = 85.6;
+        targetHeightMm = 54.0;
+      }
+    }
+
+    double forcedWidth = targetWidthMm * pixelPerMm;
+    double forcedHeight = targetHeightMm * pixelPerMm;
+
+    // Enforce display method limits early
+    if (appState.displayMethod == DisplayMethod.frontOnly && state.isNotEmpty && state[0].documents.isNotEmpty) {
+      return;
+    }
 
     if (state.isEmpty) {
       double newDx = math.max(0.0, math.min(doc.dx, canvasWidth - forcedWidth));
@@ -90,6 +121,17 @@ class ScannedDocumentsNotifier extends Notifier<List<PageModel>> {
       return;
     }
 
+    // Determine placement logic based on display method
+    if (appState.displayMethod == DisplayMethod.twoPages) {
+      // Force new page, centered at top
+      double newDx = (canvasWidth - forcedWidth) / 2.0;
+      double newDy = margin;
+      final newDoc = doc.copyWith(dx: newDx, dy: newDy, width: forcedWidth, height: forcedHeight);
+      state = [...state, PageModel(documents: [newDoc])];
+      return;
+    }
+
+    // Default wrapping logic for onePage
     final lastDoc = lastPage.documents.last;
     double newDx = margin;
     double newDy = margin;
