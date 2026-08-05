@@ -16,6 +16,7 @@ Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
 
   final double uiReferenceWidth = args['uiCanvasWidth'] as double;
   final double uiReferenceHeight = args['uiCanvasHeight'] as double;
+  final bool addFrame = args['addFrame'] as bool? ?? false;
 
   final pdf = pw.Document();
 
@@ -61,6 +62,9 @@ Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
                 child: pw.Container(
                   width: pdfWidth,
                   height: pdfHeight,
+                  decoration: addFrame
+                      ? pw.BoxDecoration(border: pw.Border.all(color: PdfColors.black, width: 1.0))
+                      : null,
                   child: pw.Image(memoryImage, fit: pw.BoxFit.contain),
                 ),
               );
@@ -110,6 +114,7 @@ class PdfService {
       'pagesData': pagesData,
       'uiCanvasWidth': uiCanvasWidth,
       'uiCanvasHeight': uiCanvasHeight,
+      'addFrame': state.addFrame,
     };
 
     return await Isolate.run(() => _isolateGeneratePdf(args));

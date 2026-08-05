@@ -59,7 +59,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
             type: docType,
             width: docWidth,
             height: docHeight,
-          ));
+          ), ref.read(appStateProvider));
         }
       }
     } catch (e) {
@@ -149,6 +149,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
   @override
   Widget build(BuildContext context) {
     final pages = ref.watch(scannedDocumentsProvider);
+    final appState = ref.watch(appStateProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -229,6 +230,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                 pageIndex: pageIndex,
                                                 docIndex: docIndex,
                                                 isSelected: _selectedPageIndex == pageIndex && _selectedDocIndex == docIndex,
+                                                addFrame: appState.addFrame,
                                                 canvasWidth: canvasWidth,
                                                 canvasHeight: canvasHeight,
                                                 onTap: () {
