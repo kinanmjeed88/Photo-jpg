@@ -36,11 +36,11 @@ Future<List<File>> _isolateProcessSmartRecognition(Map<String, String> args) asy
     srcClone = src.clone();
 
     gray = cv.cvtColor(src, cv.COLOR_BGR2GRAY);
-    blurred = cv.gaussianBlur(gray, (5, 5), 0);
+    blurred = cv.gaussianBlur(gray, (7, 7), 0);
 
-    edges = cv.adaptiveThreshold(blurred, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2.0);
+    edges = cv.canny(blurred, 50, 150);
 
-    kernel = cv.getStructuringElement(cv.MORPH_RECT, (5, 5));
+    kernel = cv.getStructuringElement(cv.MORPH_RECT, (3, 3));
     dilated = cv.dilate(edges, kernel);
     closed = cv.morphologyEx(dilated, cv.MORPH_CLOSE, kernel);
 
@@ -49,20 +49,44 @@ Future<List<File>> _isolateProcessSmartRecognition(Map<String, String> args) asy
     hierarchy = hier;
 
     List<File> croppedFiles = [];
-    double minArea = 10000;
     int count = 0;
+
+    double imageArea = (gray.rows * gray.cols).toDouble();
 
     for (var contour in contours) {
       final area = cv.contourArea(contour);
-      if (area > minArea) {
-        final rect = cv.boundingRect(contour);
-        final croppedMat = srcClone.region(rect);
-        final croppedPath = '$tempPath/smart_cropped_${DateTime.now().millisecondsSinceEpoch}_$count.jpg';
-        cv.imwrite(croppedPath, croppedMat);
-        croppedFiles.add(File(croppedPath));
-        croppedMat.dispose();
-        count++;
+
+      // Rule 1 (Area): Reject if too small or too big
+      if (area < imageArea * 0.05 || area > imageArea * 0.85) {
+        continue;
       }
+
+      // Rule 2 (Polygonal Approximation): Reject if not exactly 4 vertices
+      final double peri = cv.arcLength(contour, true);
+      final cv.VecPoint approx = cv.approxPolyDP(contour, 0.02 * peri, true);
+
+      if (approx.length != 4) {
+        approx.dispose();
+        continue;
+      }
+
+      // Rule 3 (Aspect Ratio): Reject absurd ratios
+      final cv.Rect rect = cv.boundingRect(approx);
+      final double ratio = rect.width / rect.height;
+
+      if (ratio < 0.5 || ratio > 2.0) {
+        approx.dispose();
+        continue;
+      }
+
+      approx.dispose();
+
+      final croppedMat = srcClone.region(rect);
+      final croppedPath = '$tempPath/smart_cropped_${DateTime.now().millisecondsSinceEpoch}_$count.jpg';
+      cv.imwrite(croppedPath, croppedMat);
+      croppedFiles.add(File(croppedPath));
+      croppedMat.dispose();
+      count++;
     }
 
     if (croppedFiles.isEmpty) {
