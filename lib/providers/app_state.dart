@@ -42,21 +42,9 @@ class ScannedDocument {
   }
 }
 
-class PageModel {
-  final List<ScannedDocument> documents;
-
-  PageModel({this.documents = const []});
-
-  PageModel copyWith({List<ScannedDocument>? documents}) {
-    return PageModel(
-      documents: documents ?? this.documents,
-    );
-  }
-}
-
-class ScannedDocumentsNotifier extends Notifier<List<PageModel>> {
+class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>> {
   @override
-  List<PageModel> build() => [];
+  Map<int, List<ScannedDocument>> build() => {};
 
   void addDocument(ScannedDocument doc, AppState appState) {
     const double canvasWidth = 380.0;
@@ -80,11 +68,14 @@ class ScannedDocumentsNotifier extends Notifier<List<PageModel>> {
       targetHeightMm = 54.0;
     } else {
       if (appState.hasRationCard) {
-        targetWidthMm = 210.0;
-        targetHeightMm = 148.0;
+        targetWidthMm = 148.0;
+        targetHeightMm = 210.0; // Ration card is portrait
       } else if (appState.hasHousingCard) {
         targetWidthMm = 105.0;
         targetHeightMm = 75.0;
+      } else if (appState.hasPassport) {
+        targetWidthMm = 176.0;
+        targetHeightMm = 125.0;
       } else if (appState.hasNationalId) {
         targetWidthMm = 85.6;
         targetHeightMm = 54.0;
@@ -94,30 +85,36 @@ class ScannedDocumentsNotifier extends Notifier<List<PageModel>> {
     double forcedWidth = targetWidthMm * pixelPerMm;
     double forcedHeight = targetHeightMm * pixelPerMm;
 
+    // Constrain width and height to canvas limits, just in case
+    forcedWidth = math.min(forcedWidth, canvasWidth - margin * 2);
+    forcedHeight = math.min(forcedHeight, canvasHeight - margin * 2);
+
     // Enforce display method limits early
-    if (appState.displayMethod == DisplayMethod.frontOnly && state.isNotEmpty && state[0].documents.isNotEmpty) {
+    if (appState.displayMethod == DisplayMethod.frontOnly && state.isNotEmpty && (state[0] ?? []).isNotEmpty) {
       return;
     }
 
     if (state.isEmpty) {
-      double newDx = math.max(0.0, math.min(doc.dx, canvasWidth - forcedWidth));
-      double newDy = math.max(0.0, math.min(doc.dy, canvasHeight - forcedHeight));
+      double newDx = margin;
+      double newDy = margin;
 
       final newDoc = doc.copyWith(dx: newDx, dy: newDy, width: forcedWidth, height: forcedHeight);
-      state = [PageModel(documents: [newDoc])];
+      state = {0: [newDoc]};
       return;
     }
 
-    final lastPageIndex = state.length - 1;
-    final lastPage = state[lastPageIndex];
+    final lastPageIndex = state.keys.reduce(math.max);
+    final lastPageDocs = List<ScannedDocument>.from(state[lastPageIndex] ?? []);
 
-    if (lastPage.documents.isEmpty) {
-      double newDx = math.max(0.0, math.min(doc.dx, canvasWidth - forcedWidth));
-      double newDy = math.max(0.0, math.min(doc.dy, canvasHeight - forcedHeight));
+    if (lastPageDocs.isEmpty) {
+      double newDx = margin;
+      double newDy = margin;
       final newDoc = doc.copyWith(dx: newDx, dy: newDy, width: forcedWidth, height: forcedHeight);
 
-      final updatedPage = lastPage.copyWith(documents: [newDoc]);
-      state = [...state.sublist(0, lastPageIndex), updatedPage];
+      state = {
+        ...state,
+        lastPageIndex: [newDoc],
+      };
       return;
     }
 
@@ -127,97 +124,116 @@ class ScannedDocumentsNotifier extends Notifier<List<PageModel>> {
       double newDx = (canvasWidth - forcedWidth) / 2.0;
       double newDy = margin;
       final newDoc = doc.copyWith(dx: newDx, dy: newDy, width: forcedWidth, height: forcedHeight);
-      state = [...state, PageModel(documents: [newDoc])];
+      state = {
+        ...state,
+        lastPageIndex + 1: [newDoc]
+      };
       return;
     }
 
-    // Default wrapping logic for onePage
-    final lastDoc = lastPage.documents.last;
-    double newDx = margin;
-    double newDy = margin;
+    // Smart wrapping logic for onePage
+    double currentDx = margin;
+    double currentDy = margin;
 
+
+    // Re-evaluate positions based on the last document
+    final lastDoc = lastPageDocs.last;
+
+    // First try side-by-side
     double potentialDx = lastDoc.dx + lastDoc.width + margin;
 
     if (potentialDx + forcedWidth <= canvasWidth) {
-      newDx = potentialDx;
-      newDy = lastDoc.dy;
+      // Fits on the right
+      currentDx = potentialDx;
+      currentDy = lastDoc.dy;
     } else {
-      newDx = margin;
-      newDy = lastDoc.dy + lastDoc.height + margin;
+      // Need a new row
+      currentDx = margin;
+      // Find the maximum Y bounds of all documents in the current "row" (rough estimation)
+      // For better wrapping, let's just use the lowest point of any document on the page
+      double lowestPoint = 0;
+      for (var d in lastPageDocs) {
+         if (d.dy + d.height > lowestPoint) {
+             lowestPoint = d.dy + d.height;
+         }
+      }
+      currentDy = lowestPoint + margin;
     }
 
-    if (newDy + forcedHeight > canvasHeight) {
+    if (currentDy + forcedHeight > canvasHeight) {
       // Create new page
-      newDx = margin;
-      newDy = margin;
+      currentDx = margin;
+      currentDy = margin;
 
-      newDx = math.max(0.0, math.min(newDx, canvasWidth - forcedWidth));
-      newDy = math.max(0.0, math.min(newDy, canvasHeight - forcedHeight));
-
-      final newDoc = doc.copyWith(dx: newDx, dy: newDy, width: forcedWidth, height: forcedHeight);
-      state = [...state, PageModel(documents: [newDoc])];
+      final newDoc = doc.copyWith(dx: currentDx, dy: currentDy, width: forcedWidth, height: forcedHeight);
+      state = {
+        ...state,
+        lastPageIndex + 1: [newDoc]
+      };
     } else {
       // Add to last page
-      newDx = math.max(0.0, math.min(newDx, canvasWidth - forcedWidth));
-      newDy = math.max(0.0, math.min(newDy, canvasHeight - forcedHeight));
-
-      final newDoc = doc.copyWith(dx: newDx, dy: newDy, width: forcedWidth, height: forcedHeight);
-      final updatedPage = lastPage.copyWith(documents: [...lastPage.documents, newDoc]);
-      state = [...state.sublist(0, lastPageIndex), updatedPage];
+      final newDoc = doc.copyWith(dx: currentDx, dy: currentDy, width: forcedWidth, height: forcedHeight);
+      state = {
+        ...state,
+        lastPageIndex: [...lastPageDocs, newDoc]
+      };
     }
   }
 
   void removeDocumentAt(int pageIndex, int docIndex) {
-    if (pageIndex < 0 || pageIndex >= state.length) return;
+    if (!state.containsKey(pageIndex)) return;
 
-    final page = state[pageIndex];
-    if (docIndex < 0 || docIndex >= page.documents.length) return;
+    final pageDocs = state[pageIndex]!;
+    if (docIndex < 0 || docIndex >= pageDocs.length) return;
 
     final updatedDocs = [
-      for (int i = 0; i < page.documents.length; i++)
-        if (i != docIndex) page.documents[i]
+      for (int i = 0; i < pageDocs.length; i++)
+        if (i != docIndex) pageDocs[i]
     ];
 
     if (updatedDocs.isEmpty) {
-      // Remove the page if empty, unless it's the only page (maybe keep it empty? Let's remove it)
-      state = [
-        for (int i = 0; i < state.length; i++)
-          if (i != pageIndex) state[i]
-      ];
+      // Remove the page if empty
+      final newState = Map<int, List<ScannedDocument>>.from(state)..remove(pageIndex);
+      // Re-index pages so they are contiguous starting from 0
+      final reindexedState = <int, List<ScannedDocument>>{};
+      int newIdx = 0;
+      final sortedKeys = newState.keys.toList()..sort();
+      for (var key in sortedKeys) {
+        reindexedState[newIdx++] = newState[key]!;
+      }
+      state = reindexedState;
     } else {
-      final updatedPage = page.copyWith(documents: updatedDocs);
-      state = [
-        for (int i = 0; i < state.length; i++)
-          if (i == pageIndex) updatedPage else state[i]
-      ];
+      state = {
+        ...state,
+        pageIndex: updatedDocs,
+      };
     }
   }
 
   void updateDocumentAt(int pageIndex, int docIndex, ScannedDocument newDoc) {
-    if (pageIndex < 0 || pageIndex >= state.length) return;
+    if (!state.containsKey(pageIndex)) return;
 
-    final page = state[pageIndex];
-    if (docIndex < 0 || docIndex >= page.documents.length) return;
+    final pageDocs = state[pageIndex]!;
+    if (docIndex < 0 || docIndex >= pageDocs.length) return;
 
     final updatedDocs = [
-      for (int i = 0; i < page.documents.length; i++)
-        if (i == docIndex) newDoc else page.documents[i]
+      for (int i = 0; i < pageDocs.length; i++)
+        if (i == docIndex) newDoc else pageDocs[i]
     ];
 
-    final updatedPage = page.copyWith(documents: updatedDocs);
-    state = [
-      for (int i = 0; i < state.length; i++)
-        if (i == pageIndex) updatedPage else state[i]
-    ];
+    state = {
+      ...state,
+      pageIndex: updatedDocs,
+    };
   }
 
   void updateDocumentLayout(int pageIndex, int docIndex, {double? dx, double? dy, double? width, double? height}) {
-    if (pageIndex < 0 || pageIndex >= state.length) return;
+    if (!state.containsKey(pageIndex)) return;
 
-    final page = state[pageIndex];
-    if (docIndex < 0 || docIndex >= page.documents.length) return;
+    final pageDocs = state[pageIndex]!;
+    if (docIndex < 0 || docIndex >= pageDocs.length) return;
 
-    final doc = page.documents[docIndex];
+    final doc = pageDocs[docIndex];
     final newDoc = doc.copyWith(
       dx: dx,
       dy: dy,
@@ -228,11 +244,11 @@ class ScannedDocumentsNotifier extends Notifier<List<PageModel>> {
   }
 
   void clear() {
-    state = [];
+    state = {};
   }
 }
 
-final scannedDocumentsProvider = NotifierProvider<ScannedDocumentsNotifier, List<PageModel>>(() {
+final scannedDocumentsProvider = NotifierProvider<ScannedDocumentsNotifier, Map<int, List<ScannedDocument>>>(() {
   return ScannedDocumentsNotifier();
 });
 

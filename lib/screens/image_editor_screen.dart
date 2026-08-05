@@ -130,8 +130,9 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
 
     setState(() => _isProcessing = true);
     try {
-      final page = ref.read(scannedDocumentsProvider)[widget.pageIndex];
-      final doc = page.documents[widget.documentIndex];
+      final pageDocs = ref.read(scannedDocumentsProvider)[widget.pageIndex];
+      if (pageDocs == null) return;
+      final doc = pageDocs[widget.documentIndex];
       final bytes = await doc.file.readAsBytes();
 
       final rect = editorKey.currentState?.getCropRect();
@@ -176,8 +177,9 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
   void _applyChanges() async {
     setState(() => _isProcessing = true);
     try {
-      final page = ref.read(scannedDocumentsProvider)[widget.pageIndex];
-      final doc = page.documents[widget.documentIndex];
+      final pageDocs = ref.read(scannedDocumentsProvider)[widget.pageIndex];
+      if (pageDocs == null) return;
+      final doc = pageDocs[widget.documentIndex];
       final bytes = await doc.file.readAsBytes();
 
       final rect = editorKey.currentState?.getCropRect();
@@ -223,12 +225,12 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
   @override
   Widget build(BuildContext context) {
     final pages = ref.watch(scannedDocumentsProvider);
-    if (widget.pageIndex >= pages.length) return const Scaffold();
+    if (!pages.containsKey(widget.pageIndex)) return const Scaffold();
 
-    final page = pages[widget.pageIndex];
-    if (widget.documentIndex >= page.documents.length) return const Scaffold();
+    final pageDocs = pages[widget.pageIndex]!;
+    if (widget.documentIndex >= pageDocs.length) return const Scaffold();
 
-    final doc = page.documents[widget.documentIndex];
+    final doc = pageDocs[widget.documentIndex];
 
     return Scaffold(
       appBar: AppBar(
