@@ -47,8 +47,8 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
   Map<int, List<ScannedDocument>> build() => {};
 
   void addDocument(ScannedDocument doc, AppState appState) {
-    const double canvasWidth = 400.0;
-    const double canvasHeight = 537.32; // 380 * 1.414
+    const double VIRTUAL_A4_WIDTH = 400.0;
+    const double VIRTUAL_A4_HEIGHT = 565.6; // 400 * 1.414
     const double margin = 20.0;
 
     // Determine type from doc.type if known, else from appState
@@ -61,35 +61,35 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
 
     switch (effectiveType) {
       case DocumentType.nationalId:
-        newDocWidth = canvasWidth * 0.42;
+        newDocWidth = VIRTUAL_A4_WIDTH * 0.42;
         newDocHeight = newDocWidth / (85.6 / 54.0);
         break;
       case DocumentType.passport:
-        newDocWidth = canvasWidth * 0.85;
+        newDocWidth = VIRTUAL_A4_WIDTH * 0.85;
         newDocHeight = newDocWidth / (176.0 / 125.0);
         break;
       case DocumentType.rationCard:
-        newDocWidth = canvasWidth * 0.90;
+        newDocWidth = VIRTUAL_A4_WIDTH * 0.90;
         newDocHeight = newDocWidth / (210.0 / 148.0);
         break;
       case DocumentType.housingCard:
-        newDocWidth = canvasWidth * 0.42;
-        newDocHeight = newDocWidth / (85.6 / 54.0);
+        newDocWidth = VIRTUAL_A4_WIDTH * 0.42;
+        newDocHeight = newDocWidth / (105.0 / 75.0);
         break;
       default:
-        newDocWidth = canvasWidth * 0.42;
+        newDocWidth = VIRTUAL_A4_WIDTH * 0.42;
         newDocHeight = newDocWidth / (85.6 / 54.0);
     }
 
     // Constrain width and height to canvas limits while maintaining aspect ratio
-    if (newDocWidth > canvasWidth - margin * 2) {
+    if (newDocWidth > VIRTUAL_A4_WIDTH - margin * 2) {
       double ratio = newDocWidth / newDocHeight;
-      newDocWidth = canvasWidth - margin * 2;
+      newDocWidth = VIRTUAL_A4_WIDTH - margin * 2;
       newDocHeight = newDocWidth / ratio;
     }
-    if (newDocHeight > canvasHeight - margin * 2) {
+    if (newDocHeight > VIRTUAL_A4_HEIGHT - margin * 2) {
       double ratio = newDocWidth / newDocHeight;
-      newDocHeight = canvasHeight - margin * 2;
+      newDocHeight = VIRTUAL_A4_HEIGHT - margin * 2;
       newDocWidth = newDocHeight * ratio;
     }
 
@@ -137,7 +137,7 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
     // Calculate layout up to the current documents to find insertion point
     for (var existingDoc in pageDocs) {
       // First, simulate placing the existing document to see if it wraps
-      if (currentDx + existingDoc.width + margin > canvasWidth) {
+      if (currentDx + existingDoc.width + margin > VIRTUAL_A4_WIDTH) {
         currentDx = margin;
         currentDy += currentRowMaxHeight + margin;
         currentRowMaxHeight = 0;
@@ -152,14 +152,14 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
 
     // Now, apply the pure flow algorithm for the NEW document
     // Horizontal Check & Row Wrap
-    if (currentDx + newDocWidth + margin > canvasWidth) {
+    if (currentDx + newDocWidth + margin > VIRTUAL_A4_WIDTH) {
       currentDx = margin;
       currentDy += currentRowMaxHeight + margin;
       currentRowMaxHeight = 0;
     }
 
     // Page Break Check (Stop Bleeding)
-    if (currentDy + newDocHeight + margin > canvasHeight) {
+    if (currentDy + newDocHeight + margin > VIRTUAL_A4_HEIGHT) {
       pageIndex++;
       currentDx = margin;
       currentDy = margin;

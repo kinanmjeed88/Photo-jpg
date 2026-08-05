@@ -219,22 +219,27 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                             _selectedDocIndex = null;
                                           });
                                         },
-                                        child: Stack(
-                                          clipBehavior: Clip.hardEdge,
-                                          children: [
-                                            ...sortedDocs.map((entry) {
-                                              final docIndex = entry.key;
-                                              final doc = entry.value;
+                                        child: FittedBox(
+                                          fit: BoxFit.contain,
+                                          child: SizedBox(
+                                            width: 400.0,
+                                            height: 565.6,
+                                            child: Stack(
+                                              clipBehavior: Clip.hardEdge,
+                                              children: [
+                                                ...sortedDocs.map((entry) {
+                                                  final docIndex = entry.key;
+                                                  final doc = entry.value;
 
-                                              return DraggableResizableDocument(
-                                                key: ValueKey('${pageKey}_${doc.file.path}'),
-                                                document: doc,
-                                                pageIndex: pageKey,
-                                                docIndex: docIndex,
-                                                isSelected: _selectedPageIndex == pageKey && _selectedDocIndex == docIndex,
-                                                addFrame: appState.addFrame,
-                                                canvasWidth: canvasWidth,
-                                                canvasHeight: canvasHeight,
+                                                  return DraggableResizableDocument(
+                                                    key: ValueKey('${pageKey}_${doc.file.path}'),
+                                                    document: doc,
+                                                    pageIndex: pageKey,
+                                                    docIndex: docIndex,
+                                                    isSelected: _selectedPageIndex == pageKey && _selectedDocIndex == docIndex,
+                                                    addFrame: appState.addFrame,
+                                                    canvasWidth: 400.0,
+                                                    canvasHeight: 565.6,
                                                 onTap: () {
                                                   setState(() {
                                                     _selectedPageIndex = pageKey;
@@ -296,7 +301,9 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                 },
                                               );
                                             }).toList(),
-                                          ],
+                                              ],
+                                            ),
+                                          ),
                                         ),
                                       );
                                     },
