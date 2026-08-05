@@ -62,17 +62,17 @@ class ScannedDocumentsNotifier extends Notifier<List<PageModel>> {
     const double canvasWidth = 380.0;
     const double canvasHeight = 537.32; // 380 * 1.414
 
-    double safeWidth = math.min(doc.width, canvasWidth - 40.0);
-    double safeHeight = math.min(doc.height, canvasHeight - 40.0);
+    double forcedWidth = canvasWidth * 0.45;
+    double aspectRatio = doc.height == 0 ? 1 : doc.width / doc.height;
+    double forcedHeight = forcedWidth / aspectRatio;
 
-    if (safeWidth < 50) safeWidth = 50;
-    if (safeHeight < 50) safeHeight = 50;
+    const double margin = 20.0;
 
     if (state.isEmpty) {
-      double newDx = math.max(0.0, math.min(doc.dx, canvasWidth - safeWidth));
-      double newDy = math.max(0.0, math.min(doc.dy, canvasHeight - safeHeight));
+      double newDx = math.max(0.0, math.min(doc.dx, canvasWidth - forcedWidth));
+      double newDy = math.max(0.0, math.min(doc.dy, canvasHeight - forcedHeight));
 
-      final newDoc = doc.copyWith(dx: newDx, dy: newDy, width: safeWidth, height: safeHeight);
+      final newDoc = doc.copyWith(dx: newDx, dy: newDy, width: forcedWidth, height: forcedHeight);
       state = [PageModel(documents: [newDoc])];
       return;
     }
@@ -81,9 +81,9 @@ class ScannedDocumentsNotifier extends Notifier<List<PageModel>> {
     final lastPage = state[lastPageIndex];
 
     if (lastPage.documents.isEmpty) {
-      double newDx = math.max(0.0, math.min(doc.dx, canvasWidth - safeWidth));
-      double newDy = math.max(0.0, math.min(doc.dy, canvasHeight - safeHeight));
-      final newDoc = doc.copyWith(dx: newDx, dy: newDy, width: safeWidth, height: safeHeight);
+      double newDx = math.max(0.0, math.min(doc.dx, canvasWidth - forcedWidth));
+      double newDy = math.max(0.0, math.min(doc.dy, canvasHeight - forcedHeight));
+      final newDoc = doc.copyWith(dx: newDx, dy: newDy, width: forcedWidth, height: forcedHeight);
 
       final updatedPage = lastPage.copyWith(documents: [newDoc]);
       state = [...state.sublist(0, lastPageIndex), updatedPage];
@@ -91,35 +91,35 @@ class ScannedDocumentsNotifier extends Notifier<List<PageModel>> {
     }
 
     final lastDoc = lastPage.documents.last;
-    double newDx = 20.0;
-    double newDy = 20.0;
+    double newDx = margin;
+    double newDy = margin;
 
-    double potentialDx = lastDoc.dx + lastDoc.width + 20.0;
+    double potentialDx = lastDoc.dx + lastDoc.width + margin;
 
-    if (potentialDx + safeWidth <= canvasWidth) {
+    if (potentialDx + forcedWidth <= canvasWidth) {
       newDx = potentialDx;
       newDy = lastDoc.dy;
     } else {
-      newDx = 20.0;
-      newDy = lastDoc.dy + lastDoc.height + 20.0;
+      newDx = margin;
+      newDy = lastDoc.dy + lastDoc.height + margin;
     }
 
-    if (newDy + safeHeight > canvasHeight) {
+    if (newDy + forcedHeight > canvasHeight) {
       // Create new page
-      newDx = 20.0;
-      newDy = 20.0;
+      newDx = margin;
+      newDy = margin;
 
-      newDx = math.max(0.0, math.min(newDx, canvasWidth - safeWidth));
-      newDy = math.max(0.0, math.min(newDy, canvasHeight - safeHeight));
+      newDx = math.max(0.0, math.min(newDx, canvasWidth - forcedWidth));
+      newDy = math.max(0.0, math.min(newDy, canvasHeight - forcedHeight));
 
-      final newDoc = doc.copyWith(dx: newDx, dy: newDy, width: safeWidth, height: safeHeight);
+      final newDoc = doc.copyWith(dx: newDx, dy: newDy, width: forcedWidth, height: forcedHeight);
       state = [...state, PageModel(documents: [newDoc])];
     } else {
       // Add to last page
-      newDx = math.max(0.0, math.min(newDx, canvasWidth - safeWidth));
-      newDy = math.max(0.0, math.min(newDy, canvasHeight - safeHeight));
+      newDx = math.max(0.0, math.min(newDx, canvasWidth - forcedWidth));
+      newDy = math.max(0.0, math.min(newDy, canvasHeight - forcedHeight));
 
-      final newDoc = doc.copyWith(dx: newDx, dy: newDy, width: safeWidth, height: safeHeight);
+      final newDoc = doc.copyWith(dx: newDx, dy: newDy, width: forcedWidth, height: forcedHeight);
       final updatedPage = lastPage.copyWith(documents: [...lastPage.documents, newDoc]);
       state = [...state.sublist(0, lastPageIndex), updatedPage];
     }
