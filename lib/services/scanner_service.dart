@@ -10,12 +10,60 @@ import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart
 import 'package:path_provider/path_provider.dart';
 import '../providers/app_state.dart';
 
-Future<List<File>> _isolateProcessSmartRecognition(Map<String, String> args) async {
-  final String tempPath = args['tempPath']!;
-  final String imagePath = args['imagePath']!;
+class RectModel {
+  final int left, top, right, bottom;
+  RectModel(this.left, this.top, this.right, this.bottom);
+}
 
-  cv.Mat? src;
-  cv.Mat? srcClone;
+cv.VecPoint _orderPoints(cv.VecPoint pts) {
+  // We expect 4 points.
+  var p0 = pts[0];
+  var p1 = pts[1];
+  var p2 = pts[2];
+  var p3 = pts[3];
+
+  List<cv.Point> points = [p0, p1, p2, p3];
+
+  var sum = points.map((p) => p.x + p.y).toList();
+  var diff = points.map((p) => p.y - p.x).toList();
+
+  var tlIndex = 0, brIndex = 0, trIndex = 0, blIndex = 0;
+  var minSum = sum[0], maxSum = sum[0], minDiff = diff[0], maxDiff = diff[0];
+
+  for (var i = 1; i < 4; i++) {
+    if (sum[i] < minSum) {
+      minSum = sum[i];
+      tlIndex = i;
+    }
+    if (sum[i] > maxSum) {
+      maxSum = sum[i];
+      brIndex = i;
+    }
+    if (diff[i] < minDiff) {
+      minDiff = diff[i];
+      trIndex = i;
+    }
+    if (diff[i] > maxDiff) {
+      maxDiff = diff[i];
+      blIndex = i;
+    }
+  }
+
+  return cv.VecPoint.fromList([
+    points[tlIndex],
+    points[trIndex],
+    points[brIndex],
+    points[blIndex],
+  ]);
+}
+
+File? _processPatch(
+  cv.Mat srcClone,
+  Map<String, dynamic> rectMap,
+  String tempPath,
+  int count,
+) {
+  cv.Mat? patch;
   cv.Mat? gray;
   cv.Mat? blurred;
   cv.Mat? edges;
@@ -24,6 +72,160 @@ Future<List<File>> _isolateProcessSmartRecognition(Map<String, String> args) asy
   cv.Mat? closed;
   cv.Contours? contours;
   cv.VecVec4i? hierarchy;
+  cv.Mat? warped;
+  cv.VecPoint? approx;
+  cv.VecPoint? orderedPts;
+  cv.VecPoint? dstPts;
+  cv.Mat? transMat;
+
+  try {
+    int rLeft = rectMap['left'] as int;
+    int rTop = rectMap['top'] as int;
+    int rWidth = rectMap['width'] as int;
+    int rHeight = rectMap['height'] as int;
+
+    // Add padding (e.g., 20 pixels) to ensure physical edges are included.
+    int pad = 20;
+    int left = (rLeft - pad < 0) ? 0 : rLeft - pad;
+    int top = (rTop - pad < 0) ? 0 : rTop - pad;
+    int right = (rLeft + rWidth + pad > srcClone.cols)
+        ? srcClone.cols
+        : rLeft + rWidth + pad;
+    int bottom = (rTop + rHeight + pad > srcClone.rows)
+        ? srcClone.rows
+        : rTop + rHeight + pad;
+
+    int width = right - left;
+    int height = bottom - top;
+
+    if (width <= 0 || height <= 0) return null;
+
+    cv.Rect patchRect = cv.Rect(left, top, width, height);
+    patch = srcClone.region(patchRect);
+
+    gray = cv.cvtColor(patch, cv.COLOR_BGR2GRAY);
+    blurred = cv.gaussianBlur(gray, (7, 7), 0);
+    edges = cv.canny(blurred, 50, 150);
+    kernel = cv.getStructuringElement(cv.MORPH_RECT, (3, 3));
+    dilated = cv.dilate(edges, kernel);
+    closed = cv.morphologyEx(dilated, cv.MORPH_CLOSE, kernel);
+
+    final (conts, hier) = cv.findContours(
+      closed,
+      cv.RETR_EXTERNAL,
+      cv.CHAIN_APPROX_SIMPLE,
+    );
+    contours = conts;
+    hierarchy = hier;
+
+    double imageArea = (gray.rows * gray.cols).toDouble();
+
+    cv.VecPoint? bestApprox;
+    double maxArea = -1;
+
+    for (var contour in contours) {
+      final area = cv.contourArea(contour);
+      if (area < imageArea * 0.05 || area > imageArea * 0.85) {
+        continue;
+      }
+
+      final double peri = cv.arcLength(contour, true);
+      final cv.VecPoint currentApprox = cv.approxPolyDP(
+        contour,
+        0.02 * peri,
+        true,
+      );
+
+      if (currentApprox.length != 4) {
+        currentApprox.dispose();
+        continue;
+      }
+
+      final cv.Rect rect = cv.boundingRect(currentApprox);
+      final double ratio = rect.width / rect.height;
+      if (ratio < 0.5 || ratio > 2.0) {
+        currentApprox.dispose();
+        continue;
+      }
+
+      if (area > maxArea) {
+        maxArea = area;
+        if (bestApprox != null) {
+          bestApprox.dispose();
+        }
+        bestApprox = currentApprox;
+      } else {
+        currentApprox.dispose();
+      }
+    }
+
+    if (bestApprox == null) {
+      return null;
+    }
+
+    approx = bestApprox;
+    orderedPts = _orderPoints(approx);
+
+    // Calculate width and height of the new warped image
+    var p0 = orderedPts[0]; // tl
+    var p1 = orderedPts[1]; // tr
+    var p2 = orderedPts[2]; // br
+    var p3 = orderedPts[3]; // bl
+
+    // It requires dart:math, but we can avoid it with simple approximations
+    int widthA = (p2.x - p3.x).abs();
+    int widthB = (p1.x - p0.x).abs();
+    int maxWidth = widthA > widthB ? widthA : widthB;
+
+    int heightA = (p1.y - p2.y).abs();
+    int heightB = (p0.y - p3.y).abs();
+    int maxHeight = heightA > heightB ? heightA : heightB;
+
+    dstPts = cv.VecPoint.fromList([
+      cv.Point(0, 0),
+      cv.Point(maxWidth - 1, 0),
+      cv.Point(maxWidth - 1, maxHeight - 1),
+      cv.Point(0, maxHeight - 1),
+    ]);
+
+    transMat = cv.getPerspectiveTransform(orderedPts, dstPts);
+
+    warped = cv.warpPerspective(patch, transMat, (maxWidth, maxHeight));
+
+    final croppedPath =
+        '$tempPath/smart_cropped_${DateTime.now().millisecondsSinceEpoch}_$count.jpg';
+    cv.imwrite(croppedPath, warped);
+    return File(croppedPath);
+  } catch (e) {
+    print('OpenCV processing failed for a patch: $e');
+    return null;
+  } finally {
+    patch?.dispose();
+    gray?.dispose();
+    blurred?.dispose();
+    edges?.dispose();
+    kernel?.dispose();
+    dilated?.dispose();
+    closed?.dispose();
+    contours?.dispose();
+    hierarchy?.dispose();
+    warped?.dispose();
+    approx?.dispose();
+    orderedPts?.dispose();
+    dstPts?.dispose();
+    transMat?.dispose();
+  }
+}
+
+Future<List<File>> _isolateProcessSmartCVLayer(
+  Map<String, dynamic> args,
+) async {
+  final String tempPath = args['tempPath'] as String;
+  final String imagePath = args['imagePath'] as String;
+  final List<dynamic> roisList = args['rois'] as List<dynamic>;
+
+  cv.Mat? src;
+  cv.Mat? srcClone;
 
   try {
     final bytes = File(imagePath).readAsBytesSync();
@@ -35,57 +237,19 @@ Future<List<File>> _isolateProcessSmartRecognition(Map<String, String> args) asy
 
     srcClone = src.clone();
 
-    gray = cv.cvtColor(src, cv.COLOR_BGR2GRAY);
-    blurred = cv.gaussianBlur(gray, (7, 7), 0);
-
-    edges = cv.canny(blurred, 50, 150);
-
-    kernel = cv.getStructuringElement(cv.MORPH_RECT, (3, 3));
-    dilated = cv.dilate(edges, kernel);
-    closed = cv.morphologyEx(dilated, cv.MORPH_CLOSE, kernel);
-
-    final (conts, hier) = cv.findContours(closed, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-    contours = conts;
-    hierarchy = hier;
-
     List<File> croppedFiles = [];
     int count = 0;
 
-    double imageArea = (gray.rows * gray.cols).toDouble();
-
-    for (var contour in contours) {
-      final area = cv.contourArea(contour);
-
-      // Rule 1 (Area): Reject if too small or too big
-      if (area < imageArea * 0.05 || area > imageArea * 0.85) {
-        continue;
+    for (var roiMap in roisList) {
+      final File? cropped = _processPatch(
+        srcClone,
+        roiMap as Map<String, dynamic>,
+        tempPath,
+        count,
+      );
+      if (cropped != null) {
+        croppedFiles.add(cropped);
       }
-
-      // Rule 2 (Polygonal Approximation): Reject if not exactly 4 vertices
-      final double peri = cv.arcLength(contour, true);
-      final cv.VecPoint approx = cv.approxPolyDP(contour, 0.02 * peri, true);
-
-      if (approx.length != 4) {
-        approx.dispose();
-        continue;
-      }
-
-      // Rule 3 (Aspect Ratio): Reject absurd ratios
-      final cv.Rect rect = cv.boundingRect(approx);
-      final double ratio = rect.width / rect.height;
-
-      if (ratio < 0.5 || ratio > 2.0) {
-        approx.dispose();
-        continue;
-      }
-
-      approx.dispose();
-
-      final croppedMat = srcClone.region(rect);
-      final croppedPath = '$tempPath/smart_cropped_${DateTime.now().millisecondsSinceEpoch}_$count.jpg';
-      cv.imwrite(croppedPath, croppedMat);
-      croppedFiles.add(File(croppedPath));
-      croppedMat.dispose();
       count++;
     }
 
@@ -94,19 +258,11 @@ Future<List<File>> _isolateProcessSmartRecognition(Map<String, String> args) asy
     }
     return croppedFiles;
   } catch (e) {
-    print('Smart recognition failed: $e');
+    print('Smart CV Layer failed: $e');
     return [File(imagePath)];
   } finally {
     src?.dispose();
     srcClone?.dispose();
-    gray?.dispose();
-    blurred?.dispose();
-    edges?.dispose();
-    kernel?.dispose();
-    dilated?.dispose();
-    closed?.dispose();
-    contours?.dispose();
-    hierarchy?.dispose();
   }
 }
 
@@ -121,14 +277,13 @@ class ScannerService {
       sourcePath: image.path,
       uiSettings: [
         AndroidUiSettings(
-            toolbarTitle: 'تعديل الصورة',
-            toolbarColor: const Color(0xFF1E293B),
-            toolbarWidgetColor: Colors.white,
-            initAspectRatio: CropAspectRatioPreset.original,
-            lockAspectRatio: false),
-        IOSUiSettings(
-          title: 'تعديل الصورة',
+          toolbarTitle: 'تعديل الصورة',
+          toolbarColor: const Color(0xFF1E293B),
+          toolbarWidgetColor: Colors.white,
+          initAspectRatio: CropAspectRatioPreset.original,
+          lockAspectRatio: false,
         ),
+        IOSUiSettings(title: 'تعديل الصورة'),
       ],
     );
 
@@ -149,7 +304,11 @@ class ScannerService {
 
     if (highContrast) {
       // Basic contrast adjustment for a "scanner" look
-      decodedImage = img.adjustColor(decodedImage, contrast: 1.5, exposure: 0.1);
+      decodedImage = img.adjustColor(
+        decodedImage,
+        contrast: 1.5,
+        exposure: 0.1,
+      );
     }
 
     final newBytes = img.encodeJpg(decodedImage, quality: 90);
@@ -163,12 +322,67 @@ class ScannerService {
     final tempPath = tempDir.path;
     final imagePath = imageFile.path;
 
-    final args = {
-      'tempPath': tempPath,
-      'imagePath': imagePath,
-    };
+    // Stage 1: On-Device AI ROI Detection
+    final inputImage = InputImage.fromFilePath(imagePath);
+    final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
 
-    return await Isolate.run(() => _isolateProcessSmartRecognition(args));
+    List<Map<String, dynamic>> rois = [];
+
+    try {
+      final RecognizedText recognizedText = await textRecognizer.processImage(
+        inputImage,
+      );
+
+      // Collect bounding boxes of all text blocks
+      List<Rect> textBlocks = [];
+      for (TextBlock block in recognizedText.blocks) {
+        textBlocks.add(block.boundingBox);
+      }
+
+      // Cluster the text blocks to form document ROIs
+      bool changed = true;
+      while (changed) {
+        changed = false;
+        for (int i = 0; i < textBlocks.length; i++) {
+          for (int j = i + 1; j < textBlocks.length; j++) {
+            final r1 = textBlocks[i];
+            final r2 = textBlocks[j];
+            // Inflate by distance threshold to group close blocks (e.g., 100 pixels)
+            final expandedR1 = r1.inflate(100);
+            if (expandedR1.overlaps(r2)) {
+              textBlocks[i] = r1.expandToInclude(r2);
+              textBlocks.removeAt(j);
+              changed = true;
+              break;
+            }
+          }
+          if (changed) break;
+        }
+      }
+
+      for (Rect r in textBlocks) {
+        rois.add({
+          'left': r.left.toInt(),
+          'top': r.top.toInt(),
+          'width': r.width.toInt(),
+          'height': r.height.toInt(),
+        });
+      }
+    } catch (e) {
+      print('ML Kit Text Recognition failed: $e');
+    } finally {
+      textRecognizer.close();
+    }
+
+    if (rois.isEmpty) {
+      // If no text was found, just return the original file
+      return [imageFile];
+    }
+
+    final args = {'tempPath': tempPath, 'imagePath': imagePath, 'rois': rois};
+
+    // Stage 2: OpenCV Precision Cropping (in background isolate)
+    return await Isolate.run(() => _isolateProcessSmartCVLayer(args));
   }
 
   Future<DocumentType> classifyDocument(File imageFile) async {
@@ -177,7 +391,9 @@ class ScannerService {
     final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
 
     try {
-      final RecognizedText recognizedText = await textRecognizer.processImage(inputImage);
+      final RecognizedText recognizedText = await textRecognizer.processImage(
+        inputImage,
+      );
       final text = recognizedText.text;
 
       if (text.contains('البطاقة الوطنية')) {
