@@ -280,7 +280,12 @@ Future<List<File>> _isolateProcessSmartCVLayer(
         // 2. Background Replacement
         solidBlack = cv.Mat.zeros(srcClone.rows, srcClone.cols, cv.MatType.CV_8UC3);
         // Copy original image where mask is 0 (not white background)
-        final invMask = cv.bitwiseNOT(mask);
+        final invMaskRaw = cv.bitwiseNOT(mask);
+
+        // Erode the inverse mask to break shadow bridges between closely placed cards
+        final kernel = cv.getStructuringElement(cv.MORPH_RECT, (7, 7));
+        final invMask = cv.erode(invMaskRaw, kernel, iterations: 3);
+
         maskedImage = cv.Mat.empty();
         cv.bitwiseAND(srcClone, srcClone, dst: maskedImage, mask: invMask);
 
@@ -453,6 +458,11 @@ class ScannerService {
     final imagePath = imageFile.path;
 
     // Stage 1: On-Device AI ROI Detection
+    final bytes = await imageFile.readAsBytes();
+    final decodedImage = await decodeImageFromList(bytes);
+    final double imgWidth = decodedImage.width.toDouble();
+    final double imgHeight = decodedImage.height.toDouble();
+
     final inputImage = InputImage.fromFilePath(imagePath);
     final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
 
@@ -497,10 +507,13 @@ class ScannerService {
               // Inflate by distance threshold to group close blocks (e.g., 100 pixels)
               final expandedR1 = r1.inflate(100);
               if (expandedR1.overlaps(r2)) {
-                textBlocks[i] = r1.expandToInclude(r2);
-                textBlocks.removeAt(j);
-                changed = true;
-                break;
+                final unionRect = r1.expandToInclude(r2);
+                if (unionRect.width <= imgWidth * 0.5 && unionRect.height <= imgHeight * 0.5) {
+                  textBlocks[i] = unionRect;
+                  textBlocks.removeAt(j);
+                  changed = true;
+                  break;
+                }
               }
             }
             if (changed) break;
