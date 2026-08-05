@@ -1,13 +1,13 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 import '../providers/app_state.dart';
 import '../services/scanner_service.dart';
-import 'package:image_picker/image_picker.dart';
 import '../services/pdf_service.dart';
-import 'archive_screen.dart';
-import 'image_editor_screen.dart';
 import '../widgets/draggable_document.dart';
+import 'image_editor_screen.dart';
+import 'archive_screen.dart';
 
 class ScannerScreen extends ConsumerStatefulWidget {
   const ScannerScreen({super.key});
@@ -19,111 +19,104 @@ class ScannerScreen extends ConsumerStatefulWidget {
 class _ScannerScreenState extends ConsumerState<ScannerScreen> {
   final ScannerService _scannerService = ScannerService();
   final PdfService _pdfService = PdfService();
+
   bool _isProcessing = false;
+  int? _selectedPageIndex;
   int? _selectedDocIndex;
 
-  // Track layout dimensions to pass to PdfService
-  double _lastKnownCanvasWidth = 380;
+  double _lastKnownCanvasWidth = 380.0;
   double _lastKnownCanvasHeight = 537.32;
 
-  Future<void> _scanImage(ImageSource source) async {
-    final state = ref.read(appStateProvider);
-    final file = await _scannerService.scanDocument(source: source);
-    if (file != null) {
+  Future<void> _scanDocument(ImageSource source) async {
+    try {
+      final File? processedFile = await _scannerService.scanDocument(source: source);
+      if (processedFile == null) return;
+
       setState(() {
         _isProcessing = true;
       });
 
-      List<File> initialFiles = [file];
+      if (mounted) {
+        // Document type classification
+        final docType = await _scannerService.classifyDocument(processedFile);
 
-      // 1. First Segment if Smart Recognition is active
-      if (state.smartRecognition) {
-        initialFiles = await _scannerService.processSmartRecognition(file);
-      }
+        // Smart recognition for cropping
+        final bool smartRecog = ref.read(appStateProvider).smartRecognition;
+        List<File> finalFiles = [processedFile];
 
-      // 2. Loop over segments (or original)
-      for (var processedFile in initialFiles) {
-        // Calculate smart default size
-        final bytes = await processedFile.readAsBytes();
-        final image = await decodeImageFromList(bytes);
+        if (smartRecog) {
+           finalFiles = await _scannerService.processSmartRecognition(processedFile);
+        }
 
-        // Default target width (to fit two horizontally on typical ~380 width canvas)
-        double targetWidth = 150.0;
-        double targetHeight = targetWidth / (image.width / image.height);
+        for (var f in finalFiles) {
+           final decoded = await decodeImageFromList(await f.readAsBytes());
+           double aspect = decoded.width / decoded.height;
+           double docWidth = 300;
+           double docHeight = docWidth / aspect;
 
-        // Removed the eager applyFilter call that breaks the editor colors
-
-        if (state.smartRecognition) {
-          final type = await _scannerService.classifyDocument(processedFile);
-          ref.read(scannedDocumentsProvider.notifier).addDocument(ScannedDocument(
-            file: processedFile,
-            type: type,
-            width: targetWidth,
-            height: targetHeight,
-          ));
-        } else {
-          ref.read(scannedDocumentsProvider.notifier).addDocument(ScannedDocument(
-            file: processedFile,
-            width: targetWidth,
-            height: targetHeight,
+           ref.read(scannedDocumentsProvider.notifier).addDocument(ScannedDocument(
+            file: f,
+            type: docType,
+            width: docWidth,
+            height: docHeight,
           ));
         }
       }
-
-      setState(() {
-        _isProcessing = false;
-      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('حدث خطأ: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+        });
+      }
     }
   }
 
   void _showImageSourceOptions() {
     showModalBottomSheet(
       context: context,
-      builder: (BuildContext context) {
-        return SafeArea(
-          child: Wrap(
-            children: <Widget>[
-              ListTile(
-                leading: const Icon(Icons.camera_alt),
-                title: const Text('التقاط صورة'),
-                onTap: () {
-                  Navigator.of(context).pop();
-                  _scanImage(ImageSource.camera);
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.photo_library),
-                title: const Text('اختيار من المعرض'),
-                onTap: () {
-                  Navigator.of(context).pop();
-                  _scanImage(ImageSource.gallery);
-                },
-              ),
-            ],
-          ),
-        );
-      },
+      builder: (context) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.camera_alt),
+              title: const Text('الكاميرا'),
+              onTap: () {
+                Navigator.pop(context);
+                _scanDocument(ImageSource.camera);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library),
+              title: const Text('المعرض'),
+              onTap: () {
+                Navigator.pop(context);
+                _scanDocument(ImageSource.gallery);
+              },
+            ),
+          ],
+        ),
+      ),
     );
   }
 
   Future<void> _generatePdf() async {
-    final scannedDocuments = ref.read(scannedDocumentsProvider);
-    if (scannedDocuments.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('الرجاء مسح مستمسك واحد على الأقل')),
-      );
-      return;
-    }
+    final pages = ref.read(scannedDocumentsProvider);
+    if (pages.isEmpty) return;
 
     setState(() {
       _isProcessing = true;
     });
 
-    final state = ref.read(appStateProvider);
-
     try {
-      await _pdfService.generatePdf(
-        scannedDocuments: scannedDocuments,
+      final state = ref.read(appStateProvider);
+      final pdfFile = await _pdfService.generatePdf(
+        pages: pages,
         state: state,
         uiCanvasWidth: _lastKnownCanvasWidth,
         uiCanvasHeight: _lastKnownCanvasHeight,
@@ -131,9 +124,9 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تم إنشاء وحفظ الملف بنجاح')),
+          SnackBar(content: Text('تم إنشاء ملف PDF: ${pdfFile.path}')),
         );
-        Navigator.pushReplacement(
+        Navigator.push(
           context,
           MaterialPageRoute(builder: (context) => const ArchiveScreen()),
         );
@@ -155,17 +148,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final scannedDocuments = ref.watch(scannedDocumentsProvider);
-
-    // Calculate total pages needed based on highest pageIndex
-    int totalPages = 1;
-    if (scannedDocuments.isNotEmpty) {
-      for (var doc in scannedDocuments) {
-        if (doc.pageIndex >= totalPages) {
-          totalPages = doc.pageIndex + 1;
-        }
-      }
-    }
+    final pages = ref.watch(scannedDocumentsProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -177,13 +160,14 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
           : Column(
               children: [
                 Expanded(
-                  child: scannedDocuments.isEmpty
+                  child: pages.isEmpty
                       ? const Center(child: Text('لم يتم مسح أي مستمسكات بعد'))
                       : ListView.builder(
                           padding: const EdgeInsets.all(16),
-                          itemCount: totalPages,
+                          itemCount: pages.length,
                           itemBuilder: (context, pageIndex) {
-                            final docsOnPage = scannedDocuments.asMap().entries.where((e) => e.value.pageIndex == pageIndex).toList();
+                            final page = pages[pageIndex];
+                            final docsOnPage = page.documents.asMap().entries.toList();
 
                             return Center(
                               child: Container(
@@ -216,8 +200,10 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                       // Sort docs so selected one is drawn last (on top)
                                       final sortedDocs = List.of(docsOnPage);
                                       sortedDocs.sort((a, b) {
-                                        if (a.key == _selectedDocIndex) return 1;
-                                        if (b.key == _selectedDocIndex) return -1;
+                                        bool aSelected = (_selectedPageIndex == pageIndex && _selectedDocIndex == a.key);
+                                        bool bSelected = (_selectedPageIndex == pageIndex && _selectedDocIndex == b.key);
+                                        if (aSelected) return 1;
+                                        if (bSelected) return -1;
                                         return 0;
                                       });
 
@@ -225,7 +211,10 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                         behavior: HitTestBehavior.translucent,
                                         onTap: () {
                                           // Deselect if tapping empty space
-                                          setState(() => _selectedDocIndex = null);
+                                          setState(() {
+                                            _selectedPageIndex = null;
+                                            _selectedDocIndex = null;
+                                          });
                                         },
                                         child: Stack(
                                           clipBehavior: Clip.none,
@@ -235,20 +224,27 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                               final doc = entry.value;
 
                                               return DraggableResizableDocument(
-                                                key: ValueKey(doc.file.path),
+                                                key: ValueKey('${pageIndex}_${doc.file.path}'),
                                                 document: doc,
-                                                index: docIndex,
-                                                isSelected: _selectedDocIndex == docIndex,
+                                                pageIndex: pageIndex,
+                                                docIndex: docIndex,
+                                                isSelected: _selectedPageIndex == pageIndex && _selectedDocIndex == docIndex,
                                                 canvasWidth: canvasWidth,
                                                 canvasHeight: canvasHeight,
                                                 onTap: () {
-                                                  setState(() => _selectedDocIndex = docIndex);
+                                                  setState(() {
+                                                    _selectedPageIndex = pageIndex;
+                                                    _selectedDocIndex = docIndex;
+                                                  });
                                                 },
                                                 onEdit: () {
                                                   Navigator.push(
                                                     context,
                                                     MaterialPageRoute(
-                                                      builder: (context) => ImageEditorScreen(documentIndex: docIndex),
+                                                      builder: (context) => ImageEditorScreen(
+                                                        pageIndex: pageIndex,
+                                                        documentIndex: docIndex
+                                                      ),
                                                     ),
                                                   );
                                                 },
@@ -265,9 +261,16 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                         ),
                                                         TextButton(
                                                           onPressed: () {
-                                                            ref.read(scannedDocumentsProvider.notifier).removeDocumentAt(docIndex);
-                                                            if (_selectedDocIndex == docIndex) {
-                                                              setState(() => _selectedDocIndex = null);
+                                                            ref.read(scannedDocumentsProvider.notifier).removeDocumentAt(pageIndex, docIndex);
+                                                            if (_selectedPageIndex == pageIndex && _selectedDocIndex == docIndex) {
+                                                              setState(() {
+                                                                _selectedPageIndex = null;
+                                                                _selectedDocIndex = null;
+                                                              });
+                                                            } else if (_selectedPageIndex == pageIndex && _selectedDocIndex != null && _selectedDocIndex! > docIndex) {
+                                                              setState(() {
+                                                                _selectedDocIndex = _selectedDocIndex! - 1;
+                                                              });
                                                             }
                                                             Navigator.pop(context);
                                                           },
@@ -277,14 +280,14 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                     ),
                                                   );
                                                 },
-                                                onLayoutUpdate: (index, dx, dy, width, height, newPageIndex) {
+                                                onLayoutUpdate: (pIndex, dIndex, dx, dy, width, height) {
                                                   ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
-                                                    index,
+                                                    pIndex,
+                                                    dIndex,
                                                     dx: dx,
                                                     dy: dy,
                                                     width: width,
                                                     height: height,
-                                                    pageIndex: newPageIndex,
                                                   );
                                                 },
                                               );
@@ -314,7 +317,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                       const SizedBox(width: 16),
                       Expanded(
                         child: ElevatedButton.icon(
-                          onPressed: scannedDocuments.isEmpty ? null : _generatePdf,
+                          onPressed: pages.isEmpty ? null : _generatePdf,
                           icon: const Icon(Icons.picture_as_pdf),
                           label: const Text('إنشاء PDF'),
                           style: ElevatedButton.styleFrom(backgroundColor: Colors.green),

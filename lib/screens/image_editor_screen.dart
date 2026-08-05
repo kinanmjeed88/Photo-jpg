@@ -100,9 +100,10 @@ String _processEditedImage(Map<String, dynamic> args) {
 }
 
 class ImageEditorScreen extends ConsumerStatefulWidget {
+  final int pageIndex;
   final int documentIndex;
 
-  const ImageEditorScreen({super.key, required this.documentIndex});
+  const ImageEditorScreen({super.key, required this.pageIndex, required this.documentIndex});
 
   @override
   ConsumerState<ImageEditorScreen> createState() => _ImageEditorScreenState();
@@ -129,7 +130,8 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
 
     setState(() => _isProcessing = true);
     try {
-      final doc = ref.read(scannedDocumentsProvider)[widget.documentIndex];
+      final page = ref.read(scannedDocumentsProvider)[widget.pageIndex];
+      final doc = page.documents[widget.documentIndex];
       final bytes = await doc.file.readAsBytes();
 
       final rect = editorKey.currentState?.getCropRect();
@@ -174,7 +176,8 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
   void _applyChanges() async {
     setState(() => _isProcessing = true);
     try {
-      final doc = ref.read(scannedDocumentsProvider)[widget.documentIndex];
+      final page = ref.read(scannedDocumentsProvider)[widget.pageIndex];
+      final doc = page.documents[widget.documentIndex];
       final bytes = await doc.file.readAsBytes();
 
       final rect = editorKey.currentState?.getCropRect();
@@ -204,8 +207,8 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
 
       final editedPath = await _runEditedIsolate(args);
 
-      final newDoc = ScannedDocument(file: File(editedPath), type: doc.type);
-      ref.read(scannedDocumentsProvider.notifier).updateDocumentAt(widget.documentIndex, newDoc);
+      final newDoc = doc.copyWith(file: File(editedPath));
+      ref.read(scannedDocumentsProvider.notifier).updateDocumentAt(widget.pageIndex, widget.documentIndex, newDoc);
 
       if (mounted) {
         Navigator.pop(context);
@@ -219,10 +222,13 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final docs = ref.watch(scannedDocumentsProvider);
-    if (widget.documentIndex >= docs.length) return const Scaffold();
+    final pages = ref.watch(scannedDocumentsProvider);
+    if (widget.pageIndex >= pages.length) return const Scaffold();
 
-    final doc = docs[widget.documentIndex];
+    final page = pages[widget.pageIndex];
+    if (widget.documentIndex >= page.documents.length) return const Scaffold();
+
+    final doc = page.documents[widget.documentIndex];
 
     return Scaffold(
       appBar: AppBar(

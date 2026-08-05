@@ -4,19 +4,21 @@ import '../providers/app_state.dart';
 
 class DraggableResizableDocument extends StatefulWidget {
   final ScannedDocument document;
-  final int index;
+  final int pageIndex;
+  final int docIndex;
   final bool isSelected;
   final VoidCallback onTap;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
-  final void Function(int index, double dx, double dy, double width, double height, int pageIndex) onLayoutUpdate;
+  final void Function(int pageIndex, int docIndex, double dx, double dy, double width, double height) onLayoutUpdate;
   final double canvasWidth;
   final double canvasHeight;
 
   const DraggableResizableDocument({
     super.key,
     required this.document,
-    required this.index,
+    required this.pageIndex,
+    required this.docIndex,
     required this.isSelected,
     required this.onTap,
     required this.onEdit,
@@ -35,7 +37,6 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
   late double dy;
   late double width;
   late double height;
-  late int pageIndex;
 
   @override
   void initState() {
@@ -44,7 +45,6 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
     dy = widget.document.dy;
     width = widget.document.width;
     height = widget.document.height;
-    pageIndex = widget.document.pageIndex;
   }
 
   @override
@@ -56,7 +56,6 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
       dy = widget.document.dy;
       width = widget.document.width;
       height = widget.document.height;
-      pageIndex = widget.document.pageIndex;
     }
   }
 
@@ -101,7 +100,7 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
 
   void _triggerLayoutUpdate() {
     // We enforce strictly no automatic cross-page drag. Document stays on current page.
-    widget.onLayoutUpdate(widget.index, dx, dy, width, height, pageIndex);
+    widget.onLayoutUpdate(widget.pageIndex, widget.docIndex, dx, dy, width, height);
   }
 
   @override
