@@ -164,9 +164,10 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                 Expanded(
                   child: pages.isEmpty
                       ? const Center(child: Text('لم يتم مسح أي مستمسكات بعد'))
-                      : ListView.builder(
+                      : ListView.separated(
                           padding: const EdgeInsets.all(16),
                           itemCount: pageKeys.length,
+                          separatorBuilder: (context, index) => const SizedBox(height: 20),
                           itemBuilder: (context, pageIndex) {
                             final pageKey = pageKeys[pageIndex];
                             final pageDocs = pages[pageKey]!;
@@ -174,7 +175,6 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
                             return Center(
                               child: Container(
-                                margin: const EdgeInsets.only(bottom: 24),
                                 decoration: BoxDecoration(
                                   color: Colors.white,
                                   boxShadow: [

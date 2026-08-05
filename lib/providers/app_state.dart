@@ -50,44 +50,41 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
     const double canvasWidth = 380.0;
     const double canvasHeight = 537.32; // 380 * 1.414
     const double margin = 20.0;
-    final double pixelPerMm = canvasWidth / 210.0;
+    final double scaleFactor = (canvasWidth * 0.45) / 85.6;
 
-    // Apply real-world dimensions based on selected documents
-    double targetWidthMm = 85.6; // National ID default
-    double targetHeightMm = 54.0;
+    // Determine type from doc.type if known, else from appState
+    DocumentType effectiveType = doc.type != DocumentType.unknown
+        ? doc.type
+        : _guessDocumentType(appState);
 
-    int selectedCount = 0;
-    if (appState.hasNationalId) selectedCount++;
-    if (appState.hasHousingCard) selectedCount++;
-    if (appState.hasRationCard) selectedCount++;
-    if (appState.hasPassport) selectedCount++;
+    double newDocWidth = 0.0;
+    double newDocHeight = 0.0;
 
-    if (selectedCount > 1) {
-      // Multiple selected -> fallback to National ID size
-      targetWidthMm = 85.6;
-      targetHeightMm = 54.0;
-    } else {
-      if (appState.hasRationCard) {
-        targetWidthMm = 148.0;
-        targetHeightMm = 210.0; // Ration card is portrait
-      } else if (appState.hasHousingCard) {
-        targetWidthMm = 105.0;
-        targetHeightMm = 75.0;
-      } else if (appState.hasPassport) {
-        targetWidthMm = 176.0;
-        targetHeightMm = 125.0;
-      } else if (appState.hasNationalId) {
-        targetWidthMm = 85.6;
-        targetHeightMm = 54.0;
-      }
+    switch (effectiveType) {
+      case DocumentType.nationalId:
+        newDocWidth = 85.6 * scaleFactor;
+        newDocHeight = 54.0 * scaleFactor;
+        break;
+      case DocumentType.passport:
+        newDocWidth = 176.0 * scaleFactor;
+        newDocHeight = 125.0 * scaleFactor;
+        break;
+      case DocumentType.rationCard:
+        newDocWidth = 210.0 * scaleFactor;
+        newDocHeight = 148.0 * scaleFactor;
+        break;
+      case DocumentType.housingCard:
+        newDocWidth = 105.0 * scaleFactor;
+        newDocHeight = 75.0 * scaleFactor;
+        break;
+      default:
+        newDocWidth = 85.6 * scaleFactor;
+        newDocHeight = 54.0 * scaleFactor;
     }
 
-    double forcedWidth = targetWidthMm * pixelPerMm;
-    double forcedHeight = targetHeightMm * pixelPerMm;
-
-    // Constrain width and height to canvas limits, just in case
-    forcedWidth = math.min(forcedWidth, canvasWidth - margin * 2);
-    forcedHeight = math.min(forcedHeight, canvasHeight - margin * 2);
+    // Constrain width and height to canvas limits
+    newDocWidth = math.min(newDocWidth, canvasWidth - margin * 2);
+    newDocHeight = math.min(newDocHeight, canvasHeight - margin * 2);
 
     // Enforce display method limits early
     if (appState.displayMethod == DisplayMethod.frontOnly && state.isNotEmpty && (state[0] ?? []).isNotEmpty) {
@@ -95,89 +92,77 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
     }
 
     if (state.isEmpty) {
-      double newDx = margin;
-      double newDy = margin;
-
-      final newDoc = doc.copyWith(dx: newDx, dy: newDy, width: forcedWidth, height: forcedHeight);
-      state = {0: [newDoc]};
+      state = {0: [doc.copyWith(dx: margin, dy: margin, width: newDocWidth, height: newDocHeight)]};
       return;
     }
 
-    final lastPageIndex = state.keys.reduce(math.max);
-    final lastPageDocs = List<ScannedDocument>.from(state[lastPageIndex] ?? []);
+    int pageIndex = state.keys.reduce(math.max);
+    List<ScannedDocument> pageDocs = List<ScannedDocument>.from(state[pageIndex] ?? []);
 
-    if (lastPageDocs.isEmpty) {
-      double newDx = margin;
-      double newDy = margin;
-      final newDoc = doc.copyWith(dx: newDx, dy: newDy, width: forcedWidth, height: forcedHeight);
-
+    if (appState.displayMethod == DisplayMethod.twoPages && pageDocs.isNotEmpty) {
+      pageIndex++;
       state = {
         ...state,
-        lastPageIndex: [newDoc],
+        pageIndex: [doc.copyWith(dx: margin, dy: margin, width: newDocWidth, height: newDocHeight)]
       };
       return;
     }
 
-    // Determine placement logic based on display method
-    if (appState.displayMethod == DisplayMethod.twoPages) {
-      // Force new page, centered at top
-      double newDx = (canvasWidth - forcedWidth) / 2.0;
-      double newDy = margin;
-      final newDoc = doc.copyWith(dx: newDx, dy: newDy, width: forcedWidth, height: forcedHeight);
+    if (pageDocs.isEmpty) {
       state = {
         ...state,
-        lastPageIndex + 1: [newDoc]
+        pageIndex: [doc.copyWith(dx: margin, dy: margin, width: newDocWidth, height: newDocHeight)],
       };
       return;
     }
 
-    // Smart wrapping logic for onePage
     double currentDx = margin;
     double currentDy = margin;
+    double currentRowMaxHeight = 0;
 
-
-    // Re-evaluate positions based on the last document
-    final lastDoc = lastPageDocs.last;
-
-    // First try side-by-side
-    double potentialDx = lastDoc.dx + lastDoc.width + margin;
-
-    if (potentialDx + forcedWidth <= canvasWidth - margin) {
-      // Fits on the right
-      currentDx = potentialDx;
-      currentDy = lastDoc.dy;
-    } else {
-      // Need a new row
-      currentDx = margin;
-      // Find the maximum Y bounds of all documents in the current "row" (rough estimation)
-      // For better wrapping, let's just use the lowest point of any document on the page
-      double lowestPoint = 0;
-      for (var d in lastPageDocs) {
-         if (d.dy + d.height > lowestPoint) {
-             lowestPoint = d.dy + d.height;
-         }
+    // Calculate layout up to the current documents to find insertion point
+    for (var existingDoc in pageDocs) {
+      if (currentDx + existingDoc.width + margin > canvasWidth) {
+        currentDx = margin;
+        currentDy += currentRowMaxHeight + margin;
+        currentRowMaxHeight = 0;
       }
-      currentDy = lowestPoint + margin;
+      currentDx += existingDoc.width + margin;
+      if (existingDoc.height > currentRowMaxHeight) {
+        currentRowMaxHeight = existingDoc.height;
+      }
     }
 
-    if (currentDy + forcedHeight > canvasHeight - margin) {
-      // Create new page
+    // Check wrapping for new document
+    if (currentDx + newDocWidth + margin > canvasWidth) {
+      currentDx = margin;
+      currentDy += currentRowMaxHeight + margin;
+      currentRowMaxHeight = 0;
+    }
+
+    // Check strict page break
+    if (currentDy + newDocHeight + margin > canvasHeight) {
+      pageIndex++;
       currentDx = margin;
       currentDy = margin;
 
-      final newDoc = doc.copyWith(dx: currentDx, dy: currentDy, width: forcedWidth, height: forcedHeight);
       state = {
         ...state,
-        lastPageIndex + 1: [newDoc]
+        pageIndex: [doc.copyWith(dx: currentDx, dy: currentDy, width: newDocWidth, height: newDocHeight)]
       };
     } else {
-      // Add to last page
-      final newDoc = doc.copyWith(dx: currentDx, dy: currentDy, width: forcedWidth, height: forcedHeight);
       state = {
         ...state,
-        lastPageIndex: [...lastPageDocs, newDoc]
+        pageIndex: [...pageDocs, doc.copyWith(dx: currentDx, dy: currentDy, width: newDocWidth, height: newDocHeight)]
       };
     }
+  }
+
+  DocumentType _guessDocumentType(AppState appState) {
+    if (appState.hasRationCard) return DocumentType.rationCard;
+    if (appState.hasPassport) return DocumentType.passport;
+    if (appState.hasHousingCard) return DocumentType.housingCard;
+    return DocumentType.nationalId;
   }
 
   void removeDocumentAt(int pageIndex, int docIndex) {
