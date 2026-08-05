@@ -19,6 +19,9 @@ Future<List<File>> _isolateProcessSmartRecognition(Map<String, String> args) asy
   cv.Mat? gray;
   cv.Mat? blurred;
   cv.Mat? edges;
+  cv.Mat? kernel;
+  cv.Mat? dilated;
+  cv.Mat? closed;
   cv.Contours? contours;
   cv.VecVec4i? hierarchy;
 
@@ -35,10 +38,13 @@ Future<List<File>> _isolateProcessSmartRecognition(Map<String, String> args) asy
     gray = cv.cvtColor(src, cv.COLOR_BGR2GRAY);
     blurred = cv.gaussianBlur(gray, (5, 5), 0);
 
-    final (_, edgesOut) = cv.threshold(blurred, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
-    edges = edgesOut;
+    edges = cv.adaptiveThreshold(blurred, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2.0);
 
-    final (conts, hier) = cv.findContours(edges, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    kernel = cv.getStructuringElement(cv.MORPH_RECT, (5, 5));
+    dilated = cv.dilate(edges, kernel);
+    closed = cv.morphologyEx(dilated, cv.MORPH_CLOSE, kernel);
+
+    final (conts, hier) = cv.findContours(closed, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
     contours = conts;
     hierarchy = hier;
 
@@ -72,6 +78,9 @@ Future<List<File>> _isolateProcessSmartRecognition(Map<String, String> args) asy
     gray?.dispose();
     blurred?.dispose();
     edges?.dispose();
+    kernel?.dispose();
+    dilated?.dispose();
+    closed?.dispose();
     contours?.dispose();
     hierarchy?.dispose();
   }
