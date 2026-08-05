@@ -223,6 +223,7 @@ Future<List<File>> _isolateProcessSmartCVLayer(
   final String tempPath = args['tempPath'] as String;
   final String imagePath = args['imagePath'] as String;
   final List<dynamic> roisList = args['rois'] as List<dynamic>;
+  final bool foundAnchors = args['foundAnchors'] as bool;
 
   cv.Mat? src;
   cv.Mat? srcClone;
@@ -240,17 +241,146 @@ Future<List<File>> _isolateProcessSmartCVLayer(
     List<File> croppedFiles = [];
     int count = 0;
 
-    for (var roiMap in roisList) {
-      final File? cropped = _processPatch(
-        srcClone,
-        roiMap as Map<String, dynamic>,
-        tempPath,
-        count,
-      );
-      if (cropped != null) {
-        croppedFiles.add(cropped);
+    if (foundAnchors) {
+      // Tier 1: ML Kit Semantic Cropping
+      for (var roiMap in roisList) {
+        final File? cropped = _processPatch(
+          srcClone,
+          roiMap as Map<String, dynamic>,
+          tempPath,
+          count,
+        );
+        if (cropped != null) {
+          croppedFiles.add(cropped);
+        }
+        count++;
       }
-      count++;
+    } else {
+      // Tier 2: OpenCV Blackout Fallback
+      cv.Mat? hsv;
+      cv.Mat? mask;
+      cv.Mat? solidBlack;
+      cv.Mat? maskedImage;
+      cv.Mat? gray;
+      cv.Contours? contours;
+      cv.VecVec4i? hierarchy;
+
+      try {
+        // 1. Artificial Contrast Generation
+        hsv = cv.cvtColor(srcClone, cv.COLOR_BGR2HSV);
+
+        // Define white background range
+        // Lower limit: low saturation, high brightness
+        // Upper limit: low saturation, maximum brightness
+        final lowerWhite = cv.Mat.fromScalar(1, 1, cv.MatType.CV_8UC3, cv.Scalar(0, 0, 150, 0));
+        final upperWhite = cv.Mat.fromScalar(1, 1, cv.MatType.CV_8UC3, cv.Scalar(180, 50, 255, 0));
+
+        mask = cv.inRange(hsv, lowerWhite, upperWhite);
+
+        // 2. Background Replacement
+        solidBlack = cv.Mat.zeros(srcClone.rows, srcClone.cols, cv.MatType.CV_8UC3);
+        // Copy original image where mask is 0 (not white background)
+        final invMask = cv.bitwiseNOT(mask);
+        maskedImage = cv.Mat.empty();
+        cv.bitwiseAND(srcClone, srcClone, dst: maskedImage, mask: invMask);
+
+        // 3. Contour Detection
+        gray = cv.cvtColor(maskedImage, cv.COLOR_BGR2GRAY);
+        final (conts, hier) = cv.findContours(
+          gray,
+          cv.RETR_EXTERNAL,
+          cv.CHAIN_APPROX_SIMPLE,
+        );
+        contours = conts;
+        hierarchy = hier;
+
+        double imageArea = (gray.rows * gray.cols).toDouble();
+
+        for (var contour in contours) {
+          final area = cv.contourArea(contour);
+          if (area < imageArea * 0.05 || area > imageArea * 0.85) {
+            continue;
+          }
+
+          final cv.Rect rect = cv.boundingRect(contour);
+          final double ratio = rect.width / rect.height;
+          // Apply geometric filters (Aspect Ratio 1.35 - 1.75)
+          // Considering both landscape and portrait
+          if ((ratio >= 1.35 && ratio <= 1.75) || (ratio >= (1.0 / 1.75) && ratio <= (1.0 / 1.35))) {
+             // We found a valid document contour, let's crop it.
+             // We could use minAreaRect or approxPolyDP for rotated bounding box,
+             // but let's stick to simple bounding rect first as per prompt.
+
+             // Optionally, if you want exact perspective crop, you'd do approxPolyDP here
+             // but prompt says "crop the original image using these precise coordinates"
+
+             final double peri = cv.arcLength(contour, true);
+             final cv.VecPoint currentApprox = cv.approxPolyDP(
+                contour,
+                0.02 * peri,
+                true,
+             );
+
+             if (currentApprox.length == 4) {
+               final approx = currentApprox;
+               final orderedPts = _orderPoints(approx);
+
+               var p0 = orderedPts[0]; // tl
+               var p1 = orderedPts[1]; // tr
+               var p2 = orderedPts[2]; // br
+               var p3 = orderedPts[3]; // bl
+
+               int widthA = (p2.x - p3.x).abs();
+               int widthB = (p1.x - p0.x).abs();
+               int maxWidth = widthA > widthB ? widthA : widthB;
+
+               int heightA = (p1.y - p2.y).abs();
+               int heightB = (p0.y - p3.y).abs();
+               int maxHeight = heightA > heightB ? heightA : heightB;
+
+               final dstPts = cv.VecPoint.fromList([
+                 cv.Point(0, 0),
+                 cv.Point(maxWidth - 1, 0),
+                 cv.Point(maxWidth - 1, maxHeight - 1),
+                 cv.Point(0, maxHeight - 1),
+               ]);
+
+               final transMat = cv.getPerspectiveTransform(orderedPts, dstPts);
+               final warped = cv.warpPerspective(srcClone, transMat, (maxWidth, maxHeight));
+
+               final croppedPath =
+                 '$tempPath/smart_cropped_${DateTime.now().millisecondsSinceEpoch}_$count.jpg';
+               cv.imwrite(croppedPath, warped);
+               croppedFiles.add(File(croppedPath));
+
+               warped.dispose();
+               transMat.dispose();
+               dstPts.dispose();
+               orderedPts.dispose();
+               approx.dispose();
+             } else {
+               // Fallback to bounding rect if not exactly 4 points after blackout
+               final cropped = srcClone.region(rect);
+               final croppedPath =
+                 '$tempPath/smart_cropped_${DateTime.now().millisecondsSinceEpoch}_$count.jpg';
+               cv.imwrite(croppedPath, cropped);
+               croppedFiles.add(File(croppedPath));
+               cropped.dispose();
+             }
+             count++;
+          }
+        }
+      } catch (e) {
+        print('OpenCV Blackout fallback failed: $e');
+      } finally {
+        hsv?.dispose();
+        mask?.dispose();
+        solidBlack?.dispose();
+        maskedImage?.dispose();
+        gray?.dispose();
+        contours?.dispose();
+        hierarchy?.dispose();
+      }
     }
 
     if (croppedFiles.isEmpty) {
@@ -327,46 +457,66 @@ class ScannerService {
     final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
 
     List<Map<String, dynamic>> rois = [];
+    bool foundAnchors = false;
 
     try {
       final RecognizedText recognizedText = await textRecognizer.processImage(
         inputImage,
       );
 
-      // Collect bounding boxes of all text blocks
-      List<Rect> textBlocks = [];
-      for (TextBlock block in recognizedText.blocks) {
-        textBlocks.add(block.boundingBox);
+      // Search for specific Iraqi Document Anchors
+      final text = recognizedText.text;
+      if (text.contains('جمهورية العراق') ||
+          text.contains('البطاقة الوطنية') ||
+          text.contains('جهة الاصدار') ||
+          text.contains('<<<') ||
+          text.contains('مكتب معلومات') ||
+          text.contains('اسم رب الاسرة') ||
+          text.contains('Passport') ||
+          text.contains('جواز سفر') ||
+          text.contains('وزارة التجارة') ||
+          text.contains('بطاقة تموين')) {
+        foundAnchors = true;
       }
 
-      // Cluster the text blocks to form document ROIs
-      bool changed = true;
-      while (changed) {
-        changed = false;
-        for (int i = 0; i < textBlocks.length; i++) {
-          for (int j = i + 1; j < textBlocks.length; j++) {
-            final r1 = textBlocks[i];
-            final r2 = textBlocks[j];
-            // Inflate by distance threshold to group close blocks (e.g., 100 pixels)
-            final expandedR1 = r1.inflate(100);
-            if (expandedR1.overlaps(r2)) {
-              textBlocks[i] = r1.expandToInclude(r2);
-              textBlocks.removeAt(j);
-              changed = true;
-              break;
-            }
-          }
-          if (changed) break;
+      if (foundAnchors) {
+        // Collect bounding boxes of all text blocks
+        List<Rect> textBlocks = [];
+        for (TextBlock block in recognizedText.blocks) {
+          textBlocks.add(block.boundingBox);
         }
-      }
 
-      for (Rect r in textBlocks) {
-        rois.add({
-          'left': r.left.toInt(),
-          'top': r.top.toInt(),
-          'width': r.width.toInt(),
-          'height': r.height.toInt(),
-        });
+        // Cluster the text blocks to form document ROIs
+        bool changed = true;
+        while (changed) {
+          changed = false;
+          for (int i = 0; i < textBlocks.length; i++) {
+            for (int j = i + 1; j < textBlocks.length; j++) {
+              final r1 = textBlocks[i];
+              final r2 = textBlocks[j];
+              // Inflate by distance threshold to group close blocks (e.g., 100 pixels)
+              final expandedR1 = r1.inflate(100);
+              if (expandedR1.overlaps(r2)) {
+                textBlocks[i] = r1.expandToInclude(r2);
+                textBlocks.removeAt(j);
+                changed = true;
+                break;
+              }
+            }
+            if (changed) break;
+          }
+        }
+
+        for (Rect r in textBlocks) {
+          // Add standard padding (~30 pixels) to the Union Rect
+          int pad = 30;
+          rois.add({
+            'left': (r.left - pad).toInt(),
+            'top': (r.top - pad).toInt(),
+            'width': (r.width + pad * 2).toInt(),
+            'height': (r.height + pad * 2).toInt(),
+          });
+        }
       }
     } catch (e) {
       print('ML Kit Text Recognition failed: $e');
@@ -374,12 +524,12 @@ class ScannerService {
       textRecognizer.close();
     }
 
-    if (rois.isEmpty) {
-      // If no text was found, just return the original file
-      return [imageFile];
-    }
-
-    final args = {'tempPath': tempPath, 'imagePath': imagePath, 'rois': rois};
+    final args = {
+      'tempPath': tempPath,
+      'imagePath': imagePath,
+      'rois': rois,
+      'foundAnchors': foundAnchors,
+    };
 
     // Stage 2: OpenCV Precision Cropping (in background isolate)
     return await Isolate.run(() => _isolateProcessSmartCVLayer(args));
