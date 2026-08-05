@@ -7,28 +7,17 @@ import '../providers/app_state.dart';
 
 Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
   final String outputPath = args['outputPath'];
-  final List<Map<String, dynamic>> docData = List<Map<String, dynamic>>.from(args['docData']);
+  // Now passing a list of pages, where each page is a list of maps (docs)
+  final List<dynamic> rawPagesData = args['pagesData'];
+
+  final List<List<Map<String, dynamic>>> pagesData = rawPagesData.map((page) {
+    return List<Map<String, dynamic>>.from(page as List<dynamic>);
+  }).toList();
+
   final double uiReferenceWidth = args['uiCanvasWidth'] as double;
   final double uiReferenceHeight = args['uiCanvasHeight'] as double;
 
   final pdf = pw.Document();
-
-  // Organize documents by pageIndex
-  Map<int, List<Map<String, dynamic>>> pagesData = {};
-  for (var data in docData) {
-    final int pageIndex = data['pageIndex'] as int;
-    if (!pagesData.containsKey(pageIndex)) {
-      pagesData[pageIndex] = [];
-    }
-    pagesData[pageIndex]!.add(data);
-  }
-
-  final sortedPageIndices = pagesData.keys.toList()..sort();
-
-  // Ensure there's at least one page if we have any data, or ensure max pageIndex is covered
-  // Even if a page is empty but an earlier and later page exist, we should probably output blank pages.
-  // We'll iterate from 0 up to max page index
-  final int maxPageIndex = sortedPageIndices.isNotEmpty ? sortedPageIndices.last : 0;
 
   // UI coordinates vs PDF coordinates mapping
   // UI assumes aspect ratio 1 / 1.414, we need to map to PdfPageFormat.a4
@@ -39,9 +28,7 @@ Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
   final scaleX = pdfA4Width / uiReferenceWidth;
   final scaleY = pdfA4Height / uiReferenceHeight;
 
-  for (int pageIndex = 0; pageIndex <= maxPageIndex; pageIndex++) {
-    final docsOnPage = pagesData[pageIndex] ?? [];
-
+  for (final docsOnPage in pagesData) {
     pdf.addPage(
       pw.Page(
         pageFormat: PdfPageFormat.a4,
@@ -60,7 +47,11 @@ Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
 
               // PDF origin is bottom-left, UI origin is top-left
               final pdfX = dx * scaleX;
+              // Correct Y-axis mapping: pdfY goes from bottom up.
+              // Top-left of the document in UI corresponds to top-left in PDF.
+              // We need the bottom coordinate of the document in PDF space.
               final pdfY = pdfA4Height - ((dy + docHeight) * scaleY);
+
               final pdfWidth = docWidth * scaleX;
               final pdfHeight = docHeight * scaleY;
 
@@ -80,15 +71,22 @@ Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
     );
   }
 
+  // If there are no pages, at least add one empty page so it doesn't crash
+  if (pagesData.isEmpty) {
+    pdf.addPage(pw.Page(
+      pageFormat: PdfPageFormat.a4,
+      build: (pw.Context context) => pw.Container()
+    ));
+  }
+
   final file = File(outputPath);
   await file.writeAsBytes(await pdf.save());
   return file;
 }
 
-
 class PdfService {
   Future<File> generatePdf({
-    required List<ScannedDocument> scannedDocuments,
+    required List<PageModel> pages,
     required AppState state,
     required double uiCanvasWidth,
     required double uiCanvasHeight,
@@ -97,18 +95,19 @@ class PdfService {
     final outputPath = '${output.path}/${state.fileName}.pdf';
 
     // Map document data to primitives to pass to the isolate securely
-    final docData = scannedDocuments.map((doc) => {
-      'path': doc.file.path,
-      'dx': doc.dx,
-      'dy': doc.dy,
-      'width': doc.width,
-      'height': doc.height,
-      'pageIndex': doc.pageIndex,
+    final List<List<Map<String, dynamic>>> pagesData = pages.map((page) {
+      return page.documents.map((doc) => {
+        'path': doc.file.path,
+        'dx': doc.dx,
+        'dy': doc.dy,
+        'width': doc.width,
+        'height': doc.height,
+      }).toList();
     }).toList();
 
     final args = {
       'outputPath': outputPath,
-      'docData': docData,
+      'pagesData': pagesData,
       'uiCanvasWidth': uiCanvasWidth,
       'uiCanvasHeight': uiCanvasHeight,
     };
