@@ -79,15 +79,15 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
   double get _documentAspectRatio {
     switch (widget.document.type) {
       case DocumentType.nationalId:
-        return 85.6 / 54.0;
+        return 1.58;
       case DocumentType.passport:
-        return 176.0 / 125.0;
+        return 1.408;
       case DocumentType.rationCard:
-        return 210.0 / 148.0;
+        return 1.418;
       case DocumentType.housingCard:
-        return 105.0 / 75.0;
+        return 1.58;
       default:
-        return 85.6 / 54.0;
+        return 1.58;
     }
   }
 
