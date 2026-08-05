@@ -142,7 +142,7 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
     // First try side-by-side
     double potentialDx = lastDoc.dx + lastDoc.width + margin;
 
-    if (potentialDx + forcedWidth <= canvasWidth) {
+    if (potentialDx + forcedWidth <= canvasWidth - margin) {
       // Fits on the right
       currentDx = potentialDx;
       currentDy = lastDoc.dy;
@@ -160,7 +160,7 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
       currentDy = lowestPoint + margin;
     }
 
-    if (currentDy + forcedHeight > canvasHeight) {
+    if (currentDy + forcedHeight > canvasHeight - margin) {
       // Create new page
       currentDx = margin;
       currentDy = margin;
