@@ -220,7 +220,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                           });
                                         },
                                         child: Stack(
-                                          clipBehavior: Clip.none,
+                                          clipBehavior: Clip.hardEdge,
                                           children: [
                                             ...sortedDocs.map((entry) {
                                               final docIndex = entry.key;
