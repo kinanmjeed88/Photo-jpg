@@ -116,7 +116,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     try {
       final state = ref.read(appStateProvider);
       final pdfFile = await _pdfService.generatePdf(
-        pages: pages,
+        groupedPages: pages,
         state: state,
         uiCanvasWidth: _lastKnownCanvasWidth,
         uiCanvasHeight: _lastKnownCanvasHeight,
@@ -149,6 +149,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
   @override
   Widget build(BuildContext context) {
     final pages = ref.watch(scannedDocumentsProvider);
+    final pageKeys = pages.keys.toList()..sort();
     final appState = ref.watch(appStateProvider);
 
     return Scaffold(
@@ -165,10 +166,11 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                       ? const Center(child: Text('لم يتم مسح أي مستمسكات بعد'))
                       : ListView.builder(
                           padding: const EdgeInsets.all(16),
-                          itemCount: pages.length,
+                          itemCount: pageKeys.length,
                           itemBuilder: (context, pageIndex) {
-                            final page = pages[pageIndex];
-                            final docsOnPage = page.documents.asMap().entries.toList();
+                            final pageKey = pageKeys[pageIndex];
+                            final pageDocs = pages[pageKey]!;
+                            final docsOnPage = pageDocs.asMap().entries.toList();
 
                             return Center(
                               child: Container(
@@ -201,8 +203,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                       // Sort docs so selected one is drawn last (on top)
                                       final sortedDocs = List.of(docsOnPage);
                                       sortedDocs.sort((a, b) {
-                                        bool aSelected = (_selectedPageIndex == pageIndex && _selectedDocIndex == a.key);
-                                        bool bSelected = (_selectedPageIndex == pageIndex && _selectedDocIndex == b.key);
+                                        bool aSelected = (_selectedPageIndex == pageKey && _selectedDocIndex == a.key);
+                                        bool bSelected = (_selectedPageIndex == pageKey && _selectedDocIndex == b.key);
                                         if (aSelected) return 1;
                                         if (bSelected) return -1;
                                         return 0;
@@ -225,17 +227,17 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                               final doc = entry.value;
 
                                               return DraggableResizableDocument(
-                                                key: ValueKey('${pageIndex}_${doc.file.path}'),
+                                                key: ValueKey('${pageKey}_${doc.file.path}'),
                                                 document: doc,
-                                                pageIndex: pageIndex,
+                                                pageIndex: pageKey,
                                                 docIndex: docIndex,
-                                                isSelected: _selectedPageIndex == pageIndex && _selectedDocIndex == docIndex,
+                                                isSelected: _selectedPageIndex == pageKey && _selectedDocIndex == docIndex,
                                                 addFrame: appState.addFrame,
                                                 canvasWidth: canvasWidth,
                                                 canvasHeight: canvasHeight,
                                                 onTap: () {
                                                   setState(() {
-                                                    _selectedPageIndex = pageIndex;
+                                                    _selectedPageIndex = pageKey;
                                                     _selectedDocIndex = docIndex;
                                                   });
                                                 },
@@ -244,7 +246,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                     context,
                                                     MaterialPageRoute(
                                                       builder: (context) => ImageEditorScreen(
-                                                        pageIndex: pageIndex,
+                                                        pageIndex: pageKey,
                                                         documentIndex: docIndex
                                                       ),
                                                     ),
@@ -263,13 +265,13 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                         ),
                                                         TextButton(
                                                           onPressed: () {
-                                                            ref.read(scannedDocumentsProvider.notifier).removeDocumentAt(pageIndex, docIndex);
-                                                            if (_selectedPageIndex == pageIndex && _selectedDocIndex == docIndex) {
+                                                            ref.read(scannedDocumentsProvider.notifier).removeDocumentAt(pageKey, docIndex);
+                                                            if (_selectedPageIndex == pageKey && _selectedDocIndex == docIndex) {
                                                               setState(() {
                                                                 _selectedPageIndex = null;
                                                                 _selectedDocIndex = null;
                                                               });
-                                                            } else if (_selectedPageIndex == pageIndex && _selectedDocIndex != null && _selectedDocIndex! > docIndex) {
+                                                            } else if (_selectedPageIndex == pageKey && _selectedDocIndex != null && _selectedDocIndex! > docIndex) {
                                                               setState(() {
                                                                 _selectedDocIndex = _selectedDocIndex! - 1;
                                                               });

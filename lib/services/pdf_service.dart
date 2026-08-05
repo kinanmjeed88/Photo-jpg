@@ -90,7 +90,7 @@ Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
 
 class PdfService {
   Future<File> generatePdf({
-    required List<PageModel> pages,
+    required Map<int, List<ScannedDocument>> groupedPages,
     required AppState state,
     required double uiCanvasWidth,
     required double uiCanvasHeight,
@@ -99,15 +99,19 @@ class PdfService {
     final outputPath = '${output.path}/${state.fileName}.pdf';
 
     // Map document data to primitives to pass to the isolate securely
-    final List<List<Map<String, dynamic>>> pagesData = pages.map((page) {
-      return page.documents.map((doc) => {
+    final List<List<Map<String, dynamic>>> pagesData = [];
+    final keys = groupedPages.keys.toList()..sort();
+
+    for (var key in keys) {
+      final docs = groupedPages[key]!;
+      pagesData.add(docs.map((doc) => {
         'path': doc.file.path,
         'dx': doc.dx,
         'dy': doc.dy,
         'width': doc.width,
         'height': doc.height,
-      }).toList();
-    }).toList();
+      }).toList());
+    }
 
     final args = {
       'outputPath': outputPath,
