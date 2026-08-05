@@ -61,24 +61,23 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
 
     switch (effectiveType) {
       case DocumentType.nationalId:
-        newDocWidth = 180.0;
-        newDocHeight = 180.0 / (85.6 / 54.0);
+        newDocWidth = canvasWidth * 0.42;
+        newDocHeight = newDocWidth / (85.6 / 54.0);
         break;
       case DocumentType.passport:
-        newDocWidth = 360.0;
-        newDocHeight = 360.0 / (176.0 / 125.0);
+        newDocWidth = canvasWidth * 0.85;
+        newDocHeight = newDocWidth / (176.0 / 125.0);
         break;
       case DocumentType.rationCard:
-        newDocWidth = 380.0;
-        newDocHeight = 380.0 / (210.0 / 148.0);
+        newDocWidth = canvasWidth * 0.90;
+        newDocHeight = newDocWidth / (210.0 / 148.0);
         break;
       case DocumentType.housingCard:
-        // Use ratio 105/75 for housing card, size between ID and Passport
-        newDocWidth = canvasWidth * 0.60;
-        newDocHeight = newDocWidth / (105.0 / 75.0);
+        newDocWidth = canvasWidth * 0.42;
+        newDocHeight = newDocWidth / (85.6 / 54.0);
         break;
       default:
-        newDocWidth = canvasWidth * 0.45;
+        newDocWidth = canvasWidth * 0.42;
         newDocHeight = newDocWidth / (85.6 / 54.0);
     }
 
