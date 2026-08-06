@@ -257,42 +257,34 @@ Future<List<File>> _isolateProcessSmartCVLayer(
       }
     } else {
       // Tier 2: OpenCV Blackout Fallback
-      cv.Mat? hsv;
       cv.Mat? mask;
-      cv.Mat? solidBlack;
-      cv.Mat? maskedImage;
       cv.Mat? gray;
+      cv.Mat? openedMask;
+      cv.Mat? eroded;
       cv.Contours? contours;
       cv.VecVec4i? hierarchy;
 
       try {
-        // 1. Artificial Contrast Generation
-        hsv = cv.cvtColor(srcClone, cv.COLOR_BGR2HSV);
+        // 1. Convert to Grayscale
+        gray = cv.cvtColor(srcClone, cv.COLOR_BGR2GRAY);
 
-        // Define white background range
-        // Lower limit: low saturation, high brightness
-        // Upper limit: low saturation, maximum brightness
-        final lowerWhite = cv.Mat.fromScalar(1, 1, cv.MatType.CV_8UC3, cv.Scalar(0, 0, 150, 0));
-        final upperWhite = cv.Mat.fromScalar(1, 1, cv.MatType.CV_8UC3, cv.Scalar(180, 50, 255, 0));
+        // 2. Isolate white background and invert
+        // White paper should be bright. We threshold high brightness areas.
+        final lowerWhite = cv.Mat.fromScalar(1, 1, cv.MatType.CV_8UC1, cv.Scalar(150, 0, 0, 0));
+        final upperWhite = cv.Mat.fromScalar(1, 1, cv.MatType.CV_8UC1, cv.Scalar(255, 0, 0, 0));
+        mask = cv.inRange(gray, lowerWhite, upperWhite);
 
-        mask = cv.inRange(hsv, lowerWhite, upperWhite);
-
-        // 2. Background Replacement
-        solidBlack = cv.Mat.zeros(srcClone.rows, srcClone.cols, cv.MatType.CV_8UC3);
-        // Copy original image where mask is 0 (not white background)
+        // Invert the mask so the paper background becomes BLACK (0) and the ID cards become WHITE (255)
         final invMaskRaw = cv.bitwiseNOT(mask);
 
-        // Erode the inverse mask to break shadow bridges between closely placed cards
+        // 3. Apply MORPH_OPEN (Erosion followed by Dilation) using a 7x7 kernel to destroy shadow bridges.
         final kernel = cv.getStructuringElement(cv.MORPH_RECT, (7, 7));
-        final invMask = cv.erode(invMaskRaw, kernel, iterations: 3);
+        eroded = cv.erode(invMaskRaw, kernel);
+        openedMask = cv.dilate(eroded, kernel);
 
-        maskedImage = cv.Mat.empty();
-        cv.bitwiseAND(srcClone, srcClone, dst: maskedImage, mask: invMask);
-
-        // 3. Contour Detection
-        gray = cv.cvtColor(maskedImage, cv.COLOR_BGR2GRAY);
+        // 4. Contour Detection
         final (conts, hier) = cv.findContours(
-          gray,
+          openedMask,
           cv.RETR_EXTERNAL,
           cv.CHAIN_APPROX_SIMPLE,
         );
@@ -378,10 +370,9 @@ Future<List<File>> _isolateProcessSmartCVLayer(
       } catch (e) {
         print('OpenCV Blackout fallback failed: $e');
       } finally {
-        hsv?.dispose();
         mask?.dispose();
-        solidBlack?.dispose();
-        maskedImage?.dispose();
+        openedMask?.dispose();
+        eroded?.dispose();
         gray?.dispose();
         contours?.dispose();
         hierarchy?.dispose();
@@ -464,7 +455,7 @@ class ScannerService {
     final double imgHeight = decodedImage.height.toDouble();
 
     final inputImage = InputImage.fromFilePath(imagePath);
-    final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
+    final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin /* TODO: Fix ML Kit missing arabic */ );
 
     List<Map<String, dynamic>> rois = [];
     bool foundAnchors = false;
@@ -551,7 +542,7 @@ class ScannerService {
   Future<DocumentType> classifyDocument(File imageFile) async {
     final imagePath = imageFile.path;
     final inputImage = InputImage.fromFilePath(imagePath);
-    final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
+    final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin /* TODO: Fix ML Kit missing arabic */ );
 
     try {
       final RecognizedText recognizedText = await textRecognizer.processImage(
