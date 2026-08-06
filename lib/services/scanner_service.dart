@@ -270,8 +270,18 @@ Future<List<File>> _isolateProcessSmartCVLayer(
 
         // 2. Isolate white background and invert
         // White paper should be bright. We threshold high brightness areas.
-        final lowerWhite = cv.Mat.fromScalar(1, 1, cv.MatType.CV_8UC1, cv.Scalar(150, 0, 0, 0));
-        final upperWhite = cv.Mat.fromScalar(1, 1, cv.MatType.CV_8UC1, cv.Scalar(255, 0, 0, 0));
+        final lowerWhite = cv.Mat.fromScalar(
+          1,
+          1,
+          cv.MatType.CV_8UC1,
+          cv.Scalar(150, 0, 0, 0),
+        );
+        final upperWhite = cv.Mat.fromScalar(
+          1,
+          1,
+          cv.MatType.CV_8UC1,
+          cv.Scalar(255, 0, 0, 0),
+        );
         mask = cv.inRange(gray, lowerWhite, upperWhite);
 
         // Invert the mask so the paper background becomes BLACK (0) and the ID cards become WHITE (255)
@@ -303,68 +313,72 @@ Future<List<File>> _isolateProcessSmartCVLayer(
           final double ratio = rect.width / rect.height;
           // Apply geometric filters (Aspect Ratio 1.35 - 1.75)
           // Considering both landscape and portrait
-          if ((ratio >= 1.35 && ratio <= 1.75) || (ratio >= (1.0 / 1.75) && ratio <= (1.0 / 1.35))) {
-             // We found a valid document contour, let's crop it.
-             // We could use minAreaRect or approxPolyDP for rotated bounding box,
-             // but let's stick to simple bounding rect first as per prompt.
+          if ((ratio >= 1.35 && ratio <= 1.75) ||
+              (ratio >= (1.0 / 1.75) && ratio <= (1.0 / 1.35))) {
+            // We found a valid document contour, let's crop it.
+            // We could use minAreaRect or approxPolyDP for rotated bounding box,
+            // but let's stick to simple bounding rect first as per prompt.
 
-             // Optionally, if you want exact perspective crop, you'd do approxPolyDP here
-             // but prompt says "crop the original image using these precise coordinates"
+            // Optionally, if you want exact perspective crop, you'd do approxPolyDP here
+            // but prompt says "crop the original image using these precise coordinates"
 
-             final double peri = cv.arcLength(contour, true);
-             final cv.VecPoint currentApprox = cv.approxPolyDP(
-                contour,
-                0.02 * peri,
-                true,
-             );
+            final double peri = cv.arcLength(contour, true);
+            final cv.VecPoint currentApprox = cv.approxPolyDP(
+              contour,
+              0.02 * peri,
+              true,
+            );
 
-             if (currentApprox.length == 4) {
-               final approx = currentApprox;
-               final orderedPts = _orderPoints(approx);
+            if (currentApprox.length == 4) {
+              final approx = currentApprox;
+              final orderedPts = _orderPoints(approx);
 
-               var p0 = orderedPts[0]; // tl
-               var p1 = orderedPts[1]; // tr
-               var p2 = orderedPts[2]; // br
-               var p3 = orderedPts[3]; // bl
+              var p0 = orderedPts[0]; // tl
+              var p1 = orderedPts[1]; // tr
+              var p2 = orderedPts[2]; // br
+              var p3 = orderedPts[3]; // bl
 
-               int widthA = (p2.x - p3.x).abs();
-               int widthB = (p1.x - p0.x).abs();
-               int maxWidth = widthA > widthB ? widthA : widthB;
+              int widthA = (p2.x - p3.x).abs();
+              int widthB = (p1.x - p0.x).abs();
+              int maxWidth = widthA > widthB ? widthA : widthB;
 
-               int heightA = (p1.y - p2.y).abs();
-               int heightB = (p0.y - p3.y).abs();
-               int maxHeight = heightA > heightB ? heightA : heightB;
+              int heightA = (p1.y - p2.y).abs();
+              int heightB = (p0.y - p3.y).abs();
+              int maxHeight = heightA > heightB ? heightA : heightB;
 
-               final dstPts = cv.VecPoint.fromList([
-                 cv.Point(0, 0),
-                 cv.Point(maxWidth - 1, 0),
-                 cv.Point(maxWidth - 1, maxHeight - 1),
-                 cv.Point(0, maxHeight - 1),
-               ]);
+              final dstPts = cv.VecPoint.fromList([
+                cv.Point(0, 0),
+                cv.Point(maxWidth - 1, 0),
+                cv.Point(maxWidth - 1, maxHeight - 1),
+                cv.Point(0, maxHeight - 1),
+              ]);
 
-               final transMat = cv.getPerspectiveTransform(orderedPts, dstPts);
-               final warped = cv.warpPerspective(srcClone, transMat, (maxWidth, maxHeight));
+              final transMat = cv.getPerspectiveTransform(orderedPts, dstPts);
+              final warped = cv.warpPerspective(srcClone, transMat, (
+                maxWidth,
+                maxHeight,
+              ));
 
-               final croppedPath =
-                 '$tempPath/smart_cropped_${DateTime.now().millisecondsSinceEpoch}_$count.jpg';
-               cv.imwrite(croppedPath, warped);
-               croppedFiles.add(File(croppedPath));
+              final croppedPath =
+                  '$tempPath/smart_cropped_${DateTime.now().millisecondsSinceEpoch}_$count.jpg';
+              cv.imwrite(croppedPath, warped);
+              croppedFiles.add(File(croppedPath));
 
-               warped.dispose();
-               transMat.dispose();
-               dstPts.dispose();
-               orderedPts.dispose();
-               approx.dispose();
-             } else {
-               // Fallback to bounding rect if not exactly 4 points after blackout
-               final cropped = srcClone.region(rect);
-               final croppedPath =
-                 '$tempPath/smart_cropped_${DateTime.now().millisecondsSinceEpoch}_$count.jpg';
-               cv.imwrite(croppedPath, cropped);
-               croppedFiles.add(File(croppedPath));
-               cropped.dispose();
-             }
-             count++;
+              warped.dispose();
+              transMat.dispose();
+              dstPts.dispose();
+              orderedPts.dispose();
+              approx.dispose();
+            } else {
+              // Fallback to bounding rect if not exactly 4 points after blackout
+              final cropped = srcClone.region(rect);
+              final croppedPath =
+                  '$tempPath/smart_cropped_${DateTime.now().millisecondsSinceEpoch}_$count.jpg';
+              cv.imwrite(croppedPath, cropped);
+              croppedFiles.add(File(croppedPath));
+              cropped.dispose();
+            }
+            count++;
           }
         }
       } catch (e) {
@@ -389,6 +403,38 @@ Future<List<File>> _isolateProcessSmartCVLayer(
   } finally {
     src?.dispose();
     srcClone?.dispose();
+  }
+}
+
+Future<String> _isolatePreprocessForOCR(Map<String, dynamic> args) async {
+  final String imagePath = args['imagePath'] as String;
+  final String tempPath = args['tempPath'] as String;
+
+  cv.Mat? src;
+  cv.Mat? gray;
+  cv.Mat? claheMat;
+
+  try {
+    final bytes = File(imagePath).readAsBytesSync();
+    src = cv.imdecode(bytes, cv.IMREAD_COLOR);
+    if (src.isEmpty) return imagePath;
+
+    gray = cv.cvtColor(src, cv.COLOR_BGR2GRAY);
+
+    final clahe = cv.CLAHE.empty();
+    claheMat = clahe.apply(gray);
+
+    final processedPath =
+        '$tempPath/ocr_preprocessed_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    cv.imwrite(processedPath, claheMat);
+    return processedPath;
+  } catch (e) {
+    print('OCR pre-processing failed: $e');
+    return imagePath;
+  } finally {
+    src?.dispose();
+    gray?.dispose();
+    claheMat?.dispose();
   }
 }
 
@@ -448,14 +494,22 @@ class ScannerService {
     final tempPath = tempDir.path;
     final imagePath = imageFile.path;
 
+    // Pre-process for OCR in background
+    final preprocessedImagePath = await Isolate.run(
+      () => _isolatePreprocessForOCR({
+        'imagePath': imagePath,
+        'tempPath': tempPath,
+      }),
+    );
+
     // Stage 1: On-Device AI ROI Detection
     final bytes = await imageFile.readAsBytes();
     final decodedImage = await decodeImageFromList(bytes);
     final double imgWidth = decodedImage.width.toDouble();
     final double imgHeight = decodedImage.height.toDouble();
 
-    final inputImage = InputImage.fromFilePath(imagePath);
-    final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin /* TODO: Fix ML Kit missing arabic */ );
+    final inputImage = InputImage.fromFilePath(preprocessedImagePath);
+    final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
 
     List<Map<String, dynamic>> rois = [];
     bool foundAnchors = false;
@@ -499,7 +553,8 @@ class ScannerService {
               final expandedR1 = r1.inflate(100);
               if (expandedR1.overlaps(r2)) {
                 final unionRect = r1.expandToInclude(r2);
-                if (unionRect.width <= imgWidth * 0.5 && unionRect.height <= imgHeight * 0.5) {
+                if (unionRect.width <= imgWidth * 0.5 &&
+                    unionRect.height <= imgHeight * 0.5) {
                   textBlocks[i] = unionRect;
                   textBlocks.removeAt(j);
                   changed = true;
@@ -541,8 +596,19 @@ class ScannerService {
 
   Future<DocumentType> classifyDocument(File imageFile) async {
     final imagePath = imageFile.path;
-    final inputImage = InputImage.fromFilePath(imagePath);
-    final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin /* TODO: Fix ML Kit missing arabic */ );
+    final tempDir = await getTemporaryDirectory();
+    final tempPath = tempDir.path;
+
+    // Pre-process for OCR in background
+    final preprocessedImagePath = await Isolate.run(
+      () => _isolatePreprocessForOCR({
+        'imagePath': imagePath,
+        'tempPath': tempPath,
+      }),
+    );
+
+    final inputImage = InputImage.fromFilePath(preprocessedImagePath);
+    final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
 
     try {
       final RecognizedText recognizedText = await textRecognizer.processImage(
