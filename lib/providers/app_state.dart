@@ -96,35 +96,34 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
       return;
     }
 
+    int currentIndex = pageDocs.length;
+    if (currentIndex >= 4) {
+      pageIndex++;
+      currentIndex = 0;
+      pageDocs = []; // New page
+    }
+
     double currentDx = 10.0;
     double currentDy = 10.0;
-    if (pageDocs.length == 1) {
+
+    if (currentIndex == 0) {
+      currentDx = 10.0;
+      currentDy = 10.0;
+    } else if (currentIndex == 1) {
       currentDx = 10.0 + newDocWidth + 10.0;
       currentDy = 10.0;
-    } else if (pageDocs.length == 2) {
+    } else if (currentIndex == 2) {
       currentDx = 10.0;
       currentDy = 10.0 + newDocHeight + 10.0;
-    } else if (pageDocs.length >= 3) {
+    } else if (currentIndex == 3) {
       currentDx = 10.0 + newDocWidth + 10.0;
       currentDy = 10.0 + newDocHeight + 10.0;
     }
 
-    // Page Break Check (Stop Bleeding)
-    if (currentDy + newDocHeight + margin > VIRTUAL_A4_HEIGHT) {
-      pageIndex++;
-      currentDx = margin;
-      currentDy = margin;
-
-      state = {
-        ...state,
-        pageIndex: [newDoc.copyWith(dx: currentDx, dy: currentDy)]
-      };
-    } else {
-      state = {
-        ...state,
-        pageIndex: [...pageDocs, newDoc.copyWith(dx: currentDx, dy: currentDy)]
-      };
-    }
+    state = {
+      ...state,
+      pageIndex: [...pageDocs, newDoc.copyWith(dx: currentDx, dy: currentDy)]
+    };
   }
 
   DocumentType _guessDocumentType(AppState appState) {

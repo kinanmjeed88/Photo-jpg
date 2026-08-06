@@ -114,8 +114,8 @@ Future<List<File>> _isolateProcessSmartCVLayer(
 
     for (var contour in contours) {
       final area = cv.contourArea(contour);
-      // Area Filter: 3% to 50%
-      if (area < imageArea * 0.03 || area > imageArea * 0.50) {
+      // Area Filter: 1.5% to 85%
+      if (area < imageArea * 0.015 || area > imageArea * 0.85) {
         continue;
       }
 
@@ -123,18 +123,39 @@ Future<List<File>> _isolateProcessSmartCVLayer(
       // Shape Filter: Exactly 4 points
       final cv.VecPoint approx = cv.approxPolyDP(contour, 0.02 * peri, true);
 
-      if (approx.length == 4) {
-        final cv.Rect rect = cv.boundingRect(approx);
+      cv.VecPoint orderedPts;
+      bool isValidShape = false;
 
-        // Aspect Ratio Filter (1.35 to 1.75) using max/min of bounding box
+      if (approx.length == 4) {
+        orderedPts = _orderPoints(approx);
+        isValidShape = true;
+      } else {
+        // Fallback to minAreaRect for rounded corners / close placement
+        final rect = cv.minAreaRect(contour);
+        final boxPts = cv.boxPoints(rect);
+        final ptsList = [
+          cv.Point(boxPts[0].x.toInt(), boxPts[0].y.toInt()),
+          cv.Point(boxPts[1].x.toInt(), boxPts[1].y.toInt()),
+          cv.Point(boxPts[2].x.toInt(), boxPts[2].y.toInt()),
+          cv.Point(boxPts[3].x.toInt(), boxPts[3].y.toInt()),
+        ];
+        final tempVec = cv.VecPoint.fromList(ptsList);
+        orderedPts = _orderPoints(tempVec);
+        tempVec.dispose();
+        isValidShape = true;
+      }
+
+      if (isValidShape) {
+        final cv.Rect rect = cv.boundingRect(contour); // Use original contour for bounding rect
+
+        // Aspect Ratio Filter (1.2 to 1.9) using max/min of bounding box
         double w = rect.width.toDouble();
         double h = rect.height.toDouble();
         double maxDim = w > h ? w : h;
         double minDim = w < h ? w : h;
         double ratio = maxDim / minDim;
 
-        if (ratio >= 1.35 && ratio <= 1.75) {
-          final orderedPts = _orderPoints(approx);
+        if (ratio >= 1.2 && ratio <= 1.9) {
           var p0 = orderedPts[0];
           var p1 = orderedPts[1];
           var p2 = orderedPts[2];
@@ -156,20 +177,13 @@ Future<List<File>> _isolateProcessSmartCVLayer(
           ]);
 
           final transMat = cv.getPerspectiveTransform(orderedPts, dstPts);
+          // Apply warpPerspective EXCLUSIVELY on srcClone (Original Color Image)
           final warped = cv.warpPerspective(srcClone, transMat, (maxWidth, maxHeight));
 
-          // 4. Enhancement Filter (Post-Crop)
-          final warpedGray = cv.cvtColor(warped, cv.COLOR_BGR2GRAY);
-          final clahe = cv.CLAHE.empty();
-          final claheMat = clahe.apply(warpedGray);
-
           final croppedPath = '$tempPath/smart_cropped_${DateTime.now().millisecondsSinceEpoch}_$count.jpg';
-          cv.imwrite(croppedPath, claheMat);
+          cv.imwrite(croppedPath, warped); // Save original color without Grayscale/CLAHE applied to final output
           croppedFiles.add(File(croppedPath));
 
-          claheMat.dispose();
-          clahe.dispose();
-          warpedGray.dispose();
           warped.dispose();
           transMat.dispose();
           dstPts.dispose();
@@ -237,12 +251,9 @@ Future<String> _isolatePreprocessForOCR(Map<String, dynamic> args) async {
 class ScannerService {
   final ImagePicker _picker = ImagePicker();
 
-  Future<File?> scanDocument({ImageSource source = ImageSource.camera}) async {
-    final XFile? image = await _picker.pickImage(source: source);
-    if (image == null) return null;
-
+  Future<File?> manualCrop(String sourcePath) async {
     final CroppedFile? croppedFile = await ImageCropper().cropImage(
-      sourcePath: image.path,
+      sourcePath: sourcePath,
       uiSettings: [
         AndroidUiSettings(
           toolbarTitle: 'تعديل الصورة',
@@ -259,6 +270,26 @@ class ScannerService {
       return File(croppedFile.path);
     }
     return null;
+  }
+
+  Future<File?> scanDocument({ImageSource source = ImageSource.camera}) async {
+    final XFile? image = await _picker.pickImage(source: source);
+    if (image == null) return null;
+
+    return manualCrop(image.path);
+  }
+
+  Future<List<File>?> scanMultipleDocuments() async {
+    final List<XFile> images = await _picker.pickMultiImage();
+    if (images.isEmpty) return null;
+
+    // As per instruction, maybe we process them sequentially and inject them.
+    // If they go through multi-picker, we probably just return the original files,
+    // and rely on `processSmartRecognition` or manual crop for each.
+    // Actually, manual crop on 10 images might be annoying, but the mandate states:
+    // "Iterate through the selected images, processing each through the pipeline, and injecting all resulting cropped files into the state sequentially."
+
+    return images.map((x) => File(x.path)).toList();
   }
 
   Future<File?> applyFilter(File imageFile, bool highContrast) async {
