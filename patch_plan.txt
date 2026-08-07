@@ -1,0 +1,17 @@
+1. Rendering Integrity & Canvas Layout (The Squish & Oversize Regression)
+   - Issue: Fixed aspect ratio and explicit container sizing causes distortion (squishing/stretching). In `DraggableResizableDocument`, the widget forces `_documentAspectRatio` based on a predefined document type and restricts image rendering using `AspectRatio` and `BoxFit.fill`.
+   - Fix: Use the document's actual aspect ratio determined during decoding in `scanner_screen.dart` (which computes `aspect = decoded.width / decoded.height` and stores it into `width` and `height`, wait actually it just sets `docWidth = 300` and calculates `docHeight = docWidth / aspect`, BUT in `AppState` it overrides `newDocWidth` and `newDocHeight` with fixed numbers based on type. Wait, the `AppState` forces fixed aspect ratios!).
+   - In `app_state.dart`, `addDocument` overrides the width and height with hardcoded ratios:
+     `double newDocWidth = VIRTUAL_A4_WIDTH * 0.42; double newDocHeight = newDocWidth / 1.58;`
+     And then in `DraggableResizableDocument`, it uses `AspectRatio(aspectRatio: _documentAspectRatio, ...)` where `_documentAspectRatio` is hardcoded (1.58, 1.408, etc) regardless of the actual image's aspect ratio.
+   - Actually, wait! The AC says "The original intrinsic aspect ratio of the decoded image MUST be preserved under all circumstances."
+     So we should remove hardcoded aspect ratios from `DraggableResizableDocument` and `AppState`, or dynamically calculate the actual aspect ratio of the `ScannedDocument`.
+   - Also, we need to correctly auto-layout multiple documents. In `AppState`, the `addDocument` places items in hardcoded `currentDx`, `currentDy`.
+
+2. Drag & Drop Fluidity and Z-Indexing
+   - Issue: `Draggable` feedback has lag and jumpy positions. The widget uses `Draggable`, which by default uses global coordinates for feedback positioning, and `DragTarget` coordinates. The drag lag and incorrect drop offset (error > 3px) is usually because of `Draggable` vs global coordinates mismatch and scaling.
+   - Fix: Replace `Draggable`/`DragTarget` with a `Positioned` widget wrapping a `GestureDetector` (`onPanUpdate`/`onPanEnd`) for completely smooth 60 FPS dragging. Riverpod updates should only happen on `onPanEnd` to avoid rebuilds. Z-indexing can be managed by storing items in a list and bringing the dragged item to the end of the list (top of stack).
+
+3. Editor Live Preview Engine
+   - Issue: In `ImageEditorScreen`, filters like Sharpen only apply after saving. Brightness/contrast uses `ColorFiltered`, which applies during sliding, BUT `sharpness` doesn't do anything live! Also the AC requires live preview for Sharpen, which means OpenCV needs to run. But running OpenCV synchronously blocks the main thread.
+   - Fix: Use an Isolate-based throttle/debounce mechanism to run OpenCV operations (including sharpness) in the background when the slider changes, and update a `MemoryImage` (or `Uint8List`) for the live preview.
