@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../constants/app_constants.dart';
 
 enum WorkMode { single, family }
 enum DisplayMethod { onePage, twoPages, frontOnly }
@@ -56,8 +57,8 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
 
 
   void addDocument(ScannedDocument doc, AppState appState) {
-    const double VIRTUAL_A4_WIDTH = 400.0;
-    const double VIRTUAL_A4_HEIGHT = 565.6; // 400 * 1.414
+    const double VIRTUAL_A4_WIDTH = AppConstants.kVirtualCanvasWidth;
+    const double VIRTUAL_A4_HEIGHT = AppConstants.kVirtualCanvasHeight; // 400 * 1.414
     const double margin = 10.0;
 
     DocumentType effectiveType = doc.type != DocumentType.unknown
@@ -268,6 +269,10 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
       ...state,
       pageIndex: pageDocs,
     };
+  }
+
+  void setRawState(Map<int, List<ScannedDocument>> newState) {
+    state = newState;
   }
 
   void clear() {

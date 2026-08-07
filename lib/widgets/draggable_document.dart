@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../providers/app_state.dart';
+import '../constants/app_constants.dart';
 
 class DraggableResizableDocument extends StatefulWidget {
   final ScannedDocument document;
@@ -62,7 +63,6 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
   @override
   void didUpdateWidget(DraggableResizableDocument oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // If external state overrides (like pagination or undo), sync back
     if (oldWidget.document != widget.document) {
       dx = widget.document.dx;
       dy = widget.document.dy;
@@ -82,16 +82,11 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
 
   void _onResizeUpdate(DragUpdateDetails details) {
     setState(() {
-      // Allow scale up to aspect ratio strictly
-      // Since it's a 2D resize handle on the bottom right:
       double newWidth = width + details.delta.dx;
-
-      // Enforce minimum size
       if (newWidth < 50) newWidth = 50;
 
       double newHeight = newWidth / _documentAspectRatio;
 
-      // Ensure resize doesn't push the document out of bounds
       if (newWidth > widget.canvasWidth - dx) {
         newWidth = widget.canvasWidth - dx;
         newHeight = newWidth / _documentAspectRatio;
@@ -112,7 +107,6 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
   }
 
   void _triggerLayoutUpdate() {
-    // Local layout update within the same page
     widget.onLayoutUpdate(widget.pageIndex, widget.docIndex, dx, dy, width, height);
   }
 
@@ -129,8 +123,8 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
     };
 
     return Positioned(
-      left: dx - 12,
-      top: dy - 12,
+      left: dx - AppConstants.kDocumentVisualPadding,
+      top: dy - AppConstants.kDocumentVisualPadding,
       child: Draggable<Map<String, dynamic>>(
         dragAnchorStrategy: _customDragAnchorStrategy,
         onDragStarted: widget.onDragStarted,
@@ -138,19 +132,19 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
         feedback: Material(
           color: Colors.transparent,
           child: SizedBox(
-            width: (width + 24) * widget.canvasScale,
-            height: (height + 24) * widget.canvasScale,
+            width: (width + AppConstants.kDocumentVisualPaddingTotal) * widget.canvasScale,
+            height: (height + AppConstants.kDocumentVisualPaddingTotal) * widget.canvasScale,
             child: FittedBox(
               fit: BoxFit.contain,
               child: SizedBox(
-                width: width + 24,
-                height: height + 24,
+                width: width + AppConstants.kDocumentVisualPaddingTotal,
+                height: height + AppConstants.kDocumentVisualPaddingTotal,
                 child: Stack(
                   clipBehavior: Clip.none,
                   children: [
                     Positioned(
-                      left: 12,
-                      top: 12,
+                      left: AppConstants.kDocumentVisualPadding,
+                      top: AppConstants.kDocumentVisualPadding,
                       width: width,
                       height: height,
                       child: Center(
@@ -175,9 +169,7 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
           opacity: 0.3,
           child: _buildDocumentContent(),
         ),
-        onDragEnd: (details) {
-          // DragTarget handles all drops.
-        },
+        onDragEnd: (details) {},
         child: GestureDetector(
           behavior: HitTestBehavior.translucent,
           onTap: widget.onTap,
@@ -189,14 +181,14 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
 
   Widget _buildDocumentContent() {
     return Container(
-      width: width + 24,
-      height: height + 24,
+      width: width + AppConstants.kDocumentVisualPaddingTotal,
+      height: height + AppConstants.kDocumentVisualPaddingTotal,
       child: Stack(
             clipBehavior: Clip.none,
             children: [
               Positioned(
-                left: 12,
-                top: 12,
+                left: AppConstants.kDocumentVisualPadding,
+                top: AppConstants.kDocumentVisualPadding,
                 width: width,
                 height: height,
                 child: Center(
@@ -214,7 +206,6 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
                 ),
               ),
               if (widget.isSelected) ...[
-                // Top Right: Delete Button
                 Positioned(
                   top: 0,
                   right: 0,
@@ -231,7 +222,6 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
                     ),
                   ),
                 ),
-                // Top Left: Edit Button
                 Positioned(
                   top: 0,
                   left: 0,
@@ -248,7 +238,6 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
                     ),
                   ),
                 ),
-                // Bottom Right: Resize Handle
                 Positioned(
                   bottom: 0,
                   right: 0,
