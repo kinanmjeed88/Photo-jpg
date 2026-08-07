@@ -29,27 +29,50 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
   Future<void> _scanDocument(ImageSource source) async {
     try {
-      final File? processedFile = await _scannerService.scanDocument(source: source);
-      if (processedFile == null) return;
+      // Pick multiple images if gallery
+      final List<File> pickedFiles = [];
+      if (source == ImageSource.gallery) {
+        final List<File>? files = await _scannerService.scanMultipleDocuments();
+        if (files != null && files.isNotEmpty) {
+          pickedFiles.addAll(files);
+        }
+      } else {
+        final File? file = await _scannerService.scanDocument(source: source);
+        if (file != null) {
+          pickedFiles.add(file);
+        }
+      }
+
+      if (pickedFiles.isEmpty) return;
 
       setState(() {
         _isProcessing = true;
       });
 
       if (mounted) {
-        // Document type classification
-        final docType = await _scannerService.classifyDocument(processedFile);
-
-        // Smart recognition for cropping
         final bool smartRecog = ref.read(appStateProvider).smartRecognition;
-        List<File> finalFiles = [processedFile];
 
-        if (smartRecog) {
-           finalFiles = await _scannerService.processSmartRecognition(processedFile);
-        }
+        for (var processedFile in pickedFiles) {
+          // Document type classification
+          final docType = await _scannerService.classifyDocument(processedFile);
 
-        for (var f in finalFiles) {
-           final decoded = await decodeImageFromList(await f.readAsBytes());
+          List<File> finalFiles = [processedFile];
+
+          if (smartRecog) {
+            finalFiles = await _scannerService.processSmartRecognition(processedFile);
+            if (finalFiles.isEmpty) {
+              // Smart Manual Cropper Fallback
+              final File? manuallyCropped = await _scannerService.manualCrop(processedFile.path);
+              if (manuallyCropped != null) {
+                finalFiles = [manuallyCropped];
+              } else {
+                finalFiles = [processedFile]; // Or continue if we don't want to add it
+              }
+            }
+          }
+
+          for (var f in finalFiles) {
+            final decoded = await decodeImageFromList(await f.readAsBytes());
            double aspect = decoded.width / decoded.height;
            double docWidth = 300;
            double docHeight = docWidth / aspect;
@@ -60,6 +83,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
             width: docWidth,
             height: docHeight,
           ), ref.read(appStateProvider));
+          }
         }
       }
     } catch (e) {

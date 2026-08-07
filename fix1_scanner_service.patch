@@ -1,0 +1,43 @@
+--- lib/services/scanner_service.dart
++++ lib/services/scanner_service.dart
+@@ -107,7 +107,24 @@
+       // Shape Filter: Exactly 4 points
+       final cv.VecPoint approx = cv.approxPolyDP(contour, 0.02 * peri, true);
+
+-      if (approx.length == 4) {
++      cv.VecPoint orderedPts;
++      bool isValidShape = false;
++
++      if (approx.length == 4) {
++        orderedPts = _orderPoints(approx);
++        isValidShape = true;
++      } else {
++        // Fallback to minAreaRect for rounded corners / close placement
++        final rect = cv.minAreaRect(contour);
++        final boxPts = cv.boxPoints(rect);
++        final ptsList = [
++          cv.Point(boxPts[0].x.toInt(), boxPts[0].y.toInt()),
++          cv.Point(boxPts[1].x.toInt(), boxPts[1].y.toInt()),
++          cv.Point(boxPts[2].x.toInt(), boxPts[2].y.toInt()),
++          cv.Point(boxPts[3].x.toInt(), boxPts[3].y.toInt()),
++        ];
++        final tempVec = cv.VecPoint.fromList(ptsList);
++        orderedPts = _orderPoints(tempVec);
++        tempVec.dispose();
++        isValidShape = true;
++      }
++
++      if (isValidShape) {
+         final cv.Rect rect = cv.boundingRect(approx);
+
+         // Aspect Ratio Filter (1.35 to 1.75) using max/min of bounding box
+@@ -117,8 +134,7 @@
+         double minDim = w < h ? w : h;
+         double ratio = maxDim / minDim;
+
+-        if (ratio >= 1.35 && ratio <= 1.75) {
+-          final orderedPts = _orderPoints(approx);
++        if (ratio >= 1.2 && ratio <= 1.9) {
+           var p0 = orderedPts[0];
+           var p1 = orderedPts[1];
+           var p2 = orderedPts[2];
