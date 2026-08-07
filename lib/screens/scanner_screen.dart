@@ -264,31 +264,46 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                   final data = details.data as Map<String, dynamic>;
                                                   final doc = data['document'] as ScannedDocument;
                                                   final sourcePageIndex = data['pageIndex'] as int;
-                                                  final sourceDocIndex = data['docIndex'] as int;
+                                                  // We do not rely on sourceDocIndex directly for update/remove because
+                                                  // the Z-index might have changed while dragging (e.g. moveToTop was called).
+                                                  // Instead, we find the real index of the document in the source page based on its file path.
 
-                                                  double virtualDx = localOffset.dx + AppConstants.kDocumentVisualPadding;
-                                                  double virtualDy = localOffset.dy + AppConstants.kDocumentVisualPadding;
+                                                  // With custom top-left dragAnchorStrategy, localOffset maps 1:1
+                                                  // to the precise drop coordinate.
+                                                  double virtualDx = localOffset.dx;
+                                                  double virtualDy = localOffset.dy;
 
                                                   virtualDx = math.max(0.0, math.min(virtualDx, AppConstants.kVirtualCanvasWidth - doc.width));
                                                   virtualDy = math.max(0.0, math.min(virtualDy, AppConstants.kVirtualCanvasHeight - doc.height));
 
                                                   final newDoc = doc.copyWith(dx: virtualDx, dy: virtualDy);
 
+                                                  final currentState = ref.read(scannedDocumentsProvider);
+                                                  final sourceDocs = currentState[sourcePageIndex] ?? [];
+
+                                                  // Find actual index to prevent Z-index corruption
+                                                  int actualDocIndex = sourceDocs.indexWhere((d) => d.file.path == doc.file.path);
+
+                                                  if (actualDocIndex == -1) {
+                                                      // Fallback to the provided index if for some reason it's not found
+                                                      actualDocIndex = data['docIndex'] as int;
+                                                  }
+
                                                   if (sourcePageIndex == pageKey) {
-                                                    ref.read(scannedDocumentsProvider.notifier).updateDocumentAt(sourcePageIndex, sourceDocIndex, newDoc);
-                                                    ref.read(scannedDocumentsProvider.notifier).moveDocumentToTop(sourcePageIndex, sourceDocIndex);
+                                                    ref.read(scannedDocumentsProvider.notifier).updateDocumentAt(sourcePageIndex, actualDocIndex, newDoc);
+                                                    ref.read(scannedDocumentsProvider.notifier).moveDocumentToTop(sourcePageIndex, actualDocIndex);
 
                                                     final currentDocsCount = ref.read(scannedDocumentsProvider)[pageKey]?.length ?? 0;
                                                     if (currentDocsCount > 0) {
                                                       _selectionNotifier.value = (pageIndex: pageKey, docIndex: currentDocsCount - 1);
                                                     }
                                                   } else {
-                                                    ref.read(scannedDocumentsProvider.notifier).removeDocumentAt(sourcePageIndex, sourceDocIndex);
-                                                    final currentState = ref.read(scannedDocumentsProvider);
-                                                    final targetPageDocs = currentState[pageKey] ?? [];
+                                                    ref.read(scannedDocumentsProvider.notifier).removeDocumentAt(sourcePageIndex, actualDocIndex);
+                                                    final updatedState = ref.read(scannedDocumentsProvider);
+                                                    final targetPageDocs = updatedState[pageKey] ?? [];
 
                                                     ref.read(scannedDocumentsProvider.notifier).setRawState( {
-                                                      ...currentState,
+                                                      ...updatedState,
                                                       pageKey: [...targetPageDocs, newDoc],
                                                     });
 
