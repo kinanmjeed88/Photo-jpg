@@ -131,36 +131,33 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
         data: dragData,
         feedback: Material(
           color: Colors.transparent,
-          child: SizedBox(
-            width: (width + AppConstants.kDocumentVisualPaddingTotal) * widget.canvasScale,
-            height: (height + AppConstants.kDocumentVisualPaddingTotal) * widget.canvasScale,
-            child: FittedBox(
-              fit: BoxFit.contain,
-              child: SizedBox(
-                width: width + AppConstants.kDocumentVisualPaddingTotal,
-                height: height + AppConstants.kDocumentVisualPaddingTotal,
-                child: Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    Positioned(
-                      left: AppConstants.kDocumentVisualPadding,
-                      top: AppConstants.kDocumentVisualPadding,
-                      width: width,
-                      height: height,
-                      child: Center(
-                        child: AspectRatio(
-                          aspectRatio: _documentAspectRatio,
-                          child: Container(
-                            decoration: BoxDecoration(
-                              border: Border.all(color: Colors.blueAccent.withOpacity(0.5), width: 3),
-                            ),
-                            child: Image.file(widget.document.file, fit: BoxFit.contain),
+          child: Transform.scale(
+            scale: widget.canvasScale,
+            alignment: Alignment.topLeft,
+            child: SizedBox(
+              width: width + AppConstants.kDocumentVisualPaddingTotal,
+              height: height + AppConstants.kDocumentVisualPaddingTotal,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Positioned(
+                    left: AppConstants.kDocumentVisualPadding,
+                    top: AppConstants.kDocumentVisualPadding,
+                    width: width,
+                    height: height,
+                    child: Center(
+                      child: AspectRatio(
+                        aspectRatio: _documentAspectRatio,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.blueAccent.withValues(alpha: 0.5), width: 3),
                           ),
+                          child: Image.file(widget.document.file, fit: BoxFit.contain),
                         ),
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
           ),

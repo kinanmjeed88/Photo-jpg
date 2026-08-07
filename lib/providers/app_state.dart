@@ -76,12 +76,11 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
     // We establish the virtual width for the document, calculating height based on ratio.
     if (effectiveType == DocumentType.a4Document) {
       newDocWidth = VIRTUAL_A4_WIDTH;
-    } else if (effectiveType == DocumentType.passport) {
-      newDocWidth = VIRTUAL_A4_WIDTH * 0.85;
     } else if (effectiveType == DocumentType.rationCard) {
       newDocWidth = VIRTUAL_A4_WIDTH * 0.90;
     } else {
-      newDocWidth = VIRTUAL_A4_WIDTH * 0.42; // default for ID cards
+      // National ID, Passport, etc. MUST fit two horizontally
+      newDocWidth = VIRTUAL_A4_WIDTH * 0.45;
     }
 
     // Always maintain the exact intrinsic aspect ratio
@@ -154,17 +153,17 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
 
     // Find bottom-most item to place below it, or right-most item to place next to it
     if (pageDocs.length == 1) {
-       currentDx = margin + pageDocs[0].width + margin;
-       currentDy = margin;
+       currentDx = pageDocs[0].dx + pageDocs[0].width + margin;
+       currentDy = pageDocs[0].dy;
        if (currentDx + newDocWidth > VIRTUAL_A4_WIDTH) {
            currentDx = margin;
-           currentDy = margin + pageDocs[0].height + margin;
+           currentDy = pageDocs[0].dy + pageDocs[0].height + margin;
        }
     } else if (pageDocs.length == 2) {
        currentDx = margin;
        currentDy = margin + math.max(pageDocs[0].height, pageDocs[1].height) + margin;
     } else if (pageDocs.length == 3) {
-       currentDx = margin + pageDocs[2].width + margin;
+       currentDx = pageDocs[2].dx + pageDocs[2].width + margin;
        currentDy = pageDocs[2].dy;
        if (currentDx + newDocWidth > VIRTUAL_A4_WIDTH) {
            currentDx = margin;
