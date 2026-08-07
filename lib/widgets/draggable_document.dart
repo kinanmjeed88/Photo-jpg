@@ -63,8 +63,8 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
 
 
   double get _documentAspectRatio {
-    if (height > 0) {
-      return width / height;
+    if (widget.document.originalHeight > 0) {
+      return widget.document.originalWidth / widget.document.originalHeight;
     }
     return 1.0;
   }

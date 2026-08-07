@@ -94,6 +94,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
               type: specificType,
               width: docWidth,
               height: docHeight,
+              originalWidth: decoded.width.toDouble(),
+              originalHeight: decoded.height.toDouble(),
             ), ref.read(appStateProvider));
           }
         }
