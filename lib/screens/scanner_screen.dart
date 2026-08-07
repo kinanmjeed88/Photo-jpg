@@ -79,20 +79,17 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
           for (var f in finalFiles) {
             final decoded = await decodeImageFromList(await f.readAsBytes());
-            double aspect = decoded.width / decoded.height;
-            double docWidth = 300;
-            double docHeight = docWidth / aspect;
 
             DocumentType specificType = docType;
             if (f.path.endsWith('_A4.jpg')) {
               specificType = DocumentType.a4Document;
             }
 
+            // DO NOT hardcode width here. Pass the raw intrinsic dimensions to state.
+            // The ScannedDocumentsNotifier will calculate the mathematical width/height.
             ref.read(scannedDocumentsProvider.notifier).addDocument(ScannedDocument(
               file: f,
               type: specificType,
-              width: docWidth,
-              height: docHeight,
               originalWidth: decoded.width.toDouble(),
               originalHeight: decoded.height.toDouble(),
             ), ref.read(appStateProvider));
@@ -290,8 +287,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                   }
 
                                                   if (sourcePageIndex == pageKey) {
-                                                    ref.read(scannedDocumentsProvider.notifier).updateDocumentAt(sourcePageIndex, actualDocIndex, newDoc);
-                                                    ref.read(scannedDocumentsProvider.notifier).moveDocumentToTop(sourcePageIndex, actualDocIndex);
+                                                    // Atomic update to avoid state stomping
+                                                    ref.read(scannedDocumentsProvider.notifier).updateAndMoveToTop(sourcePageIndex, actualDocIndex, newDoc);
 
                                                     final currentDocsCount = ref.read(scannedDocumentsProvider)[pageKey]?.length ?? 0;
                                                     if (currentDocsCount > 0) {
@@ -334,9 +331,9 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                             canvasHeight: AppConstants.kVirtualCanvasHeight,
                                                             canvasScale: constraints.maxWidth / AppConstants.kVirtualCanvasWidth,
                                                             onDragStarted: () {
-                                                              if (selection.pageIndex != pageKey || selection.docIndex != docIndex) {
-                                                                _selectionNotifier.value = (pageIndex: pageKey, docIndex: docIndex);
-                                                              }
+                                                              ref.read(scannedDocumentsProvider.notifier).moveDocumentToTop(pageKey, docIndex);
+                                                              final currentDocsCount = ref.read(scannedDocumentsProvider)[pageKey]?.length ?? 0;
+                                                              _selectionNotifier.value = (pageIndex: pageKey, docIndex: currentDocsCount > 0 ? currentDocsCount - 1 : docIndex);
                                                             },
                                                             onTap: () {
                                                               if (selection.pageIndex != pageKey || selection.docIndex != docIndex) {

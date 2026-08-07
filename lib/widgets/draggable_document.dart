@@ -131,33 +131,37 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
         data: dragData,
         feedback: Material(
           color: Colors.transparent,
-          child: Transform.scale(
-            scale: widget.canvasScale,
-            alignment: Alignment.topLeft,
-            child: SizedBox(
-              width: width + AppConstants.kDocumentVisualPaddingTotal,
-              height: height + AppConstants.kDocumentVisualPaddingTotal,
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  Positioned(
-                    left: AppConstants.kDocumentVisualPadding,
-                    top: AppConstants.kDocumentVisualPadding,
-                    width: width,
-                    height: height,
-                    child: Center(
-                      child: AspectRatio(
-                        aspectRatio: _documentAspectRatio,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            border: Border.all(color: Colors.blueAccent.withValues(alpha: 0.5), width: 3),
+          child: SizedBox(
+            // Physically scale the box so the logical hit bounds match visual bounds
+            width: (width + AppConstants.kDocumentVisualPaddingTotal) * widget.canvasScale,
+            height: (height + AppConstants.kDocumentVisualPaddingTotal) * widget.canvasScale,
+            child: FittedBox(
+              fit: BoxFit.contain,
+              child: SizedBox(
+                width: width + AppConstants.kDocumentVisualPaddingTotal,
+                height: height + AppConstants.kDocumentVisualPaddingTotal,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Positioned(
+                      left: AppConstants.kDocumentVisualPadding,
+                      top: AppConstants.kDocumentVisualPadding,
+                      width: width,
+                      height: height,
+                      child: Center(
+                        child: AspectRatio(
+                          aspectRatio: _documentAspectRatio,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.blueAccent.withValues(alpha: 0.5), width: 3),
+                            ),
+                            child: Image.file(widget.document.file, fit: BoxFit.contain),
                           ),
-                          child: Image.file(widget.document.file, fit: BoxFit.contain),
                         ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
@@ -239,16 +243,20 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
                   bottom: 0,
                   right: 0,
                   child: GestureDetector(
+                    // Expand the hit test area so the gesture is caught within the padding
                     behavior: HitTestBehavior.opaque,
                     onPanUpdate: _onResizeUpdate,
                     onPanEnd: _onResizeEnd,
-                    child: Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: const BoxDecoration(
-                        color: Colors.blueAccent,
-                        shape: BoxShape.circle,
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: const BoxDecoration(
+                          color: Colors.blueAccent,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.open_in_full, color: Colors.white, size: 20),
                       ),
-                      child: const Icon(Icons.open_in_full, color: Colors.white, size: 16),
                     ),
                   ),
                 ),

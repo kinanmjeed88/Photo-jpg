@@ -70,8 +70,7 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
         ? doc.originalWidth / doc.originalHeight
         : 1.0;
 
-    double newDocWidth = doc.width;
-    double newDocHeight = doc.height;
+    double newDocWidth;
 
     // We establish the virtual width for the document, calculating height based on ratio.
     if (effectiveType == DocumentType.a4Document) {
@@ -84,7 +83,7 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
     }
 
     // Always maintain the exact intrinsic aspect ratio
-    newDocHeight = newDocWidth / intrinsicAspectRatio;
+    double newDocHeight = newDocWidth / intrinsicAspectRatio;
 
     if (effectiveType == DocumentType.a4Document) {
         // Enforce full canvas for A4 mathematically without distortion
@@ -236,6 +235,21 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
     state = {
       ...state,
       pageIndex: updatedDocs,
+    };
+  }
+
+  void updateAndMoveToTop(int pageIndex, int docIndex, ScannedDocument newDoc) {
+    if (!state.containsKey(pageIndex)) return;
+
+    final pageDocs = List<ScannedDocument>.from(state[pageIndex]!);
+    if (docIndex < 0 || docIndex >= pageDocs.length) return;
+
+    pageDocs.removeAt(docIndex);
+    pageDocs.add(newDoc);
+
+    state = {
+      ...state,
+      pageIndex: pageDocs,
     };
   }
 
