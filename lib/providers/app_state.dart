@@ -13,6 +13,8 @@ class ScannedDocument {
   final double dy;
   final double width;
   final double height;
+  final double originalWidth;
+  final double originalHeight;
 
   ScannedDocument({
     required this.file,
@@ -21,6 +23,8 @@ class ScannedDocument {
     this.dy = 20,
     this.width = 300,
     this.height = 400,
+    this.originalWidth = 300,
+    this.originalHeight = 400,
   });
 
   ScannedDocument copyWith({
@@ -30,6 +34,8 @@ class ScannedDocument {
     double? dy,
     double? width,
     double? height,
+    double? originalWidth,
+    double? originalHeight,
   }) {
     return ScannedDocument(
       file: file ?? this.file,
@@ -38,6 +44,8 @@ class ScannedDocument {
       dy: dy ?? this.dy,
       width: width ?? this.width,
       height: height ?? this.height,
+      originalWidth: originalWidth ?? this.originalWidth,
+      originalHeight: originalHeight ?? this.originalHeight,
     );
   }
 }
@@ -56,31 +64,31 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
         ? doc.type
         : _guessDocumentType(appState);
 
-    // Keep the actual aspect ratio, but scale if it's too large
+    // Base scaling logic relying exclusively on the intrinsic image aspect ratio.
+    double intrinsicAspectRatio = doc.originalHeight > 0
+        ? doc.originalWidth / doc.originalHeight
+        : 1.0;
+
     double newDocWidth = doc.width;
     double newDocHeight = doc.height;
 
-    // Default scaling strategy if width is exactly 300 (which is the default from scanner screen)
-    if (newDocWidth == 300) {
-        if (effectiveType == DocumentType.a4Document) {
-          newDocWidth = VIRTUAL_A4_WIDTH;
-        } else if (effectiveType == DocumentType.passport) {
-          newDocWidth = VIRTUAL_A4_WIDTH * 0.85;
-        } else if (effectiveType == DocumentType.rationCard) {
-          newDocWidth = VIRTUAL_A4_WIDTH * 0.90;
-        } else {
-          newDocWidth = VIRTUAL_A4_WIDTH * 0.42; // default for ID cards
-        }
-
-        // Maintain the intrinsic aspect ratio
-        double aspect = doc.width / doc.height;
-        newDocHeight = newDocWidth / aspect;
+    // We establish the virtual width for the document, calculating height based on ratio.
+    if (effectiveType == DocumentType.a4Document) {
+      newDocWidth = VIRTUAL_A4_WIDTH;
+    } else if (effectiveType == DocumentType.passport) {
+      newDocWidth = VIRTUAL_A4_WIDTH * 0.85;
+    } else if (effectiveType == DocumentType.rationCard) {
+      newDocWidth = VIRTUAL_A4_WIDTH * 0.90;
+    } else {
+      newDocWidth = VIRTUAL_A4_WIDTH * 0.42; // default for ID cards
     }
 
+    // Always maintain the exact intrinsic aspect ratio
+    newDocHeight = newDocWidth / intrinsicAspectRatio;
+
     if (effectiveType == DocumentType.a4Document) {
-        // Enforce full canvas for A4
-        newDocWidth = VIRTUAL_A4_WIDTH;
-        newDocHeight = VIRTUAL_A4_HEIGHT;
+        // Enforce full canvas for A4 mathematically without distortion
+        // Note: The UI aspect ratio is 1 / 1.414. We just scale to fit limits below.
     }
 
     // Clamp dimensions to canvas limits to prevent overflow
