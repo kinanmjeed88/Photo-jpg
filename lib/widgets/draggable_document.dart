@@ -252,6 +252,7 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
                   bottom: hitBoxPadding - 24,
                   right: hitBoxPadding - 24,
                   child: GestureDetector(
+                    // Expand the hit test area so the gesture is caught within the padding
                     behavior: HitTestBehavior.opaque,
                     onPanDown: (_) {},
                     onPanStart: (_) {},
