@@ -56,50 +56,48 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
   Map<int, List<ScannedDocument>> build() => {};
 
 
+
+
   void addDocument(ScannedDocument doc, AppState appState) {
     const double VIRTUAL_A4_WIDTH = AppConstants.kVirtualCanvasWidth;
-    const double VIRTUAL_A4_HEIGHT = AppConstants.kVirtualCanvasHeight; // 400 * 1.414
-    const double margin = 10.0;
+    const double VIRTUAL_A4_HEIGHT = AppConstants.kVirtualCanvasHeight;
+    const double margin = 12.0;
 
     DocumentType effectiveType = doc.type != DocumentType.unknown
         ? doc.type
         : _guessDocumentType(appState);
 
-    // Base scaling logic relying exclusively on the intrinsic image aspect ratio.
     double intrinsicAspectRatio = doc.originalHeight > 0
         ? doc.originalWidth / doc.originalHeight
         : 1.0;
 
     double newDocWidth;
 
-    // We establish the virtual width for the document, calculating height based on ratio.
     if (effectiveType == DocumentType.a4Document) {
       newDocWidth = VIRTUAL_A4_WIDTH;
     } else if (effectiveType == DocumentType.rationCard) {
       newDocWidth = VIRTUAL_A4_WIDTH * 0.90;
+    } else if (effectiveType == DocumentType.passport) {
+      // Passport takes up about half an A4 page, which roughly means full width if horizontal, or we can just size it slightly larger than ID.
+      // Or size to width of A4 canvas * 0.9. Actually, let's just make it 0.9 to occupy nearly full width, half height.
+      // We will make passport width = VIRTUAL_A4_WIDTH * 0.85
+      // Wait, instruction: Occupies approximately half an A4 page.
+      // If it occupies half a page vertically, with an aspect ratio of ~1.4, width = VIRTUAL_A4_WIDTH * 0.85 is reasonable.
+      newDocWidth = VIRTUAL_A4_WIDTH * 0.85;
     } else {
-      // National ID, Passport, etc. MUST fit two horizontally
+      // National ID / Housing Card: width = 0.45
       newDocWidth = VIRTUAL_A4_WIDTH * 0.45;
     }
 
-    // Always maintain the exact intrinsic aspect ratio
     double newDocHeight = newDocWidth / intrinsicAspectRatio;
 
-    if (effectiveType == DocumentType.a4Document) {
-        // Enforce full canvas for A4 mathematically without distortion
-        // Note: The UI aspect ratio is 1 / 1.414. We just scale to fit limits below.
-    }
-
-    // Clamp dimensions to canvas limits to prevent overflow
     if (newDocWidth > VIRTUAL_A4_WIDTH) {
-        double aspect = newDocWidth / newDocHeight;
         newDocWidth = VIRTUAL_A4_WIDTH;
-        newDocHeight = newDocWidth / aspect;
+        newDocHeight = newDocWidth / intrinsicAspectRatio;
     }
     if (newDocHeight > VIRTUAL_A4_HEIGHT) {
-        double aspect = newDocWidth / newDocHeight;
         newDocHeight = VIRTUAL_A4_HEIGHT;
-        newDocWidth = newDocHeight * aspect;
+        newDocWidth = newDocHeight * intrinsicAspectRatio;
     }
 
     if (appState.displayMethod == DisplayMethod.frontOnly && state.isNotEmpty && (state[0] ?? []).isNotEmpty) {
@@ -129,16 +127,10 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
       return;
     }
 
-    if (pageDocs.isEmpty) {
-      state = {
-        ...state,
-        pageIndex: [newDoc.copyWith(dx: effectiveType == DocumentType.a4Document ? 0 : margin, dy: effectiveType == DocumentType.a4Document ? 0 : margin)],
-      };
-      return;
-    }
-
     if (effectiveType == DocumentType.a4Document) {
-      pageIndex++;
+      if (pageDocs.isNotEmpty) {
+        pageIndex++;
+      }
       state = {
         ...state,
         pageIndex: [newDoc.copyWith(dx: 0, dy: 0)],
@@ -146,32 +138,76 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
       return;
     }
 
-    // Calculate layout dynamically based on actual sizes
+    // Advanced layout engine to find the first non-overlapping position
     double currentDx = margin;
     double currentDy = margin;
+    bool foundPosition = false;
 
-    // Find bottom-most item to place below it, or right-most item to place next to it
-    if (pageDocs.length == 1) {
-       currentDx = pageDocs[0].dx + pageDocs[0].width + margin;
-       currentDy = pageDocs[0].dy;
-       if (currentDx + newDocWidth > VIRTUAL_A4_WIDTH) {
-           currentDx = margin;
-           currentDy = pageDocs[0].dy + pageDocs[0].height + margin;
-       }
-    } else if (pageDocs.length == 2) {
-       currentDx = margin;
-       currentDy = margin + math.max(pageDocs[0].height, pageDocs[1].height) + margin;
-    } else if (pageDocs.length == 3) {
-       currentDx = pageDocs[2].dx + pageDocs[2].width + margin;
-       currentDy = pageDocs[2].dy;
-       if (currentDx + newDocWidth > VIRTUAL_A4_WIDTH) {
-           currentDx = margin;
-           currentDy = pageDocs[2].dy + pageDocs[2].height + margin;
-       }
+    // A simple grid search or bin packing
+    double bestDy = margin;
+
+    // We want to flow left to right, top to bottom.
+    // Let's sort existing docs by dy then dx
+    var sortedDocs = List<ScannedDocument>.from(pageDocs);
+    sortedDocs.sort((a, b) {
+      int dyCmp = a.dy.compareTo(b.dy);
+      if (dyCmp != 0) return dyCmp;
+      return a.dx.compareTo(b.dx);
+    });
+
+    // Try to place to the right of the last document, or below it
+    if (sortedDocs.isNotEmpty) {
+        ScannedDocument lastDoc = sortedDocs.last;
+        double rightDx = lastDoc.dx + lastDoc.width + margin;
+        if (rightDx + newDocWidth <= VIRTUAL_A4_WIDTH) {
+            currentDx = rightDx;
+            currentDy = lastDoc.dy;
+        } else {
+            currentDx = margin;
+            // Find max height in the current row
+            double maxRowHeight = 0;
+            for (var d in sortedDocs) {
+                if (d.dy >= lastDoc.dy - 10 && d.dy <= lastDoc.dy + 10) {
+                    if (d.height > maxRowHeight) maxRowHeight = d.height;
+                }
+            }
+            if (maxRowHeight == 0) maxRowHeight = lastDoc.height; // Fallback
+            currentDy = lastDoc.dy + maxRowHeight + margin;
+        }
     }
 
-    // If it still overflows height or max 4 items, new page
-    if (pageDocs.length >= 4 || currentDy + newDocHeight > VIRTUAL_A4_HEIGHT) {
+    // Check overlap helper
+    bool hasOverlap(double x, double y, double w, double h) {
+        for (var d in pageDocs) {
+            if (!(x + w + margin < d.dx || x > d.dx + d.width + margin ||
+                  y + h + margin < d.dy || y > d.dy + d.height + margin)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Grid search if the heuristic placement overlaps
+    if (hasOverlap(currentDx, currentDy, newDocWidth, newDocHeight)) {
+        foundPosition = false;
+        for (double y = margin; y + newDocHeight <= VIRTUAL_A4_HEIGHT; y += 20) {
+            for (double x = margin; x + newDocWidth <= VIRTUAL_A4_WIDTH; x += 20) {
+                if (!hasOverlap(x, y, newDocWidth, newDocHeight)) {
+                    currentDx = x;
+                    currentDy = y;
+                    foundPosition = true;
+                    break;
+                }
+            }
+            if (foundPosition) break;
+        }
+        if (!foundPosition) {
+            // Force new page if no room
+            currentDy = VIRTUAL_A4_HEIGHT + 1;
+        }
+    }
+
+    if (currentDy + newDocHeight > VIRTUAL_A4_HEIGHT) {
       pageIndex++;
       pageDocs = [];
       currentDx = margin;
