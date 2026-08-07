@@ -135,37 +135,40 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
         dragAnchorStrategy: _customDragAnchorStrategy,
         onDragStarted: widget.onDragStarted,
         data: dragData,
-        feedback: Transform.scale(
-          scale: widget.canvasScale,
-          alignment: Alignment.topLeft,
-          child: Material(
-            color: Colors.transparent,
-            child: Container(
-            width: width + 24,
-            height: height + 24,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Positioned(
-                  left: 12,
-                  top: 12,
-                  width: width,
-                  height: height,
-                  child: Center(
-                    child: AspectRatio(
-                      aspectRatio: _documentAspectRatio,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Colors.blueAccent.withOpacity(0.5), width: 3),
+        feedback: Material(
+          color: Colors.transparent,
+          child: SizedBox(
+            width: (width + 24) * widget.canvasScale,
+            height: (height + 24) * widget.canvasScale,
+            child: FittedBox(
+              fit: BoxFit.contain,
+              child: SizedBox(
+                width: width + 24,
+                height: height + 24,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Positioned(
+                      left: 12,
+                      top: 12,
+                      width: width,
+                      height: height,
+                      child: Center(
+                        child: AspectRatio(
+                          aspectRatio: _documentAspectRatio,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.blueAccent.withOpacity(0.5), width: 3),
+                            ),
+                            child: Image.file(widget.document.file, fit: BoxFit.contain),
+                          ),
                         ),
-                        child: Image.file(widget.document.file, fit: BoxFit.contain),
                       ),
                     ),
-                  ),
+                  ],
                 ),
-              ],
+              ),
             ),
-          ),
           ),
         ),
         childWhenDragging: Opacity(
