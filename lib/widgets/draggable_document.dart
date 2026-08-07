@@ -61,22 +61,14 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
     }
   }
 
+
   double get _documentAspectRatio {
-    switch (widget.document.type) {
-      case DocumentType.nationalId:
-        return 1.58;
-      case DocumentType.passport:
-        return 1.408;
-      case DocumentType.rationCard:
-        return 1.418;
-      case DocumentType.housingCard:
-        return 1.58;
-      case DocumentType.a4Document:
-        return 1.414;
-      default:
-        return 1.58;
+    if (height > 0) {
+      return width / height;
     }
+    return 1.0;
   }
+
 
   void _onResizeUpdate(DragUpdateDetails details) {
     setState(() {
@@ -151,7 +143,7 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
                         decoration: BoxDecoration(
                           border: Border.all(color: Colors.blueAccent.withOpacity(0.5), width: 3),
                         ),
-                        child: Image.file(widget.document.file, fit: BoxFit.fill),
+                        child: Image.file(widget.document.file, fit: BoxFit.contain),
                       ),
                     ),
                   ),
@@ -197,7 +189,7 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
                             ? Border.all(color: Colors.blueAccent, width: 3)
                             : (widget.addFrame ? Border.all(color: Colors.black, width: 1.0) : null),
                       ),
-                      child: Image.file(widget.document.file, fit: BoxFit.fill),
+                      child: Image.file(widget.document.file, fit: BoxFit.contain),
                     ),
                   ),
                 ),

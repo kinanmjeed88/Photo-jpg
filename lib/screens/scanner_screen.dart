@@ -247,21 +247,27 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                       });
 
                                       return DragTarget<Map<String, dynamic>>(
+
                                         onAcceptWithDetails: (details) {
-                                          final dragData = details.data;
-                                          final int sourcePageIndex = dragData['pageIndex'];
-                                          final int sourceDocIndex = dragData['docIndex'];
-                                          final ScannedDocument doc = dragData['document'];
+                                          final RenderBox renderBox = context.findRenderObject() as RenderBox;
+                                          final localOffset = renderBox.globalToLocal(details.offset);
 
-                                          final RenderBox targetBox = context.findRenderObject() as RenderBox;
-                                          final localOffset = targetBox.globalToLocal(details.offset);
+                                          // The virtual canvas represents a fixed physical A4 aspect ratio
+                                          // but scales down to fit the device screen. We need to calculate
+                                          // exactly how the 400x565.6 box is scaled inside its parent constraints.
 
-                                          // Scale the local UI offset to the virtual canvas scale
-                                          final scaleX = 400.0 / targetBox.size.width;
-                                          final scaleY = 565.6 / targetBox.size.height;
+                                          // Assuming FittedBox fits perfectly by width or height
+                                          double scaleX = 400.0 / renderBox.size.width;
+                                          double scaleY = 565.6 / renderBox.size.height;
 
-                                          double virtualDx = localOffset.dx * scaleX;
-                                          double virtualDy = localOffset.dy * scaleY;
+                                          final data = details.data as Map<String, dynamic>;
+                                          final doc = data['document'] as ScannedDocument;
+                                          final sourcePageIndex = data['pageIndex'] as int;
+                                          final sourceDocIndex = data['docIndex'] as int;
+
+                                          // Compensate for the 12px drag padding offset in the Draggable
+                                          double virtualDx = (localOffset.dx * scaleX) + 12.0;
+                                          double virtualDy = (localOffset.dy * scaleY) + 12.0;
 
                                           // Local Strict bounds clamping for drag
                                           virtualDx = math.max(0.0, math.min(virtualDx, 400.0 - doc.width));
@@ -272,6 +278,16 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                           // Update State
                                           if (sourcePageIndex == pageKey) {
                                             ref.read(scannedDocumentsProvider.notifier).updateDocumentAt(sourcePageIndex, sourceDocIndex, newDoc);
+                                            ref.read(scannedDocumentsProvider.notifier).moveDocumentToTop(sourcePageIndex, sourceDocIndex);
+
+                                            // Select the dropped document (it's now at the end of the list)
+                                            final currentDocsCount = ref.read(scannedDocumentsProvider)[pageKey]?.length ?? 0;
+                                            if (currentDocsCount > 0) {
+                                                setState(() {
+                                                    _selectedPageIndex = pageKey;
+                                                    _selectedDocIndex = currentDocsCount - 1;
+                                                });
+                                            }
                                           } else {
                                             ref.read(scannedDocumentsProvider.notifier).removeDocumentAt(sourcePageIndex, sourceDocIndex);
                                             // Force add the new document directly into the target page
@@ -282,8 +298,14 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                               ...currentState,
                                               pageKey: [...targetPageDocs, newDoc],
                                             };
+
+                                            setState(() {
+                                                _selectedPageIndex = pageKey;
+                                                _selectedDocIndex = targetPageDocs.length;
+                                            });
                                           }
                                         },
+
                                         builder: (context, candidateData, rejectedData) {
                                           return GestureDetector(
                                             behavior: HitTestBehavior.translucent,

@@ -1,5 +1,7 @@
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:extended_image/extended_image.dart';
@@ -66,7 +68,39 @@ Uint8List _processGalleryImage(Map<String, dynamic> args) {
   }
 }
 
+
+Future<Uint8List> _runPreviewIsolate(Map<String, dynamic> args) async {
+  final Uint8List bytes = args['bytes'];
+  final double sharpness = args['sharpness'];
+
+  cv.Mat? src;
+  cv.Mat? sharpened;
+  try {
+    src = cv.imdecode(bytes, cv.IMREAD_COLOR);
+    if (src.isEmpty) return bytes;
+
+    if (sharpness > 0) {
+      final blurred = cv.gaussianBlur(src, (0, 0), sharpness);
+      sharpened = cv.addWeighted(src, 1.5, blurred, -0.5, 0);
+      blurred.dispose();
+      src.dispose();
+      src = sharpened;
+    }
+
+    // Scale down image slightly for live preview to ensure it's fast (<100ms latency target)
+    // Actually, only encode to JPG.
+    final (_, encodedBytes) = cv.imencode('.jpg', src);
+    return encodedBytes;
+  } catch (e) {
+    print('OpenCV Preview Isolate failed: $e');
+    return bytes;
+  } finally {
+    src?.dispose();
+  }
+}
+
 String _processEditedImage(Map<String, dynamic> args) {
+
   final Uint8List bytes = args['bytes'];
   final int? rectLeft = args['rectLeft'];
   final int? rectTop = args['rectTop'];
@@ -129,6 +163,7 @@ class ImageEditorScreen extends ConsumerStatefulWidget {
   ConsumerState<ImageEditorScreen> createState() => _ImageEditorScreenState();
 }
 
+
 class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
   final GlobalKey<ExtendedImageEditorState> editorKey = GlobalKey<ExtendedImageEditorState>();
 
@@ -136,6 +171,79 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
   double _contrast = 1;
   double _sharpness = 0;
   bool _isProcessing = false;
+
+  Timer? _debounceTimer;
+  ValueNotifier<Uint8List?> _previewImage = ValueNotifier<Uint8List?>(null);
+  Uint8List? _originalBytes;
+  int _isolateTaskCounter = 0;
+  bool _isLoadingPreview = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadOriginalBytes();
+  }
+
+  @override
+  void dispose() {
+    _debounceTimer?.cancel();
+    _previewImage.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadOriginalBytes() async {
+    final pageDocs = ref.read(scannedDocumentsProvider)[widget.pageIndex];
+    if (pageDocs == null) return;
+    final doc = pageDocs[widget.documentIndex];
+    _originalBytes = await doc.file.readAsBytes();
+  }
+
+  void _onSliderChanged() {
+    if (_debounceTimer?.isActive ?? false) _debounceTimer!.cancel();
+
+    // We update the local UI sliders immediately without blocking.
+    // The ColorFiltered widget already handles brightness/contrast instantly.
+    // But for Sharpness, we need OpenCV, so we debounce and generate a preview.
+
+    _debounceTimer = Timer(const Duration(milliseconds: 100), () {
+      if (_originalBytes != null) {
+        _generateLivePreview();
+      }
+    });
+  }
+
+  Future<void> _generateLivePreview() async {
+    if (_originalBytes == null) return;
+
+    final int currentTaskId = ++_isolateTaskCounter;
+    setState(() => _isLoadingPreview = true);
+
+    try {
+      final args = {
+        'bytes': _originalBytes!,
+        // We only pass sharpness for the live preview because brightness/contrast
+        // is ALREADY handled instantly at 60fps by ColorFiltered widget in the UI!
+        // Wait, if we are returning a Uint8List to display, it will be inside ColorFiltered.
+        // So we should ONLY apply sharpness in this preview.
+        'sharpness': _sharpness,
+      };
+
+      // Create a top-level isolate function for just sharpness
+      final processedBytes = await compute(_runPreviewIsolate, args);
+
+      // Only update if this is the latest task
+      if (currentTaskId == _isolateTaskCounter) {
+        _previewImage.value = processedBytes;
+        if (mounted) setState(() => _isLoadingPreview = false);
+      }
+    } catch (e) {
+      print('Preview Isolate error: $e');
+      if (currentTaskId == _isolateTaskCounter && mounted) {
+        setState(() => _isLoadingPreview = false);
+      }
+    }
+  }
+
 
   Future<void> _saveToGallery() async {
     final status = await Permission.storage.request();
@@ -245,6 +353,7 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
     }
   }
 
+
   @override
   Widget build(BuildContext context) {
     final pages = ref.watch(scannedDocumentsProvider);
@@ -259,6 +368,16 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
       appBar: AppBar(
         title: const Text('تعديل الصورة'),
         actions: [
+          if (_isLoadingPreview)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16.0),
+                child: SizedBox(
+                  width: 20, height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                ),
+              ),
+            ),
           IconButton(
             icon: const Icon(Icons.save_alt),
             tooltip: 'حفظ في المعرض',
@@ -283,18 +402,37 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
                     0, 0, _contrast, 0, _brightness,
                     0, 0, 0, 1, 0,
                   ]),
-                  child: ExtendedImage.file(
-                    doc.file,
-                    fit: BoxFit.contain,
-                    mode: ExtendedImageMode.editor,
-                    extendedImageEditorKey: editorKey,
-                    initEditorConfigHandler: (ExtendedImageState? state) {
-                      return EditorConfig(
-                        maxScale: 8.0,
-                        cropRectPadding: const EdgeInsets.all(20.0),
-                        hitTestSize: 20.0,
-                      );
-                    },
+                  child: ValueListenableBuilder<Uint8List?>(
+                    valueListenable: _previewImage,
+                    builder: (context, previewBytes, child) {
+                      return previewBytes != null
+                        ? ExtendedImage.memory(
+                            previewBytes,
+                            fit: BoxFit.contain,
+                            mode: ExtendedImageMode.editor,
+                            extendedImageEditorKey: editorKey,
+                            initEditorConfigHandler: (ExtendedImageState? state) {
+                              return EditorConfig(
+                                maxScale: 8.0,
+                                cropRectPadding: const EdgeInsets.all(20.0),
+                                hitTestSize: 20.0,
+                              );
+                            },
+                          )
+                        : ExtendedImage.file(
+                            doc.file,
+                            fit: BoxFit.contain,
+                            mode: ExtendedImageMode.editor,
+                            extendedImageEditorKey: editorKey,
+                            initEditorConfigHandler: (ExtendedImageState? state) {
+                              return EditorConfig(
+                                maxScale: 8.0,
+                                cropRectPadding: const EdgeInsets.all(20.0),
+                                hitTestSize: 20.0,
+                              );
+                            },
+                          );
+                    }
                   ),
                 ),
               ),
@@ -312,7 +450,10 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
                             value: _brightness,
                             min: -100,
                             max: 100,
-                            onChanged: (v) => setState(() => _brightness = v),
+                            onChanged: (v) {
+                              setState(() => _brightness = v);
+                              _onSliderChanged();
+                            }
                           ),
                         ),
                       ],
@@ -326,7 +467,10 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
                             value: _contrast,
                             min: 0.5,
                             max: 3.0,
-                            onChanged: (v) => setState(() => _contrast = v),
+                            onChanged: (v) {
+                              setState(() => _contrast = v);
+                              _onSliderChanged();
+                            }
                           ),
                         ),
                       ],
@@ -340,7 +484,10 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
                             value: _sharpness,
                             min: 0.0,
                             max: 10.0,
-                            onChanged: (v) => setState(() => _sharpness = v),
+                            onChanged: (v) {
+                              setState(() => _sharpness = v);
+                              _onSliderChanged();
+                            }
                           ),
                         ),
                       ],
@@ -352,4 +499,5 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
           ),
     );
   }
+
 }

@@ -46,36 +46,59 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
   @override
   Map<int, List<ScannedDocument>> build() => {};
 
+
   void addDocument(ScannedDocument doc, AppState appState) {
     const double VIRTUAL_A4_WIDTH = 400.0;
     const double VIRTUAL_A4_HEIGHT = 565.6; // 400 * 1.414
     const double margin = 10.0;
 
-    // Determine type from doc.type if known, else from appState
     DocumentType effectiveType = doc.type != DocumentType.unknown
         ? doc.type
         : _guessDocumentType(appState);
 
-    double newDocWidth = VIRTUAL_A4_WIDTH * 0.42;
-    double newDocHeight = newDocWidth / 1.58;
+    // Keep the actual aspect ratio, but scale if it's too large
+    double newDocWidth = doc.width;
+    double newDocHeight = doc.height;
 
-    if (effectiveType == DocumentType.a4Document) {
-      newDocWidth = VIRTUAL_A4_WIDTH;
-      newDocHeight = VIRTUAL_A4_HEIGHT;
-    } else if (effectiveType == DocumentType.passport) {
-      newDocWidth = VIRTUAL_A4_WIDTH * 0.85;
-      newDocHeight = newDocWidth / 1.408;
-    } else if (effectiveType == DocumentType.rationCard) {
-      newDocWidth = VIRTUAL_A4_WIDTH * 0.90;
-      newDocHeight = newDocWidth / 1.418;
+    // Default scaling strategy if width is exactly 300 (which is the default from scanner screen)
+    if (newDocWidth == 300) {
+        if (effectiveType == DocumentType.a4Document) {
+          newDocWidth = VIRTUAL_A4_WIDTH;
+        } else if (effectiveType == DocumentType.passport) {
+          newDocWidth = VIRTUAL_A4_WIDTH * 0.85;
+        } else if (effectiveType == DocumentType.rationCard) {
+          newDocWidth = VIRTUAL_A4_WIDTH * 0.90;
+        } else {
+          newDocWidth = VIRTUAL_A4_WIDTH * 0.42; // default for ID cards
+        }
+
+        // Maintain the intrinsic aspect ratio
+        double aspect = doc.width / doc.height;
+        newDocHeight = newDocWidth / aspect;
     }
 
-    // Enforce display method limits early
+    if (effectiveType == DocumentType.a4Document) {
+        // Enforce full canvas for A4
+        newDocWidth = VIRTUAL_A4_WIDTH;
+        newDocHeight = VIRTUAL_A4_HEIGHT;
+    }
+
+    // Clamp dimensions to canvas limits to prevent overflow
+    if (newDocWidth > VIRTUAL_A4_WIDTH) {
+        double aspect = newDocWidth / newDocHeight;
+        newDocWidth = VIRTUAL_A4_WIDTH;
+        newDocHeight = newDocWidth / aspect;
+    }
+    if (newDocHeight > VIRTUAL_A4_HEIGHT) {
+        double aspect = newDocWidth / newDocHeight;
+        newDocHeight = VIRTUAL_A4_HEIGHT;
+        newDocWidth = newDocHeight * aspect;
+    }
+
     if (appState.displayMethod == DisplayMethod.frontOnly && state.isNotEmpty && (state[0] ?? []).isNotEmpty) {
       return;
     }
 
-    // Ensure effective type is updated in doc
     ScannedDocument newDoc = doc.copyWith(
       type: effectiveType,
       width: newDocWidth,
@@ -107,7 +130,6 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
       return;
     }
 
-    // If it's an A4 Document or the current page has items, put A4 on a NEW page
     if (effectiveType == DocumentType.a4Document) {
       pageIndex++;
       state = {
@@ -117,28 +139,36 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
       return;
     }
 
-    int currentIndex = pageDocs.length;
-    if (currentIndex >= 4) {
-      pageIndex++;
-      currentIndex = 0;
-      pageDocs = []; // New page
+    // Calculate layout dynamically based on actual sizes
+    double currentDx = margin;
+    double currentDy = margin;
+
+    // Find bottom-most item to place below it, or right-most item to place next to it
+    if (pageDocs.length == 1) {
+       currentDx = margin + pageDocs[0].width + margin;
+       currentDy = margin;
+       if (currentDx + newDocWidth > VIRTUAL_A4_WIDTH) {
+           currentDx = margin;
+           currentDy = margin + pageDocs[0].height + margin;
+       }
+    } else if (pageDocs.length == 2) {
+       currentDx = margin;
+       currentDy = margin + math.max(pageDocs[0].height, pageDocs[1].height) + margin;
+    } else if (pageDocs.length == 3) {
+       currentDx = margin + pageDocs[2].width + margin;
+       currentDy = pageDocs[2].dy;
+       if (currentDx + newDocWidth > VIRTUAL_A4_WIDTH) {
+           currentDx = margin;
+           currentDy = pageDocs[2].dy + pageDocs[2].height + margin;
+       }
     }
 
-    double currentDx = 10.0;
-    double currentDy = 10.0;
-
-    if (currentIndex == 0) {
-      currentDx = 10.0;
-      currentDy = 10.0;
-    } else if (currentIndex == 1) {
-      currentDx = 10.0 + newDocWidth + 10.0;
-      currentDy = 10.0;
-    } else if (currentIndex == 2) {
-      currentDx = 10.0;
-      currentDy = 10.0 + newDocHeight + 10.0;
-    } else if (currentIndex == 3) {
-      currentDx = 10.0 + newDocWidth + 10.0;
-      currentDy = 10.0 + newDocHeight + 10.0;
+    // If it still overflows height or max 4 items, new page
+    if (pageDocs.length >= 4 || currentDy + newDocHeight > VIRTUAL_A4_HEIGHT) {
+      pageIndex++;
+      pageDocs = [];
+      currentDx = margin;
+      currentDy = margin;
     }
 
     state = {
@@ -215,6 +245,21 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
       height: height,
     );
     updateDocumentAt(pageIndex, docIndex, newDoc);
+  }
+
+
+  void moveDocumentToTop(int pageIndex, int docIndex) {
+    if (!state.containsKey(pageIndex)) return;
+    final pageDocs = List<ScannedDocument>.from(state[pageIndex]!);
+    if (docIndex < 0 || docIndex >= pageDocs.length) return;
+
+    final doc = pageDocs.removeAt(docIndex);
+    pageDocs.add(doc);
+
+    state = {
+      ...state,
+      pageIndex: pageDocs,
+    };
   }
 
   void clear() {
