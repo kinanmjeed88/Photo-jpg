@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../providers/app_state.dart';
 import 'package:gal/gal.dart';
 
@@ -172,28 +173,70 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
-                  GestureDetector(
-                    onPanUpdate: _onResizeUpdate,
-                    onPanEnd: _onResizeEnd,
-                    child: const Icon(Icons.open_in_full, size: 20, color: Colors.blueAccent),
+                  Tooltip(
+                    message: 'تغيير الحجم',
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onPanDown: (_) {},
+                      onPanStart: (_) {},
+                      onPanUpdate: _onResizeUpdate,
+                      onPanEnd: _onResizeEnd,
+                      child: const Padding(
+                        padding: EdgeInsets.all(10),
+                        child: Icon(Icons.open_in_full, size: 20, color: Colors.blueAccent),
+                      ),
+                    ),
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.edit, size: 20, color: Colors.blueAccent),
-                    onPressed: widget.onEdit,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
+                  Tooltip(
+                    message: 'تعديل',
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(24),
+                        onTap: () {
+                          HapticFeedback.lightImpact();
+                          widget.onEdit();
+                        },
+                        child: const Padding(
+                          padding: EdgeInsets.all(10),
+                          child: Icon(Icons.edit, size: 20, color: Colors.blueAccent),
+                        ),
+                      ),
+                    ),
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.save_alt, size: 20, color: Colors.green),
-                    onPressed: _saveToGallery,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
+                  Tooltip(
+                    message: 'حفظ',
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(24),
+                        onTap: () {
+                          HapticFeedback.lightImpact();
+                          _saveToGallery();
+                        },
+                        child: const Padding(
+                          padding: EdgeInsets.all(10),
+                          child: Icon(Icons.save_alt, size: 20, color: Colors.green),
+                        ),
+                      ),
+                    ),
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.close, size: 20, color: Colors.redAccent),
-                    onPressed: widget.onDelete,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
+                  Tooltip(
+                    message: 'حذف',
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(24),
+                        onTap: () {
+                          HapticFeedback.lightImpact();
+                          widget.onDelete();
+                        },
+                        child: const Padding(
+                          padding: EdgeInsets.all(10),
+                          child: Icon(Icons.close, size: 20, color: Colors.redAccent),
+                        ),
+                      ),
+                    ),
                   ),
                 ],
               ),
