@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../providers/app_state.dart';
-import 'package:gal/gal.dart'; // Ensure gal is used for saving if needed, but we probably just use existing logic or add a callback.
+import 'package:gal/gal.dart';
 
 class DraggableResizableDocument extends StatefulWidget {
   final ScannedDocument document;
@@ -12,6 +12,7 @@ class DraggableResizableDocument extends StatefulWidget {
   final VoidCallback onEdit;
   final VoidCallback onDelete;
   final void Function(int pageIndex, int docIndex, double dx, double dy, double width, double height) onLayoutUpdate;
+  final void Function(int sourcePageIndex, int docIndex, ScannedDocument doc, double dx, double dy) onCrossPageMove;
   final double canvasWidth;
   final double canvasHeight;
   final double canvasScale;
@@ -28,6 +29,7 @@ class DraggableResizableDocument extends StatefulWidget {
     required this.onEdit,
     required this.onDelete,
     required this.onLayoutUpdate,
+    required this.onCrossPageMove,
     required this.canvasWidth,
     required this.canvasHeight,
     required this.canvasScale,
@@ -73,7 +75,7 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
 
   void _onResizeUpdate(DragUpdateDetails details) {
     setState(() {
-      double newWidth = width + details.delta.dx;
+      double newWidth = width + details.delta.dx / widget.canvasScale;
       if (newWidth < 50) newWidth = 50;
       double newHeight = newWidth / _documentAspectRatio;
 
@@ -98,10 +100,29 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
     widget.onLayoutUpdate(widget.pageIndex, widget.docIndex, dx, dy, width, height);
   }
 
-  Offset _customDragAnchorStrategy(Draggable<Object> draggable, BuildContext context, Offset position) {
-    final RenderBox renderObject = context.findRenderObject()! as RenderBox;
-    final Offset globalTopLeft = renderObject.localToGlobal(Offset.zero);
-    return position - globalTopLeft;
+  void _onPanStart(DragStartDetails details) {
+    if (widget.onDragStarted != null) {
+      widget.onDragStarted!();
+    }
+  }
+
+  void _onPanUpdate(DragUpdateDetails details) {
+    setState(() {
+      dx += details.delta.dx / widget.canvasScale;
+      dy += details.delta.dy / widget.canvasScale;
+
+      // Clamp horizontally
+      dx = dx.clamp(0.0, widget.canvasWidth - width);
+    });
+  }
+
+  void _onPanEnd(DragEndDetails details) {
+    // Check if we need to do cross-page move
+    if (dy < 0 || dy > widget.canvasHeight) {
+      widget.onCrossPageMove(widget.pageIndex, widget.docIndex, widget.document, dx, dy);
+    } else {
+      widget.onLayoutUpdate(widget.pageIndex, widget.docIndex, dx, dy, width, height);
+    }
   }
 
   Future<void> _saveToGallery() async {
@@ -119,16 +140,6 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
 
   @override
   Widget build(BuildContext context) {
-    final Map<String, dynamic> dragData = {
-      'document': widget.document,
-      'pageIndex': widget.pageIndex,
-      'docIndex': widget.docIndex,
-      'dx': dx,
-      'dy': dy,
-      'width': width,
-      'height': height,
-    };
-
     final double toolbarHeight = 40.0;
     final double totalHeight = height + (widget.isSelected ? toolbarHeight : 0);
 
@@ -194,32 +205,13 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
     return Positioned(
       left: dx,
       top: dy,
-      child: Draggable<Map<String, dynamic>>(
-        dragAnchorStrategy: _customDragAnchorStrategy,
-        onDragStarted: widget.onDragStarted,
-        data: dragData,
-        feedback: Material(
-          color: Colors.transparent,
-          child: SizedBox(
-            width: width * widget.canvasScale,
-            height: totalHeight * widget.canvasScale,
-            child: FittedBox(
-              fit: BoxFit.contain,
-              child: SizedBox(
-                width: width,
-                height: totalHeight,
-                child: documentWidget,
-              ),
-            ),
-          ),
-        ),
-        childWhenDragging: Opacity(
-          opacity: 0.3,
-          child: documentWidget,
-        ),
+      child: RepaintBoundary(
         child: GestureDetector(
-          behavior: HitTestBehavior.translucent,
+          behavior: HitTestBehavior.opaque,
           onTap: widget.onTap,
+          onPanStart: _onPanStart,
+          onPanUpdate: _onPanUpdate,
+          onPanEnd: _onPanEnd,
           child: documentWidget,
         ),
       ),

@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import '../providers/app_state.dart';
-import 'dart:math' as math;
 import '../services/scanner_service.dart';
 import '../services/pdf_service.dart';
 import '../widgets/draggable_document.dart';
@@ -250,152 +249,147 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                             child: SizedBox(
                                               width: AppConstants.kVirtualCanvasWidth,
                                               height: AppConstants.kVirtualCanvasHeight,
-                                              child: DragTarget<Map<String, dynamic>>(
-                                                onAcceptWithDetails: (details) {
-                                                  // Because DragTarget is inside FittedBox and SizedBox,
-                                                  // the render box's local coordinate system is exactly
-                                                  // the virtual canvas coordinate space (400 x 565.6).
-                                                  final RenderBox renderBox = context.findRenderObject()! as RenderBox;
-                                                  final localOffset = renderBox.globalToLocal(details.offset);
-
-                                                  final data = details.data;
-                                                  final doc = data['document'] as ScannedDocument;
-                                                  final sourcePageIndex = data['pageIndex'] as int;
-                                                  // We do not rely on sourceDocIndex directly for update/remove because
-                                                  // the Z-index might have changed while dragging (e.g. moveToTop was called).
-                                                  // Instead, we find the real index of the document in the source page based on its file path.
-
-                                                  // With custom top-left dragAnchorStrategy, localOffset maps 1:1
-                                                  // to the precise drop coordinate.
-                                                  double virtualDx = localOffset.dx;
-                                                  double virtualDy = localOffset.dy;
-
-                                                  virtualDx = math.max(0.0, math.min(virtualDx, AppConstants.kVirtualCanvasWidth - doc.width));
-                                                  virtualDy = math.max(0.0, math.min(virtualDy, AppConstants.kVirtualCanvasHeight - doc.height));
-
-                                                  final newDoc = doc.copyWith(dx: virtualDx, dy: virtualDy);
-
-                                                  final currentState = ref.read(scannedDocumentsProvider);
-                                                  final sourceDocs = currentState[sourcePageIndex] ?? [];
-
-                                                  // Find actual index to prevent Z-index corruption
-                                                  int actualDocIndex = sourceDocs.indexWhere((d) => d.file.path == doc.file.path);
-
-                                                  if (actualDocIndex == -1) {
-                                                      // Fallback to the provided index if for some reason it's not found
-                                                      actualDocIndex = data['docIndex'] as int;
-                                                  }
-
-                                                  if (sourcePageIndex == pageKey) {
-                                                    // Atomic update to avoid state stomping
-                                                    ref.read(scannedDocumentsProvider.notifier).updateAndMoveToTop(sourcePageIndex, actualDocIndex, newDoc);
-
-                                                    final currentDocsCount = ref.read(scannedDocumentsProvider)[pageKey]?.length ?? 0;
-                                                    if (currentDocsCount > 0) {
-                                                      _selectionNotifier.value = (pageIndex: pageKey, docIndex: currentDocsCount - 1);
-                                                    }
-                                                  } else {
-                                                    ref.read(scannedDocumentsProvider.notifier).removeDocumentAt(sourcePageIndex, actualDocIndex);
-                                                    final updatedState = ref.read(scannedDocumentsProvider);
-                                                    final targetPageDocs = updatedState[pageKey] ?? [];
-
-                                                    ref.read(scannedDocumentsProvider.notifier).setRawState( {
-                                                      ...updatedState,
-                                                      pageKey: [...targetPageDocs, newDoc],
-                                                    });
-
-                                                    _selectionNotifier.value = (pageIndex: pageKey, docIndex: targetPageDocs.length);
-                                                  }
+                                              child: GestureDetector(
+                                                behavior: HitTestBehavior.translucent,
+                                                onTap: () {
+                                                  _selectionNotifier.value = (pageIndex: null, docIndex: null);
                                                 },
-                                                builder: (context, candidateData, rejectedData) {
-                                                  return GestureDetector(
-                                                    behavior: HitTestBehavior.translucent,
-                                                    onTap: () {
-                                                      _selectionNotifier.value = (pageIndex: null, docIndex: null);
-                                                    },
-                                                    child: Stack(
-                                                      clipBehavior: Clip.hardEdge,
-                                                      children: [
-                                                        ...sortedDocs.map((entry) {
-                                                          final docIndex = entry.key;
-                                                          final doc = entry.value;
+                                                child: Stack(
+                                                  clipBehavior: Clip.hardEdge,
+                                                  children: [
+                                                    ...sortedDocs.map((entry) {
+                                                      final docIndex = entry.key;
+                                                      final doc = entry.value;
 
-                                                          return DraggableResizableDocument(
-                                                            key: ValueKey('${pageKey}_${doc.file.path}'),
-                                                            document: doc,
-                                                            pageIndex: pageKey,
-                                                            docIndex: docIndex,
-                                                            isSelected: selection.pageIndex == pageKey && selection.docIndex == docIndex,
-                                                            addFrame: appState.addFrame,
-                                                            canvasWidth: AppConstants.kVirtualCanvasWidth,
-                                                            canvasHeight: AppConstants.kVirtualCanvasHeight,
-                                                            canvasScale: constraints.maxWidth / AppConstants.kVirtualCanvasWidth,
-                                                            onDragStarted: () {
-                                                              ref.read(scannedDocumentsProvider.notifier).moveDocumentToTop(pageKey, docIndex);
-                                                              final currentDocsCount = ref.read(scannedDocumentsProvider)[pageKey]?.length ?? 0;
-                                                              _selectionNotifier.value = (pageIndex: pageKey, docIndex: currentDocsCount > 0 ? currentDocsCount - 1 : docIndex);
-                                                            },
-                                                            onTap: () {
-                                                              if (selection.pageIndex != pageKey || selection.docIndex != docIndex) {
-                                                                ref.read(scannedDocumentsProvider.notifier).moveDocumentToTop(pageKey, docIndex);
-                                                                final currentDocsCount = ref.read(scannedDocumentsProvider)[pageKey]?.length ?? 0;
-                                                                _selectionNotifier.value = (pageIndex: pageKey, docIndex: currentDocsCount > 0 ? currentDocsCount - 1 : docIndex);
-                                                              }
-                                                            },
-                                                            onEdit: () {
-                                                              Navigator.push(
-                                                                context,
-                                                                MaterialPageRoute(
-                                                                  builder: (context) => ImageEditorScreen(
-                                                                    pageIndex: pageKey,
-                                                                    documentIndex: docIndex
-                                                                  ),
-                                                                ),
-                                                              );
-                                                            },
-                                                            onDelete: () {
-                                                              showDialog(
-                                                                context: context,
-                                                                builder: (context) => AlertDialog(
-                                                                  title: const Text('تأكيد الحذف'),
-                                                                  content: const Text('هل أنت متأكد من أنك تريد حذف هذا المستمسك؟'),
-                                                                  actions: [
-                                                                    TextButton(
-                                                                      onPressed: () => Navigator.pop(context),
-                                                                      child: const Text('إلغاء'),
-                                                                    ),
-                                                                    TextButton(
-                                                                      onPressed: () {
-                                                                        ref.read(scannedDocumentsProvider.notifier).removeDocumentAt(pageKey, docIndex);
-                                                                        if (selection.pageIndex == pageKey && selection.docIndex == docIndex) {
-                                                                          _selectionNotifier.value = (pageIndex: null, docIndex: null);
-                                                                        } else if (selection.pageIndex == pageKey && selection.docIndex != null && selection.docIndex! > docIndex) {
-                                                                          _selectionNotifier.value = (pageIndex: selection.pageIndex, docIndex: selection.docIndex! - 1);
-                                                                        }
-                                                                        Navigator.pop(context);
-                                                                      },
-                                                                      child: const Text('حذف', style: TextStyle(color: Colors.red)),
-                                                                    ),
-                                                                  ],
-                                                                ),
-                                                              );
-                                                            },
-                                                            onLayoutUpdate: (pIndex, dIndex, dx, dy, width, height) {
-                                                              ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
-                                                                pIndex,
-                                                                dIndex,
-                                                                dx: dx,
-                                                                dy: dy,
-                                                                width: width,
-                                                                height: height,
-                                                              );
-                                                            },
+                                                      return DraggableResizableDocument(
+                                                        key: ValueKey('${pageKey}_${doc.file.path}'),
+                                                        document: doc,
+                                                        pageIndex: pageKey,
+                                                        docIndex: docIndex,
+                                                        isSelected: selection.pageIndex == pageKey && selection.docIndex == docIndex,
+                                                        addFrame: appState.addFrame,
+                                                        canvasWidth: AppConstants.kVirtualCanvasWidth,
+                                                        canvasHeight: AppConstants.kVirtualCanvasHeight,
+                                                        canvasScale: constraints.maxWidth / AppConstants.kVirtualCanvasWidth,
+                                                        onDragStarted: () {
+                                                          ref.read(scannedDocumentsProvider.notifier).moveDocumentToTop(pageKey, docIndex);
+                                                          final currentDocsCount = ref.read(scannedDocumentsProvider)[pageKey]?.length ?? 0;
+                                                          _selectionNotifier.value = (pageIndex: pageKey, docIndex: currentDocsCount > 0 ? currentDocsCount - 1 : docIndex);
+                                                        },
+                                                        onTap: () {
+                                                          if (selection.pageIndex != pageKey || selection.docIndex != docIndex) {
+                                                            ref.read(scannedDocumentsProvider.notifier).moveDocumentToTop(pageKey, docIndex);
+                                                            final currentDocsCount = ref.read(scannedDocumentsProvider)[pageKey]?.length ?? 0;
+                                                            _selectionNotifier.value = (pageIndex: pageKey, docIndex: currentDocsCount > 0 ? currentDocsCount - 1 : docIndex);
+                                                          }
+                                                        },
+                                                        onEdit: () {
+                                                          Navigator.push(
+                                                            context,
+                                                            MaterialPageRoute(
+                                                              builder: (context) => ImageEditorScreen(
+                                                                pageIndex: pageKey,
+                                                                documentIndex: docIndex
+                                                              ),
+                                                            ),
                                                           );
-                                                        }).toList(),
-                                                      ],
-                                                    ),
-                                                  );
-                                                },
+                                                        },
+                                                        onDelete: () {
+                                                          showDialog(
+                                                            context: context,
+                                                            builder: (context) => AlertDialog(
+                                                              title: const Text('تأكيد الحذف'),
+                                                              content: const Text('هل أنت متأكد من أنك تريد حذف هذا المستمسك؟'),
+                                                              actions: [
+                                                                TextButton(
+                                                                  onPressed: () => Navigator.pop(context),
+                                                                  child: const Text('إلغاء'),
+                                                                ),
+                                                                TextButton(
+                                                                  onPressed: () {
+                                                                    ref.read(scannedDocumentsProvider.notifier).removeDocumentAt(pageKey, docIndex);
+                                                                    if (selection.pageIndex == pageKey && selection.docIndex == docIndex) {
+                                                                      _selectionNotifier.value = (pageIndex: null, docIndex: null);
+                                                                    } else if (selection.pageIndex == pageKey && selection.docIndex != null && selection.docIndex! > docIndex) {
+                                                                      _selectionNotifier.value = (pageIndex: selection.pageIndex, docIndex: selection.docIndex! - 1);
+                                                                    }
+                                                                    Navigator.pop(context);
+                                                                  },
+                                                                  child: const Text('حذف', style: TextStyle(color: Colors.red)),
+                                                                ),
+                                                              ],
+                                                            ),
+                                                          );
+                                                        },
+                                                        onLayoutUpdate: (pIndex, dIndex, dx, dy, width, height) {
+                                                          ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
+                                                            pIndex,
+                                                            dIndex,
+                                                            dx: dx,
+                                                            dy: dy,
+                                                            width: width,
+                                                            height: height,
+                                                          );
+                                                        },
+                                                        onCrossPageMove: (sourcePageIndex, dIndex, movedDoc, dx, dy) {
+                                                          final currentState = ref.read(scannedDocumentsProvider);
+
+                                                          int targetPageKey = sourcePageIndex;
+                                                          double newDy = dy;
+
+                                                          if (dy < 0) {
+                                                            // Find previous page
+                                                            final pages = currentState.keys.toList()..sort();
+                                                            final idx = pages.indexOf(sourcePageIndex);
+                                                            if (idx > 0) {
+                                                              targetPageKey = pages[idx - 1];
+                                                              newDy = AppConstants.kVirtualCanvasHeight - movedDoc.height - 20.0;
+                                                            } else {
+                                                              newDy = 0.0;
+                                                            }
+                                                          } else if (dy > AppConstants.kVirtualCanvasHeight) {
+                                                            // Find next page
+                                                            final pages = currentState.keys.toList()..sort();
+                                                            final idx = pages.indexOf(sourcePageIndex);
+                                                            if (idx < pages.length - 1) {
+                                                              targetPageKey = pages[idx + 1];
+                                                              newDy = 20.0;
+                                                            } else {
+                                                              newDy = AppConstants.kVirtualCanvasHeight - movedDoc.height;
+                                                            }
+                                                          }
+
+                                                          if (targetPageKey != sourcePageIndex) {
+                                                            // Remove from source
+                                                            ref.read(scannedDocumentsProvider.notifier).removeDocumentAt(sourcePageIndex, dIndex);
+
+                                                            // Add to target
+                                                            final updatedState = ref.read(scannedDocumentsProvider);
+                                                            final targetPageDocs = updatedState[targetPageKey] ?? [];
+
+                                                            ScannedDocument newDoc = movedDoc.copyWith(dx: dx, dy: newDy);
+
+                                                            ref.read(scannedDocumentsProvider.notifier).setRawState( {
+                                                              ...updatedState,
+                                                              targetPageKey: [...targetPageDocs, newDoc],
+                                                            });
+
+                                                            _selectionNotifier.value = (pageIndex: targetPageKey, docIndex: targetPageDocs.length);
+                                                          } else {
+                                                            ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
+                                                              sourcePageIndex,
+                                                              dIndex,
+                                                              dx: dx,
+                                                              dy: newDy,
+                                                              width: movedDoc.width,
+                                                              height: movedDoc.height,
+                                                            );
+                                                          }
+                                                        }
+                                                      );
+                                                    }).toList(),
+                                                  ],
+                                                ),
                                               ),
                                             ),
                                           );

@@ -78,26 +78,26 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
     } else if (effectiveType == DocumentType.rationCard) {
       newDocWidth = VIRTUAL_A4_WIDTH * 0.90;
     } else if (effectiveType == DocumentType.passport) {
-      // Passport takes up about half an A4 page, which roughly means full width if horizontal, or we can just size it slightly larger than ID.
-      // Or size to width of A4 canvas * 0.9. Actually, let's just make it 0.9 to occupy nearly full width, half height.
-      // We will make passport width = VIRTUAL_A4_WIDTH * 0.85
-      // Wait, instruction: Occupies approximately half an A4 page.
-      // If it occupies half a page vertically, with an aspect ratio of ~1.4, width = VIRTUAL_A4_WIDTH * 0.85 is reasonable.
       newDocWidth = VIRTUAL_A4_WIDTH * 0.85;
+    } else if (effectiveType == DocumentType.nationalId || effectiveType == DocumentType.housingCard) {
+      // National ID / Housing Card: MUST be EXACTLY VIRTUAL_A4_WIDTH * 0.45
+      newDocWidth = VIRTUAL_A4_WIDTH * 0.45;
     } else {
-      // National ID / Housing Card: width = 0.45
       newDocWidth = VIRTUAL_A4_WIDTH * 0.45;
     }
 
     double newDocHeight = newDocWidth / intrinsicAspectRatio;
 
-    if (newDocWidth > VIRTUAL_A4_WIDTH) {
-        newDocWidth = VIRTUAL_A4_WIDTH;
-        newDocHeight = newDocWidth / intrinsicAspectRatio;
-    }
-    if (newDocHeight > VIRTUAL_A4_HEIGHT) {
-        newDocHeight = VIRTUAL_A4_HEIGHT;
-        newDocWidth = newDocHeight * intrinsicAspectRatio;
+    // Only clamp if not explicitly hard-clamped to 0.45
+    if (effectiveType != DocumentType.nationalId && effectiveType != DocumentType.housingCard) {
+      if (newDocWidth > VIRTUAL_A4_WIDTH) {
+          newDocWidth = VIRTUAL_A4_WIDTH;
+          newDocHeight = newDocWidth / intrinsicAspectRatio;
+      }
+      if (newDocHeight > VIRTUAL_A4_HEIGHT) {
+          newDocHeight = VIRTUAL_A4_HEIGHT;
+          newDocWidth = newDocHeight * intrinsicAspectRatio;
+      }
     }
 
     if (appState.displayMethod == DisplayMethod.frontOnly && state.isNotEmpty && (state[0] ?? []).isNotEmpty) {
