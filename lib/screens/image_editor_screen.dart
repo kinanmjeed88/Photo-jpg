@@ -26,9 +26,11 @@ Uint8List _processGalleryImage(Map<String, dynamic> args) {
   final int? rectHeight = args['rectHeight'];
   final double contrast = args['contrast'];
   final double brightness = args['brightness'];
+  final double sharpness = args['sharpness'];
 
   cv.Mat? src;
   cv.Mat? scaled;
+  cv.Mat? sharpened;
   cv.Mat? cropped;
   try {
     src = cv.imdecode(bytes, cv.IMREAD_COLOR);
@@ -37,6 +39,14 @@ Uint8List _processGalleryImage(Map<String, dynamic> args) {
       scaled = cv.convertScaleAbs(src, alpha: contrast, beta: brightness);
       src.dispose();
       src = scaled;
+    }
+
+    if (sharpness > 0) {
+      final blurred = cv.gaussianBlur(src, (0, 0), sharpness);
+      sharpened = cv.addWeighted(src, 1.5, blurred, -0.5, 0);
+      blurred.dispose();
+      src.dispose();
+      src = sharpened;
     }
 
     if (rectLeft != null && rectTop != null && rectWidth != null && rectHeight != null) {
@@ -64,11 +74,13 @@ String _processEditedImage(Map<String, dynamic> args) {
   final int? rectHeight = args['rectHeight'];
   final double contrast = args['contrast'];
   final double brightness = args['brightness'];
+  final double sharpness = args['sharpness'];
   final String tempPath = args['tempPath'];
   final String docPath = args['docPath'];
 
   cv.Mat? src;
   cv.Mat? scaled;
+  cv.Mat? sharpened;
   cv.Mat? cropped;
   try {
     src = cv.imdecode(bytes, cv.IMREAD_COLOR);
@@ -80,6 +92,14 @@ String _processEditedImage(Map<String, dynamic> args) {
       scaled = cv.convertScaleAbs(src, alpha: contrast, beta: brightness);
       src.dispose();
       src = scaled;
+    }
+
+    if (sharpness > 0) {
+      final blurred = cv.gaussianBlur(src, (0, 0), sharpness);
+      sharpened = cv.addWeighted(src, 1.5, blurred, -0.5, 0);
+      blurred.dispose();
+      src.dispose();
+      src = sharpened;
     }
 
     final outPath = '$tempPath/edited_${DateTime.now().millisecondsSinceEpoch}.jpg';
@@ -114,7 +134,7 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
 
   double _brightness = 0;
   double _contrast = 1;
-  double _saturation = 1;
+  double _sharpness = 0;
   bool _isProcessing = false;
 
   Future<void> _saveToGallery() async {
@@ -149,6 +169,7 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
         'rectHeight': rectHeight,
         'contrast': _contrast,
         'brightness': _brightness,
+        'sharpness': _sharpness,
       };
 
       final processedBytes = await _runGalleryIsolate(args);
@@ -192,6 +213,7 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
       final tempPath = tempDir.path;
       final contrast = _contrast;
       final brightness = _brightness;
+      final sharpness = _sharpness;
 
       final String docPath = doc.file.path;
 
@@ -203,6 +225,7 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
         'rectHeight': rectHeight,
         'contrast': contrast,
         'brightness': brightness,
+        'sharpness': sharpness,
         'tempPath': tempPath,
         'docPath': docPath,
       };
@@ -304,6 +327,20 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
                             min: 0.5,
                             max: 3.0,
                             onChanged: (v) => setState(() => _contrast = v),
+                          ),
+                        ),
+                      ],
+                    ),
+                    Row(
+                      children: [
+                        const Icon(Icons.lens_blur, size: 20),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Slider(
+                            value: _sharpness,
+                            min: 0.0,
+                            max: 10.0,
+                            onChanged: (v) => setState(() => _sharpness = v),
                           ),
                         ),
                       ],

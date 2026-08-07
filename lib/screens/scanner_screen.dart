@@ -3,11 +3,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import '../providers/app_state.dart';
+import 'dart:math' as math;
 import '../services/scanner_service.dart';
 import '../services/pdf_service.dart';
 import '../widgets/draggable_document.dart';
 import 'image_editor_screen.dart';
 import 'archive_screen.dart';
+import 'multi_crop_screen.dart';
 
 class ScannerScreen extends ConsumerStatefulWidget {
   const ScannerScreen({super.key});
@@ -62,9 +64,14 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
             finalFiles = await _scannerService.processSmartRecognition(processedFile);
             if (finalFiles.isEmpty) {
               // Smart Manual Cropper Fallback
-              final File? manuallyCropped = await _scannerService.manualCrop(processedFile.path);
-              if (manuallyCropped != null) {
-                finalFiles = [manuallyCropped];
+              final result = await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => MultiCropScreen(imageFile: processedFile),
+                ),
+              );
+              if (result != null && result is List<File>) {
+                finalFiles = result;
               } else {
                 finalFiles = [processedFile]; // Or continue if we don't want to add it
               }
@@ -73,16 +80,21 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
           for (var f in finalFiles) {
             final decoded = await decodeImageFromList(await f.readAsBytes());
-           double aspect = decoded.width / decoded.height;
-           double docWidth = 300;
-           double docHeight = docWidth / aspect;
+            double aspect = decoded.width / decoded.height;
+            double docWidth = 300;
+            double docHeight = docWidth / aspect;
 
-           ref.read(scannedDocumentsProvider.notifier).addDocument(ScannedDocument(
-            file: f,
-            type: docType,
-            width: docWidth,
-            height: docHeight,
-          ), ref.read(appStateProvider));
+            DocumentType specificType = docType;
+            if (f.path.endsWith('_A4.jpg')) {
+              specificType = DocumentType.a4Document;
+            }
+
+            ref.read(scannedDocumentsProvider.notifier).addDocument(ScannedDocument(
+              file: f,
+              type: specificType,
+              width: docWidth,
+              height: docHeight,
+            ), ref.read(appStateProvider));
           }
         }
       }
@@ -234,24 +246,63 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                         return 0;
                                       });
 
-                                      return GestureDetector(
-                                        behavior: HitTestBehavior.translucent,
-                                        onTap: () {
-                                          // Deselect if tapping empty space
-                                          setState(() {
-                                            _selectedPageIndex = null;
-                                            _selectedDocIndex = null;
-                                          });
+                                      return DragTarget<Map<String, dynamic>>(
+                                        onAcceptWithDetails: (details) {
+                                          final dragData = details.data;
+                                          final int sourcePageIndex = dragData['pageIndex'];
+                                          final int sourceDocIndex = dragData['docIndex'];
+                                          final ScannedDocument doc = dragData['document'];
+
+                                          final RenderBox targetBox = context.findRenderObject() as RenderBox;
+                                          final localOffset = targetBox.globalToLocal(details.offset);
+
+                                          // Scale the local UI offset to the virtual canvas scale
+                                          final scaleX = 400.0 / targetBox.size.width;
+                                          final scaleY = 565.6 / targetBox.size.height;
+
+                                          double virtualDx = localOffset.dx * scaleX;
+                                          double virtualDy = localOffset.dy * scaleY;
+
+                                          // Local Strict bounds clamping for drag
+                                          virtualDx = math.max(0.0, math.min(virtualDx, 400.0 - doc.width));
+                                          virtualDy = math.max(0.0, math.min(virtualDy, 565.6 - doc.height));
+
+                                          final newDoc = doc.copyWith(dx: virtualDx, dy: virtualDy);
+
+                                          // Update State
+                                          if (sourcePageIndex == pageKey) {
+                                            ref.read(scannedDocumentsProvider.notifier).updateDocumentAt(sourcePageIndex, sourceDocIndex, newDoc);
+                                          } else {
+                                            ref.read(scannedDocumentsProvider.notifier).removeDocumentAt(sourcePageIndex, sourceDocIndex);
+                                            // Force add the new document directly into the target page
+                                            final currentState = ref.read(scannedDocumentsProvider);
+                                            final targetPageDocs = currentState[pageKey] ?? [];
+
+                                            ref.read(scannedDocumentsProvider.notifier).state = {
+                                              ...currentState,
+                                              pageKey: [...targetPageDocs, newDoc],
+                                            };
+                                          }
                                         },
-                                        child: FittedBox(
-                                          fit: BoxFit.contain,
-                                          child: SizedBox(
-                                            width: 400.0,
-                                            height: 565.6,
-                                            child: Stack(
-                                              clipBehavior: Clip.hardEdge,
-                                              children: [
-                                                ...sortedDocs.map((entry) {
+                                        builder: (context, candidateData, rejectedData) {
+                                          return GestureDetector(
+                                            behavior: HitTestBehavior.translucent,
+                                            onTap: () {
+                                              // Deselect if tapping empty space
+                                              setState(() {
+                                                _selectedPageIndex = null;
+                                                _selectedDocIndex = null;
+                                              });
+                                            },
+                                            child: FittedBox(
+                                              fit: BoxFit.contain,
+                                              child: SizedBox(
+                                                width: 400.0,
+                                                height: 565.6,
+                                                child: Stack(
+                                                  clipBehavior: Clip.hardEdge,
+                                                  children: [
+                                                    ...sortedDocs.map((entry) {
                                                   final docIndex = entry.key;
                                                   final doc = entry.value;
 
@@ -325,10 +376,12 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                 },
                                               );
                                             }).toList(),
-                                              ],
+                                                  ],
+                                                ),
+                                              ),
                                             ),
-                                          ),
-                                        ),
+                                          );
+                                        },
                                       );
                                     },
                                   ),

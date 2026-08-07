@@ -180,7 +180,13 @@ Future<List<File>> _isolateProcessSmartCVLayer(
           // Apply warpPerspective EXCLUSIVELY on srcClone (Original Color Image)
           final warped = cv.warpPerspective(srcClone, transMat, (maxWidth, maxHeight));
 
-          final croppedPath = '$tempPath/smart_cropped_${DateTime.now().millisecondsSinceEpoch}_$count.jpg';
+          double cropArea = (maxWidth * maxHeight).toDouble();
+          double aspect = maxWidth / maxHeight;
+          bool isA4 = cropArea > (imageArea * 0.6) || (aspect >= 0.67 && aspect <= 0.75) || (aspect >= 1.35 && aspect <= 1.48);
+
+          String suffix = isA4 ? '_A4' : '_ID';
+          final croppedPath = '$tempPath/smart_cropped_${DateTime.now().millisecondsSinceEpoch}_${count}${suffix}.jpg';
+
           cv.imwrite(croppedPath, warped); // Save original color without Grayscale/CLAHE applied to final output
           croppedFiles.add(File(croppedPath));
 

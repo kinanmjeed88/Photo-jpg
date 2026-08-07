@@ -61,21 +61,6 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
     }
   }
 
-  void _onPanUpdate(DragUpdateDetails details) {
-    setState(() {
-      dx += details.delta.dx;
-      dy += details.delta.dy;
-
-      // Strict bounds clamping for drag
-      dx = math.max(0.0, math.min(dx, widget.canvasWidth - width));
-      dy = math.max(0.0, math.min(dy, widget.canvasHeight - height));
-    });
-  }
-
-  void _onPanEnd(DragEndDetails details) {
-    _triggerLayoutUpdate();
-  }
-
   double get _documentAspectRatio {
     switch (widget.document.type) {
       case DocumentType.nationalId:
@@ -86,6 +71,8 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
         return 1.418;
       case DocumentType.housingCard:
         return 1.58;
+      case DocumentType.a4Document:
+        return 1.414;
       default:
         return 1.58;
     }
@@ -123,24 +110,77 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
   }
 
   void _triggerLayoutUpdate() {
-    // We enforce strictly no automatic cross-page drag. Document stays on current page.
+    // Local layout update within the same page
     widget.onLayoutUpdate(widget.pageIndex, widget.docIndex, dx, dy, width, height);
   }
 
   @override
   Widget build(BuildContext context) {
+    final Map<String, dynamic> dragData = {
+      'document': widget.document,
+      'pageIndex': widget.pageIndex,
+      'docIndex': widget.docIndex,
+      'dx': dx,
+      'dy': dy,
+      'width': width,
+      'height': height,
+    };
+
     return Positioned(
       left: dx - 12,
       top: dy - 12,
-      child: GestureDetector(
-        behavior: HitTestBehavior.translucent,
-        onTap: widget.onTap,
-        onPanUpdate: _onPanUpdate,
-        onPanEnd: _onPanEnd,
-        child: Container(
-          width: width + 24,
-          height: height + 24,
-          child: Stack(
+      child: Draggable<Map<String, dynamic>>(
+        data: dragData,
+        feedback: Material(
+          color: Colors.transparent,
+          child: Container(
+            width: width + 24,
+            height: height + 24,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Positioned(
+                  left: 12,
+                  top: 12,
+                  width: width,
+                  height: height,
+                  child: Center(
+                    child: AspectRatio(
+                      aspectRatio: _documentAspectRatio,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.blueAccent.withOpacity(0.5), width: 3),
+                        ),
+                        child: Image.file(widget.document.file, fit: BoxFit.fill),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        childWhenDragging: Opacity(
+          opacity: 0.3,
+          child: _buildDocumentContent(),
+        ),
+        onDragEnd: (details) {
+          // DragTarget handles all drops.
+        },
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTap: widget.onTap,
+          child: _buildDocumentContent(),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDocumentContent() {
+    return Container(
+      width: width + 24,
+      height: height + 24,
+      child: Stack(
             clipBehavior: Clip.none,
             children: [
               Positioned(
@@ -218,8 +258,6 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
               ],
             ],
           ),
-        ),
-      ),
     );
   }
 }
