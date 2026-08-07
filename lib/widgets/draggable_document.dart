@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../providers/app_state.dart';
-import '../constants/app_constants.dart';
+
 
 class DraggableResizableDocument extends StatefulWidget {
   final ScannedDocument document;
@@ -122,9 +122,11 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
       'height': height,
     };
 
+    final double hitBoxPadding = 32.0;
+
     return Positioned(
-      left: dx - AppConstants.kDocumentVisualPadding,
-      top: dy - AppConstants.kDocumentVisualPadding,
+      left: dx - hitBoxPadding,
+      top: dy - hitBoxPadding,
       child: Draggable<Map<String, dynamic>>(
         dragAnchorStrategy: _customDragAnchorStrategy,
         onDragStarted: widget.onDragStarted,
@@ -132,20 +134,19 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
         feedback: Material(
           color: Colors.transparent,
           child: SizedBox(
-            // Physically scale the box so the logical hit bounds match visual bounds
-            width: (width + AppConstants.kDocumentVisualPaddingTotal) * widget.canvasScale,
-            height: (height + AppConstants.kDocumentVisualPaddingTotal) * widget.canvasScale,
+            width: (width + (hitBoxPadding * 2)) * widget.canvasScale,
+            height: (height + (hitBoxPadding * 2)) * widget.canvasScale,
             child: FittedBox(
               fit: BoxFit.contain,
               child: SizedBox(
-                width: width + AppConstants.kDocumentVisualPaddingTotal,
-                height: height + AppConstants.kDocumentVisualPaddingTotal,
+                width: width + (hitBoxPadding * 2),
+                height: height + (hitBoxPadding * 2),
                 child: Stack(
                   clipBehavior: Clip.none,
                   children: [
                     Positioned(
-                      left: AppConstants.kDocumentVisualPadding,
-                      top: AppConstants.kDocumentVisualPadding,
+                      left: hitBoxPadding,
+                      top: hitBoxPadding,
                       width: width,
                       height: height,
                       child: Center(
@@ -168,28 +169,28 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
         ),
         childWhenDragging: Opacity(
           opacity: 0.3,
-          child: _buildDocumentContent(),
+          child: _buildDocumentContent(hitBoxPadding),
         ),
         onDragEnd: (details) {},
         child: GestureDetector(
           behavior: HitTestBehavior.translucent,
           onTap: widget.onTap,
-          child: _buildDocumentContent(),
+          child: _buildDocumentContent(hitBoxPadding),
         ),
       ),
     );
   }
 
-  Widget _buildDocumentContent() {
-    return Container(
-      width: width + AppConstants.kDocumentVisualPaddingTotal,
-      height: height + AppConstants.kDocumentVisualPaddingTotal,
+  Widget _buildDocumentContent(double hitBoxPadding) {
+    return SizedBox(
+      width: width + (hitBoxPadding * 2),
+      height: height + (hitBoxPadding * 2),
       child: Stack(
             clipBehavior: Clip.none,
             children: [
               Positioned(
-                left: AppConstants.kDocumentVisualPadding,
-                top: AppConstants.kDocumentVisualPadding,
+                left: hitBoxPadding,
+                top: hitBoxPadding,
                 width: width,
                 height: height,
                 child: Center(
@@ -208,54 +209,65 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
               ),
               if (widget.isSelected) ...[
                 Positioned(
-                  top: 0,
-                  right: 0,
+                  top: hitBoxPadding - 24,
+                  right: hitBoxPadding - 24,
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTap: widget.onDelete,
                     child: Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: const BoxDecoration(
-                        color: Colors.redAccent,
-                        shape: BoxShape.circle,
+                      padding: const EdgeInsets.all(12),
+                      color: Colors.transparent,
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: const BoxDecoration(
+                          color: Colors.redAccent,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.close, color: Colors.white, size: 18),
                       ),
-                      child: const Icon(Icons.close, color: Colors.white, size: 16),
                     ),
                   ),
                 ),
                 Positioned(
-                  top: 0,
-                  left: 0,
+                  top: hitBoxPadding - 24,
+                  left: hitBoxPadding - 24,
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTap: widget.onEdit,
                     child: Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: const BoxDecoration(
-                        color: Colors.blueAccent,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(Icons.edit, color: Colors.white, size: 16),
-                    ),
-                  ),
-                ),
-                Positioned(
-                  bottom: 0,
-                  right: 0,
-                  child: GestureDetector(
-                    // Expand the hit test area so the gesture is caught within the padding
-                    behavior: HitTestBehavior.opaque,
-                    onPanUpdate: _onResizeUpdate,
-                    onPanEnd: _onResizeEnd,
-                    child: Padding(
                       padding: const EdgeInsets.all(12),
+                      color: Colors.transparent,
                       child: Container(
-                        padding: const EdgeInsets.all(8),
+                        padding: const EdgeInsets.all(6),
                         decoration: const BoxDecoration(
                           color: Colors.blueAccent,
                           shape: BoxShape.circle,
                         ),
-                        child: const Icon(Icons.open_in_full, color: Colors.white, size: 20),
+                        child: const Icon(Icons.edit, color: Colors.white, size: 18),
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  bottom: hitBoxPadding - 24,
+                  right: hitBoxPadding - 24,
+                  child: GestureDetector(
+                    // Expand the hit test area so the gesture is caught within the padding
+                    behavior: HitTestBehavior.opaque,
+                    onPanDown: (_) {},
+                    onPanStart: (_) {},
+                    onPanUpdate: _onResizeUpdate,
+                    onPanEnd: _onResizeEnd,
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      color: Colors.transparent,
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: const BoxDecoration(
+                          color: Colors.blueAccent,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.open_in_full, color: Colors.white, size: 18),
                       ),
                     ),
                   ),
