@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../providers/app_state.dart';
-
+import 'package:gal/gal.dart'; // Ensure gal is used for saving if needed, but we probably just use existing logic or add a callback.
 
 class DraggableResizableDocument extends StatefulWidget {
   final ScannedDocument document;
@@ -39,13 +39,6 @@ class DraggableResizableDocument extends StatefulWidget {
 }
 
 class _DraggableResizableDocumentState extends State<DraggableResizableDocument> {
-
-  Offset _customDragAnchorStrategy(Draggable<Object> draggable, BuildContext context, Offset position) {
-    final RenderBox renderObject = context.findRenderObject()! as RenderBox;
-    final Offset globalTopLeft = renderObject.localToGlobal(Offset.zero);
-    return position - globalTopLeft;
-  }
-
   late double dx;
   late double dy;
   late double width;
@@ -71,7 +64,6 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
     }
   }
 
-
   double get _documentAspectRatio {
     if (widget.document.originalHeight > 0) {
       return widget.document.originalWidth / widget.document.originalHeight;
@@ -79,21 +71,21 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
     return 1.0;
   }
 
-
   void _onResizeUpdate(DragUpdateDetails details) {
     setState(() {
       double newWidth = width + details.delta.dx;
       if (newWidth < 50) newWidth = 50;
-
       double newHeight = newWidth / _documentAspectRatio;
+
+      final double toolbarHeight = widget.isSelected ? 40.0 : 0.0;
 
       if (newWidth > widget.canvasWidth - dx) {
         newWidth = widget.canvasWidth - dx;
         newHeight = newWidth / _documentAspectRatio;
       }
 
-      if (newHeight > widget.canvasHeight - dy) {
-        newHeight = widget.canvasHeight - dy;
+      if (newHeight + toolbarHeight > widget.canvasHeight - dy) {
+        newHeight = widget.canvasHeight - dy - toolbarHeight;
         newWidth = newHeight * _documentAspectRatio;
       }
 
@@ -103,11 +95,26 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
   }
 
   void _onResizeEnd(DragEndDetails details) {
-    _triggerLayoutUpdate();
+    widget.onLayoutUpdate(widget.pageIndex, widget.docIndex, dx, dy, width, height);
   }
 
-  void _triggerLayoutUpdate() {
-    widget.onLayoutUpdate(widget.pageIndex, widget.docIndex, dx, dy, width, height);
+  Offset _customDragAnchorStrategy(Draggable<Object> draggable, BuildContext context, Offset position) {
+    final RenderBox renderObject = context.findRenderObject()! as RenderBox;
+    final Offset globalTopLeft = renderObject.localToGlobal(Offset.zero);
+    return position - globalTopLeft;
+  }
+
+  Future<void> _saveToGallery() async {
+      try {
+        await Gal.putImage(widget.document.file.path);
+        if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم الحفظ في المعرض')));
+        }
+      } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطأ في الحفظ: $e')));
+          }
+      }
   }
 
   @override
@@ -122,11 +129,71 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
       'height': height,
     };
 
-    final double hitBoxPadding = 32.0;
+    final double toolbarHeight = 40.0;
+    final double totalHeight = height + (widget.isSelected ? toolbarHeight : 0);
+
+    Widget documentWidget = SizedBox(
+      width: width,
+      height: totalHeight,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: width,
+            height: height,
+            child: AspectRatio(
+              aspectRatio: _documentAspectRatio,
+              child: Container(
+                decoration: BoxDecoration(
+                  border: widget.isSelected
+                      ? Border.all(color: Colors.blueAccent, width: 3)
+                      : (widget.addFrame ? Border.all(color: Colors.black, width: 1.0) : null),
+                ),
+                child: Image.file(widget.document.file, fit: BoxFit.contain),
+              ),
+            ),
+          ),
+          if (widget.isSelected)
+            Container(
+              width: width,
+              height: toolbarHeight,
+              color: Colors.grey[200],
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  GestureDetector(
+                    onPanUpdate: _onResizeUpdate,
+                    onPanEnd: _onResizeEnd,
+                    child: const Icon(Icons.open_in_full, size: 20, color: Colors.blueAccent),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.edit, size: 20, color: Colors.blueAccent),
+                    onPressed: widget.onEdit,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.save_alt, size: 20, color: Colors.green),
+                    onPressed: _saveToGallery,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 20, color: Colors.redAccent),
+                    onPressed: widget.onDelete,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
 
     return Positioned(
-      left: dx - hitBoxPadding,
-      top: dy - hitBoxPadding,
+      left: dx,
+      top: dy,
       child: Draggable<Map<String, dynamic>>(
         dragAnchorStrategy: _customDragAnchorStrategy,
         onDragStarted: widget.onDragStarted,
@@ -134,147 +201,28 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
         feedback: Material(
           color: Colors.transparent,
           child: SizedBox(
-            width: (width + (hitBoxPadding * 2)) * widget.canvasScale,
-            height: (height + (hitBoxPadding * 2)) * widget.canvasScale,
+            width: width * widget.canvasScale,
+            height: totalHeight * widget.canvasScale,
             child: FittedBox(
               fit: BoxFit.contain,
               child: SizedBox(
-                width: width + (hitBoxPadding * 2),
-                height: height + (hitBoxPadding * 2),
-                child: Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    Positioned(
-                      left: hitBoxPadding,
-                      top: hitBoxPadding,
-                      width: width,
-                      height: height,
-                      child: Center(
-                        child: AspectRatio(
-                          aspectRatio: _documentAspectRatio,
-                          child: Container(
-                            decoration: BoxDecoration(
-                              border: Border.all(color: Colors.blueAccent.withValues(alpha: 0.5), width: 3),
-                            ),
-                            child: Image.file(widget.document.file, fit: BoxFit.contain),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+                width: width,
+                height: totalHeight,
+                child: documentWidget,
               ),
             ),
           ),
         ),
         childWhenDragging: Opacity(
           opacity: 0.3,
-          child: _buildDocumentContent(hitBoxPadding),
+          child: documentWidget,
         ),
-        onDragEnd: (details) {},
         child: GestureDetector(
           behavior: HitTestBehavior.translucent,
           onTap: widget.onTap,
-          child: _buildDocumentContent(hitBoxPadding),
+          child: documentWidget,
         ),
       ),
-    );
-  }
-
-  Widget _buildDocumentContent(double hitBoxPadding) {
-    return SizedBox(
-      width: width + (hitBoxPadding * 2),
-      height: height + (hitBoxPadding * 2),
-      child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Positioned(
-                left: hitBoxPadding,
-                top: hitBoxPadding,
-                width: width,
-                height: height,
-                child: Center(
-                  child: AspectRatio(
-                    aspectRatio: _documentAspectRatio,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        border: widget.isSelected
-                            ? Border.all(color: Colors.blueAccent, width: 3)
-                            : (widget.addFrame ? Border.all(color: Colors.black, width: 1.0) : null),
-                      ),
-                      child: Image.file(widget.document.file, fit: BoxFit.contain),
-                    ),
-                  ),
-                ),
-              ),
-              if (widget.isSelected) ...[
-                Positioned(
-                  top: hitBoxPadding - 24,
-                  right: hitBoxPadding - 24,
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: widget.onDelete,
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      color: Colors.transparent,
-                      child: Container(
-                        padding: const EdgeInsets.all(6),
-                        decoration: const BoxDecoration(
-                          color: Colors.redAccent,
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(Icons.close, color: Colors.white, size: 18),
-                      ),
-                    ),
-                  ),
-                ),
-                Positioned(
-                  top: hitBoxPadding - 24,
-                  left: hitBoxPadding - 24,
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: widget.onEdit,
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      color: Colors.transparent,
-                      child: Container(
-                        padding: const EdgeInsets.all(6),
-                        decoration: const BoxDecoration(
-                          color: Colors.blueAccent,
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(Icons.edit, color: Colors.white, size: 18),
-                      ),
-                    ),
-                  ),
-                ),
-                Positioned(
-                  bottom: hitBoxPadding - 24,
-                  right: hitBoxPadding - 24,
-                  child: GestureDetector(
-                    // Expand the hit test area so the gesture is caught within the padding
-                    behavior: HitTestBehavior.opaque,
-                    onPanDown: (_) {},
-                    onPanStart: (_) {},
-                    onPanUpdate: _onResizeUpdate,
-                    onPanEnd: _onResizeEnd,
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      color: Colors.transparent,
-                      child: Container(
-                        padding: const EdgeInsets.all(6),
-                        decoration: const BoxDecoration(
-                          color: Colors.blueAccent,
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(Icons.open_in_full, color: Colors.white, size: 18),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ],
-          ),
     );
   }
 }

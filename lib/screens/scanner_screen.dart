@@ -258,7 +258,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                   final RenderBox renderBox = context.findRenderObject()! as RenderBox;
                                                   final localOffset = renderBox.globalToLocal(details.offset);
 
-                                                  final data = details.data as Map<String, dynamic>;
+                                                  final data = details.data;
                                                   final doc = data['document'] as ScannedDocument;
                                                   final sourcePageIndex = data['pageIndex'] as int;
                                                   // We do not rely on sourceDocIndex directly for update/remove because
