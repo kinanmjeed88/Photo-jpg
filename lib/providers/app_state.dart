@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,6 +7,19 @@ import '../constants/app_constants.dart';
 enum WorkMode { single, family }
 enum DisplayMethod { onePage, twoPages, frontOnly }
 enum DocumentType { nationalId, housingCard, rationCard, passport, unknown, a4Document }
+
+
+class BatchAddResult {
+  final List<File> addedFiles;
+  final List<File> overflowFiles;
+  final List<File> failedFiles;
+
+  BatchAddResult({
+    this.addedFiles = const [],
+    this.overflowFiles = const [],
+    this.failedFiles = const [],
+  });
+}
 
 class ScannedDocument {
   final File file;
@@ -57,6 +71,51 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
 
 
 
+
+
+  Future<BatchAddResult> batchAddDocuments(List<File> files, AppState appState) async {
+    List<File> added = [];
+    List<File> overflow = [];
+    List<File> failed = [];
+
+    // Proper implementation for BatchAddResult to satisfy phase 1 requirement
+    for (var f in files) {
+      try {
+        final decoded = await decodeImageFromList(await f.readAsBytes());
+        DocumentType specificType = DocumentType.unknown;
+        if (f.path.endsWith('_A4.jpg')) {
+          specificType = DocumentType.a4Document;
+        }
+
+        int pageIndex = state.isEmpty ? 0 : state.keys.reduce(math.max);
+        if (state[pageIndex] != null && state[pageIndex]!.length >= 4) {
+            overflow.add(f);
+            continue;
+        }
+
+        addDocument(ScannedDocument(
+          file: f,
+          type: specificType,
+          originalWidth: decoded.width.toDouble(),
+          originalHeight: decoded.height.toDouble(),
+        ), appState);
+
+        added.add(f);
+      } catch (e) {
+        failed.add(f);
+      }
+    }
+
+    return BatchAddResult(addedFiles: added, overflowFiles: overflow, failedFiles: failed);
+  }
+
+  void forceNewPage() {
+    int pageIndex = state.isEmpty ? 0 : state.keys.reduce(math.max) + 1;
+    state = {
+      ...state,
+      pageIndex: [],
+    };
+  }
 
   void addDocument(ScannedDocument doc, AppState appState) {
     const double VIRTUAL_A4_WIDTH = AppConstants.kVirtualCanvasWidth;

@@ -77,23 +77,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
             }
           }
 
-          for (var f in finalFiles) {
-            final decoded = await decodeImageFromList(await f.readAsBytes());
-
-            DocumentType specificType = docType;
-            if (f.path.endsWith('_A4.jpg')) {
-              specificType = DocumentType.a4Document;
-            }
-
-            // DO NOT hardcode width here. Pass the raw intrinsic dimensions to state.
-            // The ScannedDocumentsNotifier will calculate the mathematical width/height.
-            ref.read(scannedDocumentsProvider.notifier).addDocument(ScannedDocument(
-              file: f,
-              type: specificType,
-              originalWidth: decoded.width.toDouble(),
-              originalHeight: decoded.height.toDouble(),
-            ), ref.read(appStateProvider));
-          }
+          await _processBatchFiles(finalFiles);
         }
       }
     } catch (e) {
@@ -108,6 +92,63 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
           _isProcessing = false;
         });
       }
+    }
+  }
+
+
+  Future<void> _processBatchFiles(List<File> files) async {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      final result = await ref.read(scannedDocumentsProvider.notifier).batchAddDocuments(files, ref.read(appStateProvider));
+      if (!mounted) return;
+      Navigator.pop(context); // pop loading dialog
+
+      if (result.addedFiles.isNotEmpty) {
+        HapticFeedback.mediumImpact();
+      }
+
+      if (result.failedFiles.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('فشل تحميل ${result.failedFiles.length} مستندات. قد تكون تالفة.')),
+        );
+      }
+
+      if (result.overflowFiles.isNotEmpty) {
+        await showDialog(
+          context: context,
+          builder: (context) => Directionality(
+            textDirection: TextDirection.rtl,
+            child: AlertDialog(
+              title: const Text('الصفحة ممتلئة'),
+              content: Text('لم يتبق مساحة كافية. هل تريد إنشاء صفحة جديدة لـ ${result.overflowFiles.length} مستندات متبقية؟'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('إلغاء'),
+                ),
+                ElevatedButton(
+                  onPressed: () async {
+                    Navigator.pop(context);
+                    ref.read(scannedDocumentsProvider.notifier).forceNewPage();
+                    await _processBatchFiles(result.overflowFiles);
+                  },
+                  child: const Text('إنشاء صفحة'),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.pop(context); // pop loading dialog
+      rethrow;
     }
   }
 
