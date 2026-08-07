@@ -12,6 +12,35 @@ import 'package:gal/gal.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../providers/app_state.dart';
 
+
+Future<Map<String, dynamic>> _runProxyIsolate(Map<String, dynamic> args) {
+  return Isolate.run(() => _generateProxy(args));
+}
+
+Map<String, dynamic> _generateProxy(Map<String, dynamic> args) {
+  final Uint8List bytes = args['bytes'];
+  cv.Mat? src;
+  cv.Mat? scaled;
+  try {
+    src = cv.imdecode(bytes, cv.IMREAD_COLOR);
+    double scale = 1.0;
+    int maxDim = src.cols > src.rows ? src.cols : src.rows;
+    if (maxDim > 1080) {
+      scale = 1080.0 / maxDim;
+      scaled = cv.resize(src, (0, 0), fx: scale, fy: scale);
+      final (_, encodedBytes) = cv.imencode('.jpg', scaled);
+      return {'bytes': encodedBytes, 'scale': scale};
+    }
+    return {'bytes': bytes, 'scale': 1.0};
+  } catch (e) {
+    print('Proxy Isolate failed: $e');
+    return {'bytes': bytes, 'scale': 1.0};
+  } finally {
+    src?.dispose();
+    scaled?.dispose();
+  }
+}
+
 Future<Uint8List> _runGalleryIsolate(Map<String, dynamic> args) {
   return Isolate.run(() => _processGalleryImage(args));
 }
@@ -69,15 +98,25 @@ Uint8List _processGalleryImage(Map<String, dynamic> args) {
 }
 
 
-Future<Uint8List> _runPreviewIsolate(Map<String, dynamic> args) async {
+Future<Map<String, dynamic>> _runPreviewIsolate(Map<String, dynamic> args) async {
   final Uint8List bytes = args['bytes'];
+  final double contrast = args['contrast'];
+  final double brightness = args['brightness'];
   final double sharpness = args['sharpness'];
+  final int version = args['version'];
 
   cv.Mat? src;
+  cv.Mat? scaled;
   cv.Mat? sharpened;
   try {
     src = cv.imdecode(bytes, cv.IMREAD_COLOR);
-    if (src.isEmpty) return bytes;
+    if (src.isEmpty) return {'bytes': bytes, 'version': version};
+
+    if (contrast != 1.0 || brightness != 0.0) {
+      scaled = cv.convertScaleAbs(src, alpha: contrast, beta: brightness);
+      src.dispose();
+      src = scaled;
+    }
 
     if (sharpness > 0) {
       final blurred = cv.gaussianBlur(src, (0, 0), sharpness);
@@ -87,13 +126,11 @@ Future<Uint8List> _runPreviewIsolate(Map<String, dynamic> args) async {
       src = sharpened;
     }
 
-    // Scale down image slightly for live preview to ensure it's fast (<100ms latency target)
-    // Actually, only encode to JPG.
     final (_, encodedBytes) = cv.imencode('.jpg', src);
-    return encodedBytes;
+    return {'bytes': encodedBytes, 'version': version};
   } catch (e) {
     print('OpenCV Preview Isolate failed: $e');
-    return bytes;
+    return {'bytes': bytes, 'version': version};
   } finally {
     src?.dispose();
   }
@@ -175,7 +212,11 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
   Timer? _debounceTimer;
   ValueNotifier<Uint8List?> _previewImage = ValueNotifier<Uint8List?>(null);
   Uint8List? _originalBytes;
-  int _isolateTaskCounter = 0;
+
+  Uint8List? _proxyBytes;
+  double _proxyScale = 1.0;
+  int _previewVersion = 0;
+
   bool _isLoadingPreview = false;
 
   @override
@@ -196,49 +237,55 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
     if (pageDocs == null) return;
     final doc = pageDocs[widget.documentIndex];
     _originalBytes = await doc.file.readAsBytes();
+
+    setState(() => _isLoadingPreview = true);
+    final proxyResult = await _runProxyIsolate({'bytes': _originalBytes!});
+    _proxyBytes = proxyResult['bytes'];
+    _proxyScale = proxyResult['scale'];
+
+    _generateLivePreview();
   }
 
   void _onSliderChanged() {
     if (_debounceTimer?.isActive ?? false) _debounceTimer!.cancel();
 
-    // We update the local UI sliders immediately without blocking.
-    // The ColorFiltered widget already handles brightness/contrast instantly.
-    // But for Sharpness, we need OpenCV, so we debounce and generate a preview.
+    _previewVersion++;
 
     _debounceTimer = Timer(const Duration(milliseconds: 100), () {
-      if (_originalBytes != null) {
+      if (_proxyBytes != null) {
         _generateLivePreview();
       }
     });
   }
 
   Future<void> _generateLivePreview() async {
-    if (_originalBytes == null) return;
+    if (_proxyBytes == null) return;
 
-    final int currentTaskId = ++_isolateTaskCounter;
+    final int currentVersion = _previewVersion;
     setState(() => _isLoadingPreview = true);
 
     try {
       final args = {
-        'bytes': _originalBytes!,
-        // We only pass sharpness for the live preview because brightness/contrast
-        // is ALREADY handled instantly at 60fps by ColorFiltered widget in the UI!
-        // Wait, if we are returning a Uint8List to display, it will be inside ColorFiltered.
-        // So we should ONLY apply sharpness in this preview.
+        'bytes': _proxyBytes!,
+        'contrast': _contrast,
+        'brightness': _brightness,
         'sharpness': _sharpness,
+        'version': currentVersion,
       };
 
-      // Create a top-level isolate function for just sharpness
-      final processedBytes = await compute(_runPreviewIsolate, args);
+      final result = await compute(_runPreviewIsolate, args);
 
-      // Only update if this is the latest task
-      if (currentTaskId == _isolateTaskCounter) {
-        _previewImage.value = processedBytes;
-        if (mounted) setState(() => _isLoadingPreview = false);
+      final int resultVersion = result['version'];
+      if (resultVersion < _previewVersion) {
+        // Discard stale result
+        return;
       }
+
+      _previewImage.value = result['bytes'];
+      if (mounted) setState(() => _isLoadingPreview = false);
     } catch (e) {
       print('Preview Isolate error: $e');
-      if (currentTaskId == _isolateTaskCounter && mounted) {
+      if (currentVersion == _previewVersion && mounted) {
         setState(() => _isLoadingPreview = false);
       }
     }
@@ -264,10 +311,10 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
       final bytes = await doc.file.readAsBytes();
 
       final rect = editorKey.currentState?.getCropRect();
-      final rectLeft = rect?.left.toInt();
-      final rectTop = rect?.top.toInt();
-      final rectWidth = rect?.width.toInt();
-      final rectHeight = rect?.height.toInt();
+      final rectLeft = rect != null ? (rect.left / _proxyScale).toInt() : null;
+      final rectTop = rect != null ? (rect.top / _proxyScale).toInt() : null;
+      final rectWidth = rect != null ? (rect.width / _proxyScale).toInt() : null;
+      final rectHeight = rect != null ? (rect.height / _proxyScale).toInt() : null;
 
       final args = {
         'bytes': bytes,
@@ -312,10 +359,10 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
       final bytes = await doc.file.readAsBytes();
 
       final rect = editorKey.currentState?.getCropRect();
-      final rectLeft = rect?.left.toInt();
-      final rectTop = rect?.top.toInt();
-      final rectWidth = rect?.width.toInt();
-      final rectHeight = rect?.height.toInt();
+      final rectLeft = rect != null ? (rect.left / _proxyScale).toInt() : null;
+      final rectTop = rect != null ? (rect.top / _proxyScale).toInt() : null;
+      final rectWidth = rect != null ? (rect.width / _proxyScale).toInt() : null;
+      final rectHeight = rect != null ? (rect.height / _proxyScale).toInt() : null;
 
       final tempDir = await getTemporaryDirectory();
       final tempPath = tempDir.path;
@@ -395,45 +442,25 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
         : Column(
             children: [
               Expanded(
-                child: ColorFiltered(
-                  colorFilter: ColorFilter.matrix([
-                    _contrast, 0, 0, 0, _brightness,
-                    0, _contrast, 0, 0, _brightness,
-                    0, 0, _contrast, 0, _brightness,
-                    0, 0, 0, 1, 0,
-                  ]),
-                  child: ValueListenableBuilder<Uint8List?>(
-                    valueListenable: _previewImage,
-                    builder: (context, previewBytes, child) {
-                      return previewBytes != null
-                        ? ExtendedImage.memory(
-                            previewBytes,
-                            fit: BoxFit.contain,
-                            mode: ExtendedImageMode.editor,
-                            extendedImageEditorKey: editorKey,
-                            initEditorConfigHandler: (ExtendedImageState? state) {
-                              return EditorConfig(
-                                maxScale: 8.0,
-                                cropRectPadding: const EdgeInsets.all(20.0),
-                                hitTestSize: 20.0,
-                              );
-                            },
-                          )
-                        : ExtendedImage.file(
-                            doc.file,
-                            fit: BoxFit.contain,
-                            mode: ExtendedImageMode.editor,
-                            extendedImageEditorKey: editorKey,
-                            initEditorConfigHandler: (ExtendedImageState? state) {
-                              return EditorConfig(
-                                maxScale: 8.0,
-                                cropRectPadding: const EdgeInsets.all(20.0),
-                                hitTestSize: 20.0,
-                              );
-                            },
-                          );
-                    }
-                  ),
+                child: ValueListenableBuilder<Uint8List?>(
+                  valueListenable: _previewImage,
+                  builder: (context, previewBytes, child) {
+                    return previewBytes != null
+                      ? ExtendedImage.memory(
+                          previewBytes,
+                          fit: BoxFit.contain,
+                          mode: ExtendedImageMode.editor,
+                          extendedImageEditorKey: editorKey,
+                          initEditorConfigHandler: (ExtendedImageState? state) {
+                            return EditorConfig(
+                              maxScale: 8.0,
+                              cropRectPadding: const EdgeInsets.all(20.0),
+                              hitTestSize: 20.0,
+                            );
+                          },
+                        )
+                      : const Center(child: CircularProgressIndicator());
+                  }
                 ),
               ),
               Container(
