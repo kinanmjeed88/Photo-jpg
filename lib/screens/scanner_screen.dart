@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:flutter/services.dart';
 import '../providers/app_state.dart';
 import '../services/scanner_service.dart';
 import '../services/pdf_service.dart';
@@ -408,19 +409,35 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                   child: Row(
                     children: [
                       Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: _showImageSourceOptions,
-                          icon: const Icon(Icons.camera_alt),
-                          label: const Text('إضافة صورة'),
+                        child: Tooltip(
+                          message: 'إضافة صورة جديدة',
+                          child: _ScalingButton(
+                            child: ElevatedButton.icon(
+                              onPressed: () {
+                                HapticFeedback.mediumImpact();
+                                _showImageSourceOptions();
+                              },
+                              icon: const Icon(Icons.camera_alt),
+                              label: const Text('إضافة صورة'),
+                            ),
+                          ),
                         ),
                       ),
                       const SizedBox(width: 16),
                       Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: pages.isEmpty ? null : _generatePdf,
-                          icon: const Icon(Icons.picture_as_pdf),
-                          label: const Text('إنشاء PDF'),
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                        child: Tooltip(
+                          message: 'إنشاء وحفظ ملف PDF',
+                          child: _ScalingButton(
+                            child: ElevatedButton.icon(
+                              onPressed: pages.isEmpty ? null : () {
+                                HapticFeedback.mediumImpact();
+                                _generatePdf();
+                              },
+                              icon: const Icon(Icons.picture_as_pdf),
+                              label: const Text('إنشاء PDF'),
+                              style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                            ),
+                          ),
                         ),
                       ),
                     ],
@@ -428,6 +445,32 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                 ),
               ],
             ),
+    );
+  }
+}
+
+class _ScalingButton extends StatefulWidget {
+  final Widget child;
+  const _ScalingButton({required this.child});
+
+  @override
+  State<_ScalingButton> createState() => _ScalingButtonState();
+}
+
+class _ScalingButtonState extends State<_ScalingButton> {
+  bool isPressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedScale(
+      scale: isPressed ? 0.95 : 1.0,
+      duration: const Duration(milliseconds: 100),
+      child: Listener(
+        onPointerDown: (_) => setState(() => isPressed = true),
+        onPointerUp: (_) => setState(() => isPressed = false),
+        onPointerCancel: (_) => setState(() => isPressed = false),
+        child: widget.child,
+      ),
     );
   }
 }

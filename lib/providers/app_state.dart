@@ -83,6 +83,7 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
       // National ID / Housing Card: MUST be EXACTLY VIRTUAL_A4_WIDTH * 0.45
       newDocWidth = VIRTUAL_A4_WIDTH * 0.45;
     } else {
+      effectiveType = DocumentType.nationalId;
       newDocWidth = VIRTUAL_A4_WIDTH * 0.45;
     }
 
@@ -138,73 +139,93 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
       return;
     }
 
-    // Advanced layout engine to find the first non-overlapping position
     double currentDx = margin;
     double currentDy = margin;
-    bool foundPosition = false;
 
-    // A simple grid search or bin packing
-    double bestDy = margin;
+    // Advanced layout engine to find the first non-overlapping position
+    if (effectiveType == DocumentType.nationalId || effectiveType == DocumentType.housingCard) {
+      int index = pageDocs.length;
+      if (index == 0) {
+        currentDx = 20.0;
+        currentDy = 20.0;
+      } else if (index == 1) {
+        currentDx = (VIRTUAL_A4_WIDTH * 0.45) + 40.0;
+        currentDy = 20.0;
+      } else if (index == 2) {
+        double firstDocHeight = pageDocs.isNotEmpty ? pageDocs.first.height : newDocHeight;
+        currentDx = 20.0;
+        currentDy = firstDocHeight + 40.0;
+      } else if (index == 3) {
+        double firstDocHeight = pageDocs.isNotEmpty ? pageDocs.first.height : newDocHeight;
+        currentDx = (VIRTUAL_A4_WIDTH * 0.45) + 40.0;
+        currentDy = firstDocHeight + 40.0;
+      } else {
+        // If more than 4 on page, fallback to forcing new page
+        currentDy = VIRTUAL_A4_HEIGHT + 1;
+      }
+    } else {
+      bool foundPosition = false;
 
-    // We want to flow left to right, top to bottom.
-    // Let's sort existing docs by dy then dx
-    var sortedDocs = List<ScannedDocument>.from(pageDocs);
-    sortedDocs.sort((a, b) {
-      int dyCmp = a.dy.compareTo(b.dy);
-      if (dyCmp != 0) return dyCmp;
-      return a.dx.compareTo(b.dx);
-    });
+      // We want to flow left to right, top to bottom.
+      // Let's sort existing docs by dy then dx
+      var sortedDocs = List<ScannedDocument>.from(pageDocs);
+      sortedDocs.sort((a, b) {
+        int dyCmp = a.dy.compareTo(b.dy);
+        if (dyCmp != 0) return dyCmp;
+        return a.dx.compareTo(b.dx);
+      });
 
-    // Try to place to the right of the last document, or below it
-    if (sortedDocs.isNotEmpty) {
-        ScannedDocument lastDoc = sortedDocs.last;
-        double rightDx = lastDoc.dx + lastDoc.width + margin;
-        if (rightDx + newDocWidth <= VIRTUAL_A4_WIDTH) {
-            currentDx = rightDx;
-            currentDy = lastDoc.dy;
-        } else {
-            currentDx = margin;
-            // Find max height in the current row
-            double maxRowHeight = 0;
-            for (var d in sortedDocs) {
-                if (d.dy >= lastDoc.dy - 10 && d.dy <= lastDoc.dy + 10) {
-                    if (d.height > maxRowHeight) maxRowHeight = d.height;
-                }
-            }
-            if (maxRowHeight == 0) maxRowHeight = lastDoc.height; // Fallback
-            currentDy = lastDoc.dy + maxRowHeight + margin;
-        }
-    }
+      // Try to place to the right of the last document, or below it
+      if (sortedDocs.isNotEmpty) {
+          ScannedDocument lastDoc = sortedDocs.last;
+          double rightDx = lastDoc.dx + lastDoc.width + margin;
+          if (rightDx + newDocWidth <= VIRTUAL_A4_WIDTH) {
+              currentDx = rightDx;
+              currentDy = lastDoc.dy;
+          } else {
+              currentDx = margin;
+              // Find max height in the current row
+              double maxRowHeight = 0;
+              for (var d in sortedDocs) {
+                  if (d.dy >= lastDoc.dy - 10 && d.dy <= lastDoc.dy + 10) {
+                      if (d.height > maxRowHeight) maxRowHeight = d.height;
+                  }
+              }
+              if (maxRowHeight == 0) maxRowHeight = lastDoc.height; // Fallback
+              currentDy = lastDoc.dy + maxRowHeight + margin;
+          }
+      }
 
-    // Check overlap helper
-    bool hasOverlap(double x, double y, double w, double h) {
-        for (var d in pageDocs) {
-            if (!(x + w + margin < d.dx || x > d.dx + d.width + margin ||
-                  y + h + margin < d.dy || y > d.dy + d.height + margin)) {
-                return true;
-            }
-        }
-        return false;
-    }
+      // Check overlap helper
+      bool hasOverlap(double x, double y, double w, double h) {
+          for (var d in pageDocs) {
+              if (!(x + w + margin < d.dx || x > d.dx + d.width + margin ||
+                    y + h + margin < d.dy || y > d.dy + d.height + margin)) {
+                  return true;
+              }
+          }
+          return false;
+      }
 
-    // Grid search if the heuristic placement overlaps
-    if (hasOverlap(currentDx, currentDy, newDocWidth, newDocHeight)) {
-        foundPosition = false;
-        for (double y = margin; y + newDocHeight <= VIRTUAL_A4_HEIGHT; y += 20) {
-            for (double x = margin; x + newDocWidth <= VIRTUAL_A4_WIDTH; x += 20) {
-                if (!hasOverlap(x, y, newDocWidth, newDocHeight)) {
-                    currentDx = x;
-                    currentDy = y;
-                    foundPosition = true;
-                    break;
-                }
-            }
-            if (foundPosition) break;
-        }
-        if (!foundPosition) {
-            // Force new page if no room
-            currentDy = VIRTUAL_A4_HEIGHT + 1;
-        }
+      // Grid search if the heuristic placement overlaps
+      if (hasOverlap(currentDx, currentDy, newDocWidth, newDocHeight)) {
+          foundPosition = false;
+          for (double y = margin; y + newDocHeight <= VIRTUAL_A4_HEIGHT; y += 20) {
+              for (double x = margin; x + newDocWidth <= VIRTUAL_A4_WIDTH; x += 20) {
+                  if (!hasOverlap(x, y, newDocWidth, newDocHeight)) {
+                      currentDx = x;
+                      currentDy = y;
+                      foundPosition = true;
+                      break;
+                  }
+              }
+              if (foundPosition) break;
+          }
+          if (!foundPosition) {
+              // Force new page if no room
+              currentDy = VIRTUAL_A4_HEIGHT + 1;
+          }
+      }
     }
 
     if (currentDy + newDocHeight > VIRTUAL_A4_HEIGHT) {
