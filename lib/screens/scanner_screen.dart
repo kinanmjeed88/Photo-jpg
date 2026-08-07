@@ -349,15 +349,15 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                       _selectedDocIndex = docIndex;
                                                     });
                                                   }
-                                                  ref.read(scannedDocumentsProvider.notifier).moveDocumentToTop(pageKey, docIndex);
                                                 },
                                                 onTap: () {
                                                   if (_selectedPageIndex != pageKey || _selectedDocIndex != docIndex) {
+                                                    ref.read(scannedDocumentsProvider.notifier).moveDocumentToTop(pageKey, docIndex);
+                                                    final currentDocsCount = ref.read(scannedDocumentsProvider)[pageKey]?.length ?? 0;
                                                     setState(() {
                                                       _selectedPageIndex = pageKey;
-                                                      _selectedDocIndex = docIndex;
+                                                      _selectedDocIndex = currentDocsCount > 0 ? currentDocsCount - 1 : docIndex;
                                                     });
-                                                    ref.read(scannedDocumentsProvider.notifier).moveDocumentToTop(pageKey, docIndex);
                                                   }
                                                 },
                                                 onEdit: () {
