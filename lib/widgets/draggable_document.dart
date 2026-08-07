@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'dart:math' as math;
 import '../providers/app_state.dart';
 
 class DraggableResizableDocument extends StatefulWidget {
@@ -14,6 +13,8 @@ class DraggableResizableDocument extends StatefulWidget {
   final void Function(int pageIndex, int docIndex, double dx, double dy, double width, double height) onLayoutUpdate;
   final double canvasWidth;
   final double canvasHeight;
+  final double canvasScale;
+  final VoidCallback? onDragStarted;
 
   const DraggableResizableDocument({
     super.key,
@@ -28,6 +29,8 @@ class DraggableResizableDocument extends StatefulWidget {
     required this.onLayoutUpdate,
     required this.canvasWidth,
     required this.canvasHeight,
+    required this.canvasScale,
+    this.onDragStarted,
   });
 
   @override
@@ -35,6 +38,13 @@ class DraggableResizableDocument extends StatefulWidget {
 }
 
 class _DraggableResizableDocumentState extends State<DraggableResizableDocument> {
+
+  Offset _customDragAnchorStrategy(Draggable<Object> draggable, BuildContext context, Offset position) {
+    final RenderBox renderObject = context.findRenderObject()! as RenderBox;
+    final Offset globalTopLeft = renderObject.localToGlobal(Offset.zero);
+    return position - globalTopLeft;
+  }
+
   late double dx;
   late double dy;
   late double width;
@@ -122,10 +132,15 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
       left: dx - 12,
       top: dy - 12,
       child: Draggable<Map<String, dynamic>>(
+        dragAnchorStrategy: _customDragAnchorStrategy,
+        onDragStarted: widget.onDragStarted,
         data: dragData,
-        feedback: Material(
-          color: Colors.transparent,
-          child: Container(
+        feedback: Transform.scale(
+          scale: widget.canvasScale,
+          alignment: Alignment.topLeft,
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
             width: width + 24,
             height: height + 24,
             child: Stack(
@@ -150,6 +165,7 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
                 ),
               ],
             ),
+          ),
           ),
         ),
         childWhenDragging: Opacity(

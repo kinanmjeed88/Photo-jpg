@@ -268,6 +268,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                           final sourceDocIndex = data['docIndex'] as int;
 
                                           // Compensate for the 12px drag padding offset in the Draggable
+                                          // Because of custom dragAnchorStrategy, localOffset is exactly the top-left corner of the container (not the pointer).
+                                          // The container has 12px padding left/top for the shadow/border.
                                           double virtualDx = (localOffset.dx * scaleX) + 12.0;
                                           double virtualDy = (localOffset.dy * scaleY) + 12.0;
 
@@ -339,11 +341,24 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                     addFrame: appState.addFrame,
                                                     canvasWidth: 400.0,
                                                     canvasHeight: 565.6,
+                                                    canvasScale: constraints.maxWidth / 400.0,
+                                                onDragStarted: () {
+                                                  if (_selectedPageIndex != pageKey || _selectedDocIndex != docIndex) {
+                                                    setState(() {
+                                                      _selectedPageIndex = pageKey;
+                                                      _selectedDocIndex = docIndex;
+                                                    });
+                                                  }
+                                                  ref.read(scannedDocumentsProvider.notifier).moveDocumentToTop(pageKey, docIndex);
+                                                },
                                                 onTap: () {
-                                                  setState(() {
-                                                    _selectedPageIndex = pageKey;
-                                                    _selectedDocIndex = docIndex;
-                                                  });
+                                                  if (_selectedPageIndex != pageKey || _selectedDocIndex != docIndex) {
+                                                    setState(() {
+                                                      _selectedPageIndex = pageKey;
+                                                      _selectedDocIndex = docIndex;
+                                                    });
+                                                    ref.read(scannedDocumentsProvider.notifier).moveDocumentToTop(pageKey, docIndex);
+                                                  }
                                                 },
                                                 onEdit: () {
                                                   Navigator.push(
