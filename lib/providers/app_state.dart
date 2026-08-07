@@ -4,7 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 enum WorkMode { single, family }
 enum DisplayMethod { onePage, twoPages, frontOnly }
-enum DocumentType { nationalId, housingCard, rationCard, passport, unknown }
+enum DocumentType { nationalId, housingCard, rationCard, passport, unknown, a4Document }
 
 class ScannedDocument {
   final File file;
@@ -59,6 +59,17 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
     double newDocWidth = VIRTUAL_A4_WIDTH * 0.42;
     double newDocHeight = newDocWidth / 1.58;
 
+    if (effectiveType == DocumentType.a4Document) {
+      newDocWidth = VIRTUAL_A4_WIDTH;
+      newDocHeight = VIRTUAL_A4_HEIGHT;
+    } else if (effectiveType == DocumentType.passport) {
+      newDocWidth = VIRTUAL_A4_WIDTH * 0.85;
+      newDocHeight = newDocWidth / 1.408;
+    } else if (effectiveType == DocumentType.rationCard) {
+      newDocWidth = VIRTUAL_A4_WIDTH * 0.90;
+      newDocHeight = newDocWidth / 1.418;
+    }
+
     // Enforce display method limits early
     if (appState.displayMethod == DisplayMethod.frontOnly && state.isNotEmpty && (state[0] ?? []).isNotEmpty) {
       return;
@@ -91,7 +102,17 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
     if (pageDocs.isEmpty) {
       state = {
         ...state,
-        pageIndex: [newDoc.copyWith(dx: margin, dy: margin)],
+        pageIndex: [newDoc.copyWith(dx: effectiveType == DocumentType.a4Document ? 0 : margin, dy: effectiveType == DocumentType.a4Document ? 0 : margin)],
+      };
+      return;
+    }
+
+    // If it's an A4 Document or the current page has items, put A4 on a NEW page
+    if (effectiveType == DocumentType.a4Document) {
+      pageIndex++;
+      state = {
+        ...state,
+        pageIndex: [newDoc.copyWith(dx: 0, dy: 0)],
       };
       return;
     }
