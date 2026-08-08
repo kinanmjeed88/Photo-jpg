@@ -78,35 +78,92 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
     List<File> overflow = [];
     List<File> failed = [];
 
-    // Proper implementation for BatchAddResult to satisfy phase 1 requirement
+    const double VIRTUAL_A4_WIDTH = AppConstants.kVirtualCanvasWidth;
+    const double margin = 12.0;
+
+    int pageIndex = state.isEmpty ? 0 : state.keys.reduce(math.max);
+    List<ScannedDocument> localDocs = List<ScannedDocument>.from(state[pageIndex] ?? []);
+
     for (var f in files) {
       try {
-        final decoded = await decodeImageFromList(await f.readAsBytes());
+        if (localDocs.length >= 4) {
+          overflow.add(f);
+          continue;
+        }
+
+        final bytes = await f.readAsBytes();
+        final decoded = await decodeImageFromList(bytes);
+        final double originalWidth = decoded.width.toDouble();
+        final double originalHeight = decoded.height.toDouble();
+        decoded.dispose(); // Explicitly dispose to prevent OOM
+
         DocumentType specificType = DocumentType.unknown;
         if (f.path.endsWith('_A4.jpg')) {
           specificType = DocumentType.a4Document;
         }
 
-        int pageIndex = state.isEmpty ? 0 : state.keys.reduce(math.max);
-        if (state[pageIndex] != null && state[pageIndex]!.length >= 4) {
-            overflow.add(f);
-            continue;
+        DocumentType effectiveType = specificType != DocumentType.unknown
+            ? specificType
+            : _guessDocumentType(appState);
+
+        double intrinsicAspectRatio = originalHeight > 0
+            ? originalWidth / originalHeight
+            : 1.0;
+
+        double newDocWidth = VIRTUAL_A4_WIDTH * 0.45;
+        double newDocHeight = newDocWidth / intrinsicAspectRatio;
+
+        double currentDx = margin;
+
+        // Calculate safe Y position based on existing docs to prevent overlap
+        double safeY = localDocs.isEmpty
+            ? margin
+            : localDocs.map((d) => d.dy + d.height).reduce(math.max) + margin;
+
+        double currentDy = safeY;
+
+        int index = localDocs.length;
+        if (index == 0) {
+          currentDx = 20.0;
+          currentDy = 20.0;
+        } else if (index == 1) {
+          currentDx = (VIRTUAL_A4_WIDTH * 0.45) + 40.0;
+          // Align with the first item on the same row if possible
+          currentDy = localDocs.isNotEmpty ? localDocs.first.dy : 20.0;
+        } else if (index == 2) {
+          currentDx = 20.0;
+          // Safe Y is already calculated to be below all existing docs
+          currentDy = safeY;
+        } else if (index == 3) {
+          currentDx = (VIRTUAL_A4_WIDTH * 0.45) + 40.0;
+          // Align with the third item (index 2) on the same row
+          currentDy = localDocs.length > 2 ? localDocs[2].dy : safeY;
         }
 
         final doc = ScannedDocument(
           file: f,
-          type: specificType,
-          originalWidth: decoded.width.toDouble(),
-          originalHeight: decoded.height.toDouble(),
+          type: effectiveType,
+          originalWidth: originalWidth,
+          originalHeight: originalHeight,
+          width: newDocWidth,
+          height: newDocHeight,
+          dx: currentDx,
+          dy: currentDy,
         );
-        addDocument(doc, appState);
-        added.add(doc);
 
+        localDocs.add(doc);
+        added.add(doc);
 
       } catch (e) {
         failed.add(f);
       }
     }
+
+    // Single atomic state assignment
+    state = {
+        ...state,
+        pageIndex: localDocs
+    };
 
     return BatchAddResult(addedDocuments: added, overflowFiles: overflow, failedFiles: failed);
   }
