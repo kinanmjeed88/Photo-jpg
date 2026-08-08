@@ -89,7 +89,7 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
       if (newWidth < 50) newWidth = 50;
       double newHeight = newWidth / _documentAspectRatio;
 
-      final double toolbarHeight = widget.isSelected ? 40.0 : 0.0;
+      final double toolbarHeight = widget.isSelected ? 48.0 : 0.0;
 
       if (newWidth > widget.canvasWidth - dx) {
         newWidth = widget.canvasWidth - dx;
@@ -183,140 +183,166 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
 
   @override
   Widget build(BuildContext context) {
-    final double toolbarHeight = 40.0;
+    final double toolbarHeight = 48.0;
     final double totalHeight = height + (widget.isSelected ? toolbarHeight : 0);
 
     Widget documentWidget = SizedBox(
       width: width,
       height: totalHeight,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+      child: Stack(
+        clipBehavior: Clip.none,
         children: [
-          SizedBox(
-            width: width,
-            height: height,
-            child: AspectRatio(
-              aspectRatio: _documentAspectRatio,
-              child: Container(
-                decoration: BoxDecoration(
-                  border: widget.isSelected
-                      ? Border.all(color: Colors.blueAccent, width: 3)
-                      : (widget.addFrame ? Border.all(color: Colors.black, width: 1.0) : null),
-                ),
-                child: RotatedBox(
-                  quarterTurns: rotationAngle ~/ 90,
-                  child: Image.file(widget.document.file, fit: BoxFit.contain),
+          Positioned(
+            left: 0,
+            top: 0,
+            child: SizedBox(
+              width: width,
+              height: height,
+              child: AspectRatio(
+                aspectRatio: _documentAspectRatio,
+                child: Container(
+                  decoration: BoxDecoration(
+                    border: widget.isSelected
+                        ? Border.all(color: Colors.blueAccent, width: 3)
+                        : (widget.addFrame ? Border.all(color: Colors.black, width: 1.0) : null),
+                  ),
+                  child: RotatedBox(
+                    quarterTurns: rotationAngle ~/ 90,
+                    child: Image.file(widget.document.file, fit: BoxFit.contain),
+                  ),
                 ),
               ),
             ),
           ),
           if (widget.isSelected)
-            Container(
-              width: width,
-              height: toolbarHeight,
-              color: Colors.grey[200],
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  Tooltip(
-                    message: 'تغيير الحجم',
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onPanDown: (_) {},
-                      onPanStart: (_) {},
-                      onPanUpdate: _onResizeUpdate,
-                      onPanEnd: _onResizeEnd,
-                      child: const Padding(
-                        padding: EdgeInsets.all(10),
-                        child: Icon(Icons.open_in_full, size: 20, color: Colors.blueAccent),
-                      ),
-                    ),
-                  ),
-                  Tooltip(
-                    message: 'تدوير',
-                    child: Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(24),
-                        onTap: _onRotate,
-                        child: const Padding(
-                          padding: EdgeInsets.all(10),
-                          child: Icon(Icons.rotate_right, size: 20, color: Colors.blueAccent),
+            Positioned(
+              left: 0,
+              top: height,
+              child: Container(
+                width: width,
+                height: toolbarHeight,
+                color: Colors.grey[200],
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    Tooltip(
+                      message: 'تغيير الحجم',
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onPanDown: (_) {},
+                        onPanStart: (_) {},
+                        onPanUpdate: _onResizeUpdate,
+                        onPanEnd: _onResizeEnd,
+                        child: const SizedBox(
+                          width: 48,
+                          height: 48,
+                          child: Center(
+                            child: Icon(Icons.open_in_full, size: 20, color: Colors.blueAccent),
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  Tooltip(
-                    message: 'إعادة قص',
-                    child: Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(24),
-                        onTap: () {
-                          if (widget.onRecrop != null) {
+                    Tooltip(
+                      message: 'تدوير',
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(24),
+                          onTap: _onRotate,
+                          child: const SizedBox(
+                            width: 48,
+                            height: 48,
+                            child: Center(
+                              child: Icon(Icons.rotate_right, size: 20, color: Colors.blueAccent),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Tooltip(
+                      message: 'إعادة قص',
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(24),
+                          onTap: () {
+                            if (widget.onRecrop != null) {
+                              HapticFeedback.lightImpact();
+                              widget.onRecrop!();
+                            }
+                          },
+                          child: const SizedBox(
+                            width: 48,
+                            height: 48,
+                            child: Center(
+                              child: Icon(Icons.crop, size: 20, color: Colors.blueAccent),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Tooltip(
+                      message: 'تعديل',
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(24),
+                          onTap: () {
                             HapticFeedback.lightImpact();
-                            widget.onRecrop!();
-                          }
-                        },
-                        child: const Padding(
-                          padding: EdgeInsets.all(10),
-                          child: Icon(Icons.crop, size: 20, color: Colors.blueAccent),
+                            widget.onEdit();
+                          },
+                          child: const SizedBox(
+                            width: 48,
+                            height: 48,
+                            child: Center(
+                              child: Icon(Icons.edit, size: 20, color: Colors.blueAccent),
+                            ),
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  Tooltip(
-                    message: 'تعديل',
-                    child: Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(24),
-                        onTap: () {
-                          HapticFeedback.lightImpact();
-                          widget.onEdit();
-                        },
-                        child: const Padding(
-                          padding: EdgeInsets.all(10),
-                          child: Icon(Icons.edit, size: 20, color: Colors.blueAccent),
+                    Tooltip(
+                      message: 'حفظ',
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(24),
+                          onTap: () {
+                            HapticFeedback.lightImpact();
+                            _saveToGallery();
+                          },
+                          child: const SizedBox(
+                            width: 48,
+                            height: 48,
+                            child: Center(
+                              child: Icon(Icons.save_alt, size: 20, color: Colors.green),
+                            ),
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  Tooltip(
-                    message: 'حفظ',
-                    child: Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(24),
-                        onTap: () {
-                          HapticFeedback.lightImpact();
-                          _saveToGallery();
-                        },
-                        child: const Padding(
-                          padding: EdgeInsets.all(10),
-                          child: Icon(Icons.save_alt, size: 20, color: Colors.green),
+                    Tooltip(
+                      message: 'حذف',
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(24),
+                          onTap: () {
+                            HapticFeedback.lightImpact();
+                            widget.onDelete();
+                          },
+                          child: const SizedBox(
+                            width: 48,
+                            height: 48,
+                            child: Center(
+                              child: Icon(Icons.close, size: 20, color: Colors.redAccent),
+                            ),
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  Tooltip(
-                    message: 'حذف',
-                    child: Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(24),
-                        onTap: () {
-                          HapticFeedback.lightImpact();
-                          widget.onDelete();
-                        },
-                        child: const Padding(
-                          padding: EdgeInsets.all(10),
-                          child: Icon(Icons.close, size: 20, color: Colors.redAccent),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
         ],

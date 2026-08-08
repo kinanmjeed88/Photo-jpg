@@ -295,8 +295,8 @@ class ScannerService {
     return await Isolate.run(() => _isolateProcessSmartCVLayer(args));
   }
 
-  Future<List<File>> processBatchSmartRecognition(List<File> imageFiles, {void Function(int current, int total)? onProgress}) async {
-    List<File> allCroppedFiles = [];
+  Future<Map<File, List<File>>> processBatchSmartRecognition(List<File> imageFiles, {void Function(int current, int total)? onProgress}) async {
+    Map<File, List<File>> mappedCroppedFiles = {};
     final tempDir = await getTemporaryDirectory();
     final tempPath = tempDir.path;
 
@@ -307,9 +307,10 @@ class ScannerService {
           'imagePath': imageFiles[i].path,
         };
         final result = await Isolate.run(() => _isolateProcessSmartCVLayer(args));
-        allCroppedFiles.addAll(result);
+        mappedCroppedFiles[imageFiles[i]] = result;
       } catch (e) {
         print('Error processing image in batch: $e');
+        mappedCroppedFiles[imageFiles[i]] = [];
       }
 
       // Allow Dart Garbage Collector to reclaim heavy isolate memory
@@ -319,7 +320,7 @@ class ScannerService {
       onProgress?.call(i + 1, imageFiles.length);
     }
 
-    return allCroppedFiles;
+    return mappedCroppedFiles;
   }
 
   Future<DocumentType> classifyDocument(File imageFile) async {

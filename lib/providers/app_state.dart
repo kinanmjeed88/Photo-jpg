@@ -58,6 +58,8 @@ class ScannedDocument {
     int? rotationAngle,
     String? originalImagePath,
   }) {
+    assert(originalImagePath == null || originalImagePath == this.originalImagePath,
+           'originalImagePath is immutable once set and cannot be changed during copyWith.');
     return ScannedDocument(
       file: file ?? this.file,
       type: type ?? this.type,
@@ -437,13 +439,21 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
     };
   }
 
-  void updateDocumentLayout(int pageIndex, int docIndex, {double? dx, double? dy, double? width, double? height, int? rotationAngle}) {
+  void updateDocumentLayout(int pageIndex, int docIndex, {double? dx, double? dy, double? width, double? height, int? rotationAngle, ScannedDocument? originalDoc}) {
     if (!state.containsKey(pageIndex)) return;
 
     final pageDocs = state[pageIndex]!;
-    if (docIndex < 0 || docIndex >= pageDocs.length) return;
 
-    final doc = pageDocs[docIndex];
+    // Fix stale docIndex by finding actual index if originalDoc is provided
+    int actualIndex = docIndex;
+    if (originalDoc != null) {
+      actualIndex = pageDocs.indexWhere((d) => d.file.path == originalDoc.file.path);
+      if (actualIndex == -1) actualIndex = docIndex;
+    }
+
+    if (actualIndex < 0 || actualIndex >= pageDocs.length) return;
+
+    final doc = pageDocs[actualIndex];
     final newDoc = doc.copyWith(
       dx: dx,
       dy: dy,
@@ -451,7 +461,16 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
       height: height,
       rotationAngle: rotationAngle,
     );
-    updateDocumentAt(pageIndex, docIndex, newDoc);
+
+    final updatedDocs = [
+      for (int i = 0; i < pageDocs.length; i++)
+        if (i == actualIndex) newDoc else pageDocs[i]
+    ];
+
+    state = {
+      ...state,
+      pageIndex: updatedDocs,
+    };
   }
 
 
