@@ -1,7 +1,6 @@
+import 'package:flutter/material.dart';
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:ui' as ui;
-import 'package:flutter/painting.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../constants/app_constants.dart';
 
@@ -9,15 +8,16 @@ enum WorkMode { single, family }
 enum DisplayMethod { onePage, twoPages, frontOnly }
 enum DocumentType { nationalId, housingCard, rationCard, passport, unknown, a4Document }
 
+
 class BatchAddResult {
   final List<ScannedDocument> addedDocuments;
   final List<File> overflowFiles;
   final List<File> failedFiles;
 
   BatchAddResult({
-    required this.addedDocuments,
-    required this.overflowFiles,
-    required this.failedFiles,
+    this.addedDocuments = const [],
+    this.overflowFiles = const [],
+    this.failedFiles = const [],
   });
 }
 
@@ -65,6 +65,9 @@ class ScannedDocument {
   }
 }
 
+
+
+
 class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>> {
   @override
   Map<int, List<ScannedDocument>> build() => {};
@@ -72,120 +75,191 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
 
 
 
-  Future<BatchAddResult> batchAddDocuments(List<File> files, int pageIndex) async {
-    final List<ScannedDocument> addedDocuments = [];
-    final List<File> overflowFiles = [];
-    final List<File> failedFiles = [];
 
-    const double kGridPadding = 20.0;
+
+  Future<BatchAddResult> batchAddDocuments(List<File> files, AppState appState, int pageIndex) async {
+    debugPrint("Batch processing started for ${files.length} files on page $pageIndex.");
+
+    List<ScannedDocument> addedDocuments = [];
+    List<File> overflowFiles = [];
+    List<File> failedFiles = [];
+
+    Map<int, List<ScannedDocument>> currentState = Map.from(state);
+    List<ScannedDocument> pageDocs = List.from(currentState[pageIndex] ?? []);
+
     const double VIRTUAL_A4_WIDTH = AppConstants.kVirtualCanvasWidth;
     const double VIRTUAL_A4_HEIGHT = AppConstants.kVirtualCanvasHeight;
+    const double margin = AppConstants.kDocumentVisualPadding;
 
-    // Read the current state of the page to find starting coordinates
-    final currentPageDocs = state[pageIndex] ?? [];
-
-    double currentX = kGridPadding;
-    double currentY = kGridPadding;
-    double maxHeightInCurrentRow = 0.0;
-
-    if (currentPageDocs.isNotEmpty) {
-      // Find the last document to continue placement
-      var sortedDocs = List<ScannedDocument>.from(currentPageDocs);
-      sortedDocs.sort((a, b) {
-        int dyCmp = a.dy.compareTo(b.dy);
-        if (dyCmp != 0) return dyCmp;
-        return a.dx.compareTo(b.dx);
-      });
-
-      final lastDoc = sortedDocs.last;
-      currentX = lastDoc.dx + lastDoc.width + kGridPadding;
-      currentY = lastDoc.dy;
-
-      for (var d in sortedDocs) {
-        if (d.dy >= lastDoc.dy - 10 && d.dy <= lastDoc.dy + 10) {
-          if (d.height > maxHeightInCurrentRow) {
-            maxHeightInCurrentRow = d.height;
-          }
-        }
-      }
-      if (maxHeightInCurrentRow == 0) maxHeightInCurrentRow = lastDoc.height;
-    }
-
-    bool hasOverflowed = false;
-
-    for (final file in files) {
-      if (hasOverflowed) {
+    for (int i = 0; i < files.length; i++) {
+      File file = files[i];
+      if (overflowFiles.isNotEmpty) {
         overflowFiles.add(file);
         continue;
       }
 
       try {
         final bytes = await file.readAsBytes();
-        final ui.Image image = await decodeImageFromList(bytes);
-        final originalWidth = image.width.toDouble();
-        final originalHeight = image.height.toDouble();
-        image.dispose();
+        final decoded = await decodeImageFromList(bytes);
+        debugPrint("Successfully decoded image: ${file.path}");
 
-        if (originalWidth == 0 || originalHeight == 0) {
-          failedFiles.add(file);
-          continue;
+        DocumentType specificType = _guessDocumentType(appState);
+        if (file.path.endsWith('_A4.jpg')) {
+          specificType = DocumentType.a4Document;
         }
 
-        final intrinsicAspectRatio = originalWidth / originalHeight;
+        double intrinsicAspectRatio = decoded.height > 0
+            ? decoded.width / decoded.height
+            : 1.0;
 
-        double targetWidth;
-        double targetHeight;
-
-        if (files.length > 1) {
-          targetWidth = (VIRTUAL_A4_WIDTH - (3 * kGridPadding)) / 2;
+        double newDocWidth;
+        if (specificType == DocumentType.a4Document) {
+          newDocWidth = VIRTUAL_A4_WIDTH;
+        } else if (specificType == DocumentType.rationCard) {
+          newDocWidth = VIRTUAL_A4_WIDTH * 0.90;
+        } else if (specificType == DocumentType.passport) {
+          newDocWidth = VIRTUAL_A4_WIDTH * 0.85;
+        } else if (specificType == DocumentType.nationalId || specificType == DocumentType.housingCard) {
+          newDocWidth = VIRTUAL_A4_WIDTH * 0.45;
         } else {
-          targetWidth = (VIRTUAL_A4_WIDTH - (3 * kGridPadding)) / 2;
-        }
-        targetHeight = targetWidth / intrinsicAspectRatio;
-
-        if (currentX + targetWidth > VIRTUAL_A4_WIDTH - kGridPadding) {
-          currentX = kGridPadding;
-          currentY += maxHeightInCurrentRow + kGridPadding;
-          maxHeightInCurrentRow = 0.0;
+          specificType = DocumentType.nationalId;
+          newDocWidth = VIRTUAL_A4_WIDTH * 0.45;
         }
 
-        if (currentY + targetHeight > VIRTUAL_A4_HEIGHT - kGridPadding) {
-          hasOverflowed = true;
+        double newDocHeight = newDocWidth / intrinsicAspectRatio;
+
+        if (specificType != DocumentType.nationalId && specificType != DocumentType.housingCard) {
+          if (newDocWidth > VIRTUAL_A4_WIDTH) {
+              newDocWidth = VIRTUAL_A4_WIDTH;
+              newDocHeight = newDocWidth / intrinsicAspectRatio;
+          }
+          if (newDocHeight > VIRTUAL_A4_HEIGHT) {
+              newDocHeight = VIRTUAL_A4_HEIGHT;
+              newDocWidth = newDocHeight * intrinsicAspectRatio;
+          }
+        }
+
+        double currentDx = margin;
+        double currentDy = margin;
+        bool overflow = false;
+
+        if (appState.displayMethod == DisplayMethod.frontOnly && (pageDocs.isNotEmpty || addedDocuments.isNotEmpty)) {
+          overflow = true;
+        } else if (appState.displayMethod == DisplayMethod.twoPages && (pageDocs.isNotEmpty || addedDocuments.isNotEmpty)) {
+          overflow = true;
+        } else if (specificType == DocumentType.a4Document && (pageDocs.isNotEmpty || addedDocuments.isNotEmpty)) {
+          overflow = true;
+        } else {
+          if (specificType == DocumentType.nationalId || specificType == DocumentType.housingCard) {
+            int index = pageDocs.length;
+            if (index == 0) {
+              currentDx = 20.0;
+              currentDy = 20.0;
+            } else if (index == 1) {
+              currentDx = (VIRTUAL_A4_WIDTH * 0.45) + 40.0;
+              currentDy = 20.0;
+            } else if (index == 2) {
+              double firstDocHeight = pageDocs.isNotEmpty ? pageDocs.first.height : newDocHeight;
+              currentDx = 20.0;
+              currentDy = firstDocHeight + 40.0;
+            } else if (index == 3) {
+              double firstDocHeight = pageDocs.isNotEmpty ? pageDocs.first.height : newDocHeight;
+              currentDx = (VIRTUAL_A4_WIDTH * 0.45) + 40.0;
+              currentDy = firstDocHeight + 40.0;
+            } else {
+              overflow = true;
+            }
+          } else {
+            bool foundPosition = false;
+            var sortedDocs = List<ScannedDocument>.from(pageDocs);
+            sortedDocs.sort((a, b) {
+              int dyCmp = a.dy.compareTo(b.dy);
+              if (dyCmp != 0) return dyCmp;
+              return a.dx.compareTo(b.dx);
+            });
+
+            if (sortedDocs.isNotEmpty) {
+                ScannedDocument lastDoc = sortedDocs.last;
+                double rightDx = lastDoc.dx + lastDoc.width + margin;
+                if (rightDx + newDocWidth <= VIRTUAL_A4_WIDTH) {
+                    currentDx = rightDx;
+                    currentDy = lastDoc.dy;
+                } else {
+                    currentDx = margin;
+                    double maxRowHeight = 0;
+                    for (var d in sortedDocs) {
+                        if (d.dy >= lastDoc.dy - 10 && d.dy <= lastDoc.dy + 10) {
+                            if (d.height > maxRowHeight) maxRowHeight = d.height;
+                        }
+                    }
+                    if (maxRowHeight == 0) maxRowHeight = lastDoc.height;
+                    currentDy = lastDoc.dy + maxRowHeight + margin;
+                }
+            }
+
+            bool hasOverlap(double x, double y, double w, double h) {
+                for (var d in pageDocs) {
+                    if (!(x + w + margin < d.dx || x > d.dx + d.width + margin ||
+                          y + h + margin < d.dy || y > d.dy + d.height + margin)) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            if (hasOverlap(currentDx, currentDy, newDocWidth, newDocHeight)) {
+                foundPosition = false;
+                for (double y = margin; y + newDocHeight <= VIRTUAL_A4_HEIGHT; y += 20) {
+                    for (double x = margin; x + newDocWidth <= VIRTUAL_A4_WIDTH; x += 20) {
+                        if (!hasOverlap(x, y, newDocWidth, newDocHeight)) {
+                            currentDx = x;
+                            currentDy = y;
+                            foundPosition = true;
+                            break;
+                        }
+                    }
+                    if (foundPosition) break;
+                }
+                if (!foundPosition) {
+                    overflow = true;
+                }
+            }
+          }
+        }
+
+        if (currentDy + newDocHeight > VIRTUAL_A4_HEIGHT) {
+          overflow = true;
+        }
+
+        if (overflow) {
           overflowFiles.add(file);
-          continue;
+          debugPrint("Overflow detected. ${addedDocuments.length} added, ${overflowFiles.length} deferred.");
+        } else {
+          final newDoc = ScannedDocument(
+            file: file,
+            type: specificType,
+            width: newDocWidth,
+            height: newDocHeight,
+            dx: currentDx,
+            dy: currentDy,
+            originalWidth: decoded.width.toDouble(),
+            originalHeight: decoded.height.toDouble(),
+          );
+          pageDocs.add(newDoc);
+          addedDocuments.add(newDoc);
         }
-
-        final doc = ScannedDocument(
-          file: file,
-          dx: currentX,
-          dy: currentY,
-          width: targetWidth,
-          height: targetHeight,
-          originalWidth: originalWidth,
-          originalHeight: originalHeight,
-          type: DocumentType.unknown,
-        );
-
-        addedDocuments.add(doc);
-
-        currentX += targetWidth + kGridPadding;
-        if (targetHeight > maxHeightInCurrentRow) {
-          maxHeightInCurrentRow = targetHeight;
-        }
-
       } catch (e) {
+        debugPrint("Failed to decode image: ${file.path}. Error: $e");
         failedFiles.add(file);
       }
     }
 
     if (addedDocuments.isNotEmpty) {
-      // Atomic state update using the latest state
-      final currentDocs = state[pageIndex] ?? [];
-      state = {
-        ...state,
-        pageIndex: [...currentDocs, ...addedDocuments],
-      };
+      currentState[pageIndex] = pageDocs;
+      state = currentState;
     }
+
+    debugPrint("Batch processing completed. State updated.");
 
     return BatchAddResult(
       addedDocuments: addedDocuments,
@@ -193,6 +267,7 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
       failedFiles: failedFiles,
     );
   }
+
 
   void addDocument(ScannedDocument doc, AppState appState) {
     const double VIRTUAL_A4_WIDTH = AppConstants.kVirtualCanvasWidth;
