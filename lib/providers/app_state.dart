@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
+import 'package:flutter/painting.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../constants/app_constants.dart';
 
@@ -8,16 +10,15 @@ enum WorkMode { single, family }
 enum DisplayMethod { onePage, twoPages, frontOnly }
 enum DocumentType { nationalId, housingCard, rationCard, passport, unknown, a4Document }
 
-
 class BatchAddResult {
-  final List<File> addedFiles;
+  final List<ScannedDocument> addedDocuments;
   final List<File> overflowFiles;
   final List<File> failedFiles;
 
   BatchAddResult({
-    this.addedFiles = const [],
-    this.overflowFiles = const [],
-    this.failedFiles = const [],
+    required this.addedDocuments,
+    required this.overflowFiles,
+    required this.failedFiles,
   });
 }
 
@@ -72,49 +73,126 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
 
 
 
+  Future<BatchAddResult> batchAddDocuments(List<File> files, int pageIndex) async {
+    final List<ScannedDocument> addedDocuments = [];
+    final List<File> overflowFiles = [];
+    final List<File> failedFiles = [];
 
-  Future<BatchAddResult> batchAddDocuments(List<File> files, AppState appState) async {
-    List<File> added = [];
-    List<File> overflow = [];
-    List<File> failed = [];
+    const double kGridPadding = 20.0;
+    const double VIRTUAL_A4_WIDTH = AppConstants.kVirtualCanvasWidth;
+    const double VIRTUAL_A4_HEIGHT = AppConstants.kVirtualCanvasHeight;
 
-    // Proper implementation for BatchAddResult to satisfy phase 1 requirement
-    for (var f in files) {
+    // Read the current state of the page to find starting coordinates
+    final currentPageDocs = state[pageIndex] ?? [];
+
+    double currentX = kGridPadding;
+    double currentY = kGridPadding;
+    double maxHeightInCurrentRow = 0.0;
+
+    if (currentPageDocs.isNotEmpty) {
+      // Find the last document to continue placement
+      var sortedDocs = List<ScannedDocument>.from(currentPageDocs);
+      sortedDocs.sort((a, b) {
+        int dyCmp = a.dy.compareTo(b.dy);
+        if (dyCmp != 0) return dyCmp;
+        return a.dx.compareTo(b.dx);
+      });
+
+      final lastDoc = sortedDocs.last;
+      currentX = lastDoc.dx + lastDoc.width + kGridPadding;
+      currentY = lastDoc.dy;
+
+      for (var d in sortedDocs) {
+        if (d.dy >= lastDoc.dy - 10 && d.dy <= lastDoc.dy + 10) {
+          if (d.height > maxHeightInCurrentRow) {
+            maxHeightInCurrentRow = d.height;
+          }
+        }
+      }
+      if (maxHeightInCurrentRow == 0) maxHeightInCurrentRow = lastDoc.height;
+    }
+
+    bool hasOverflowed = false;
+
+    for (final file in files) {
+      if (hasOverflowed) {
+        overflowFiles.add(file);
+        continue;
+      }
+
       try {
-        final decoded = await decodeImageFromList(await f.readAsBytes());
-        DocumentType specificType = DocumentType.unknown;
-        if (f.path.endsWith('_A4.jpg')) {
-          specificType = DocumentType.a4Document;
+        final bytes = await file.readAsBytes();
+        final ui.Image image = await decodeImageFromList(bytes);
+        final originalWidth = image.width.toDouble();
+        final originalHeight = image.height.toDouble();
+        image.dispose();
+
+        if (originalWidth == 0 || originalHeight == 0) {
+          failedFiles.add(file);
+          continue;
         }
 
-        int pageIndex = state.isEmpty ? 0 : state.keys.reduce(math.max);
-        if (state[pageIndex] != null && state[pageIndex]!.length >= 4) {
-            overflow.add(f);
-            continue;
+        final intrinsicAspectRatio = originalWidth / originalHeight;
+
+        double targetWidth;
+        double targetHeight;
+
+        if (files.length > 1) {
+          targetWidth = (VIRTUAL_A4_WIDTH - (3 * kGridPadding)) / 2;
+        } else {
+          targetWidth = (VIRTUAL_A4_WIDTH - (3 * kGridPadding)) / 2;
+        }
+        targetHeight = targetWidth / intrinsicAspectRatio;
+
+        if (currentX + targetWidth > VIRTUAL_A4_WIDTH - kGridPadding) {
+          currentX = kGridPadding;
+          currentY += maxHeightInCurrentRow + kGridPadding;
+          maxHeightInCurrentRow = 0.0;
         }
 
-        addDocument(ScannedDocument(
-          file: f,
-          type: specificType,
-          originalWidth: decoded.width.toDouble(),
-          originalHeight: decoded.height.toDouble(),
-        ), appState);
+        if (currentY + targetHeight > VIRTUAL_A4_HEIGHT - kGridPadding) {
+          hasOverflowed = true;
+          overflowFiles.add(file);
+          continue;
+        }
 
-        added.add(f);
+        final doc = ScannedDocument(
+          file: file,
+          dx: currentX,
+          dy: currentY,
+          width: targetWidth,
+          height: targetHeight,
+          originalWidth: originalWidth,
+          originalHeight: originalHeight,
+          type: DocumentType.unknown,
+        );
+
+        addedDocuments.add(doc);
+
+        currentX += targetWidth + kGridPadding;
+        if (targetHeight > maxHeightInCurrentRow) {
+          maxHeightInCurrentRow = targetHeight;
+        }
+
       } catch (e) {
-        failed.add(f);
+        failedFiles.add(file);
       }
     }
 
-    return BatchAddResult(addedFiles: added, overflowFiles: overflow, failedFiles: failed);
-  }
+    if (addedDocuments.isNotEmpty) {
+      // Atomic state update using the latest state
+      final currentDocs = state[pageIndex] ?? [];
+      state = {
+        ...state,
+        pageIndex: [...currentDocs, ...addedDocuments],
+      };
+    }
 
-  void forceNewPage() {
-    int pageIndex = state.isEmpty ? 0 : state.keys.reduce(math.max) + 1;
-    state = {
-      ...state,
-      pageIndex: [],
-    };
+    return BatchAddResult(
+      addedDocuments: addedDocuments,
+      overflowFiles: overflowFiles,
+      failedFiles: failedFiles,
+    );
   }
 
   void addDocument(ScannedDocument doc, AppState appState) {
