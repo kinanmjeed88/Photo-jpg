@@ -1,5 +1,87 @@
+# ═══════════════════════════════════════════════
+# 🌟 إعدادات موقع ماسح المستمسكات الذكي
+# ═══════════════════════════════════════════════
+
+# 🎨 الثيم الأساسي
 theme: jekyll-theme-cayman
-title: ماسح المستمسكات الذكي
-description: أداة متكاملة وذكية لمسح المستمسكات الرسمية وتصديرها كـ PDF
-show_downloads: false
+
+# 📝 معلومات الموقع
+title: "ماسح المستمسكات الذكي"
+description: "أداة متكاملة وذكية لمسح، تعديل، وترتيب المستمسكات الرسمية باحترافية، وتصديرها كملف PDF عالي الجودة"
+tagline: "Smart Doc Scanner - Professional Document Scanning App"
 lang: ar
+timezone: Asia/Baghdad
+
+# 👤 معلومات المؤلف
+author:
+  name: kinanmjeed88
+  github: kinanmjeed88
+
+# 🔗 الروابط
+url: "https://kinanmjeed88.github.io"
+baseurl: "/Photo-jpg"
+repository: kinanmjeed88/Photo-jpg
+
+# 🎯 إعدادات العرض
+show_downloads: true
+github:
+  is_project_page: true
+  repository_url: https://github.com/kinanmjeed88/Photo-jpg
+  repository_name: Photo-jpg
+  owner_name: kinanmjeed88
+
+# 🔍 تحسينات SEO
+lang: ar-IQ
+locale: ar_IQ
+keywords: "flutter, dart, document scanner, pdf, opencv, ماسح مستندات, ماسح مستمسكات"
+
+# 📱 وسائل التواصل الاجتماعي
+social:
+  name: Smart Doc Scanner
+  links:
+    - https://github.com/kinanmjeed88/Photo-jpg
+
+# 🧩 الإضافات
+plugins:
+  - jekyll-relative-links
+  - jekyll-seo-tag
+  - jekyll-sitemap
+  - jekyll-github-metadata
+
+# 🔄 تحويل الروابط النسبية تلقائياً
+relative_links:
+  enabled: true
+  collections: true
+
+# 📄 الملفات المضمنة في العرض
+include:
+  - README.md
+  - CONTRIBUTING.md
+  - LICENSE.md
+
+# 🚫 الملفات المستثناة من البناء
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - node_modules
+  - vendor
+  - .sass-cache
+  - .jekyll-cache
+  - "*.log"
+
+# ⚙️ إعدادات Markdown المتقدمة
+markdown: kramdown
+kramdown:
+  input: GFM
+  hard_wrap: false
+  syntax_highlighter: rouge
+  syntax_highlighter_opts:
+    css_class: 'highlight'
+    block:
+      line_numbers: false
+
+# 🎨 معالج Markdown
+highlighter: rouge
+
+# 🌐 الترميز
+encoding: utf-8
