@@ -105,7 +105,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     );
 
     try {
-      final result = await ref.read(scannedDocumentsProvider.notifier).batchAddDocuments(files, ref.read(appStateProvider));
+      final appState = ref.read(appStateProvider);
+      final result = await ref.read(scannedDocumentsProvider.notifier).batchAddDocuments(files, appState);
       if (!mounted) return;
       Navigator.pop(context); // pop loading dialog
 
