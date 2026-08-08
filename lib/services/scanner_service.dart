@@ -59,166 +59,109 @@ cv.VecPoint _orderPoints(cv.VecPoint pts) {
 
 
 
-Future<List<File>> _isolateProcessSmartCVLayer(
-  Map<String, dynamic> args,
-) async {
+Future<List<File>> _isolateProcessSmartCVLayer(Map<String, dynamic> args) async {
   final String tempPath = args['tempPath'] as String;
   final String imagePath = args['imagePath'] as String;
-
-  cv.Mat? src;
-  cv.Mat? srcClone;
-  cv.Mat? gray;
-  cv.Mat? blurred;
-  cv.Mat? edges;
-  cv.Mat? kernel;
-  cv.Mat? closed;
-  cv.Contours? contours;
-  cv.VecVec4i? hierarchy;
-
+  cv.Mat? src; cv.Mat? srcClone; cv.Mat? gray; cv.Mat? blurred;
+  cv.Mat? edges; cv.Mat? kernel; cv.Mat? closed;
+  cv.Contours? contours; cv.VecVec4i? hierarchy;
   List<File> croppedFiles = [];
+  List<List<int>> croppedCenters = [];
   int count = 0;
 
   try {
     final bytes = File(imagePath).readAsBytesSync();
     src = cv.imdecode(bytes, cv.IMREAD_COLOR);
-
-    if (src.isEmpty) {
-      return [];
-    }
-
+    if (src.isEmpty) return [];
     srcClone = src.clone();
-
-    // A. Grayscale
     gray = cv.cvtColor(srcClone, cv.COLOR_BGR2GRAY);
-
-    // B. Blur (7, 7)
     blurred = cv.gaussianBlur(gray, (7, 7), 0);
-
-    // C. Edge Detection (Canny 50, 150)
     edges = cv.canny(blurred, 50, 150);
-
-    // D. Morphological Close (9, 9)
-    kernel = cv.getStructuringElement(cv.MORPH_RECT, (9, 9));
+    kernel = cv.getStructuringElement(cv.MORPH_RECT, (15, 15));
     closed = cv.morphologyEx(edges, cv.MORPH_CLOSE, kernel);
-
-    // 3. Strict Geometric Extraction
-    final (conts, hier) = cv.findContours(
-      closed,
-      cv.RETR_EXTERNAL,
-      cv.CHAIN_APPROX_SIMPLE,
-    );
-    contours = conts;
-    hierarchy = hier;
-
+    final (conts, hier) = cv.findContours(closed, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+    contours = conts; hierarchy = hier;
     double imageArea = (gray.rows * gray.cols).toDouble();
 
     for (var contour in contours) {
       final area = cv.contourArea(contour);
-      // Area Filter: 1.5% to 85%
-      if (area < imageArea * 0.015 || area > imageArea * 0.85) {
-        continue;
-      }
-
+      if (area < imageArea * 0.01 || area > imageArea * 0.90) continue;
       final double peri = cv.arcLength(contour, true);
-      // Shape Filter: Exactly 4 points
       final cv.VecPoint approx = cv.approxPolyDP(contour, 0.02 * peri, true);
+      cv.VecPoint? orderedPts; bool isValidShape = false;
 
-      cv.VecPoint orderedPts;
-      bool isValidShape = false;
-
-      if (approx.length == 4) {
-        orderedPts = _orderPoints(approx);
-        isValidShape = true;
-      } else {
-        // Fallback to minAreaRect for rounded corners / close placement
-        final rect = cv.minAreaRect(contour);
-        final boxPts = cv.boxPoints(rect);
-        final ptsList = [
-          cv.Point(boxPts[0].x.toInt(), boxPts[0].y.toInt()),
-          cv.Point(boxPts[1].x.toInt(), boxPts[1].y.toInt()),
-          cv.Point(boxPts[2].x.toInt(), boxPts[2].y.toInt()),
-          cv.Point(boxPts[3].x.toInt(), boxPts[3].y.toInt()),
-        ];
-        final tempVec = cv.VecPoint.fromList(ptsList);
-        orderedPts = _orderPoints(tempVec);
-        tempVec.dispose();
-        isValidShape = true;
-      }
-
-      if (isValidShape) {
-        final cv.Rect rect = cv.boundingRect(contour); // Use original contour for bounding rect
-
-        // Aspect Ratio Filter (1.2 to 1.9) using max/min of bounding box
-        double w = rect.width.toDouble();
-        double h = rect.height.toDouble();
-        double maxDim = w > h ? w : h;
-        double minDim = w < h ? w : h;
-        double ratio = maxDim / minDim;
-
-        if (ratio >= 1.2 && ratio <= 1.9) {
-          var p0 = orderedPts[0];
-          var p1 = orderedPts[1];
-          var p2 = orderedPts[2];
-          var p3 = orderedPts[3];
-
-          int widthA = (p2.x - p3.x).abs();
-          int widthB = (p1.x - p0.x).abs();
-          int maxWidth = widthA > widthB ? widthA : widthB;
-
-          int heightA = (p1.y - p2.y).abs();
-          int heightB = (p0.y - p3.y).abs();
-          int maxHeight = heightA > heightB ? heightA : heightB;
-
-          final dstPts = cv.VecPoint.fromList([
-            cv.Point(0, 0),
-            cv.Point(maxWidth - 1, 0),
-            cv.Point(maxWidth - 1, maxHeight - 1),
-            cv.Point(0, maxHeight - 1),
-          ]);
-
-          final transMat = cv.getPerspectiveTransform(orderedPts, dstPts);
-          // Apply warpPerspective EXCLUSIVELY on srcClone (Original Color Image)
-          final warped = cv.warpPerspective(srcClone, transMat, (maxWidth, maxHeight));
-
-          double cropArea = (maxWidth * maxHeight).toDouble();
-          double aspect = maxWidth / maxHeight;
-          bool isA4 = cropArea > (imageArea * 0.6) || (aspect >= 0.67 && aspect <= 0.75) || (aspect >= 1.35 && aspect <= 1.48);
-
-          String suffix = isA4 ? '_A4' : '_ID';
-          final croppedPath = '$tempPath/smart_cropped_${DateTime.now().millisecondsSinceEpoch}_${count}${suffix}.jpg';
-
-          cv.imwrite(croppedPath, warped); // Save original color without Grayscale/CLAHE applied to final output
-          croppedFiles.add(File(croppedPath));
-
-          warped.dispose();
-          transMat.dispose();
-          dstPts.dispose();
-          orderedPts.dispose();
-
-          count++;
+      try {
+        if (approx.length == 4) {
+          orderedPts = _orderPoints(approx);
+          isValidShape = true;
+        } else {
+          final rect = cv.minAreaRect(contour);
+          final boxPts = cv.boxPoints(rect);
+          final ptsList = [
+            cv.Point(boxPts[0].x.toInt(), boxPts[0].y.toInt()),
+            cv.Point(boxPts[1].x.toInt(), boxPts[1].y.toInt()),
+            cv.Point(boxPts[2].x.toInt(), boxPts[2].y.toInt()),
+            cv.Point(boxPts[3].x.toInt(), boxPts[3].y.toInt()),
+          ];
+          final tempVec = cv.VecPoint.fromList(ptsList);
+          orderedPts = _orderPoints(tempVec);
+          tempVec.dispose();
+          isValidShape = true;
         }
-      }
-      approx.dispose();
-    }
 
-    // Fix Squish Bug: Return [] if no valid contours
-    if (croppedFiles.isEmpty) {
-      return [];
+        if (isValidShape && orderedPts != null) {
+          final minRect = cv.minAreaRect(contour);
+          double w = minRect.size.width; double h = minRect.size.height;
+          double maxDim = w > h ? w : h; double minDim = w < h ? w : h;
+          double ratio = minDim > 0 ? maxDim / minDim : 0;
+
+          if (ratio >= 1.1 && ratio <= 2.5) {
+            var p0 = orderedPts[0]; var p1 = orderedPts[1];
+            var p2 = orderedPts[2]; var p3 = orderedPts[3];
+            int cx = ((p0.x + p1.x + p2.x + p3.x) / 4).toInt();
+            int cy = ((p0.y + p1.y + p2.y + p3.y) / 4).toInt();
+
+            bool isDuplicate = false;
+            for (var center in croppedCenters) {
+              int dx = cx - center[0]; int dy = cy - center[1];
+              double distance = (dx * dx + dy * dy).toDouble();
+              if (distance < 2500) { isDuplicate = true; break; }
+            }
+            if (isDuplicate) continue;
+            croppedCenters.add([cx, cy]);
+
+            int widthA = (p2.x - p3.x).abs(); int widthB = (p1.x - p0.x).abs();
+            int maxWidth = widthA > widthB ? widthA : widthB;
+            int heightA = (p1.y - p2.y).abs(); int heightB = (p0.y - p3.y).abs();
+            int maxHeight = heightA > heightB ? heightA : heightB;
+            if (maxWidth < 10 || maxHeight < 10) continue;
+
+            final dstPts = cv.VecPoint.fromList([
+              cv.Point(0, 0), cv.Point(maxWidth - 1, 0),
+              cv.Point(maxWidth - 1, maxHeight - 1), cv.Point(0, maxHeight - 1),
+            ]);
+            final transMat = cv.getPerspectiveTransform(orderedPts, dstPts);
+            final warped = cv.warpPerspective(srcClone, transMat, (maxWidth, maxHeight));
+
+            String suffix = '_ID'; // Default suffix
+            final croppedPath = '$tempPath/smart_cropped_${DateTime.now().millisecondsSinceEpoch}_${count}$suffix.jpg';
+
+            cv.imwrite(croppedPath, warped);
+            croppedFiles.add(File(croppedPath));
+            warped.dispose(); transMat.dispose(); dstPts.dispose();
+            count++;
+          }
+        }
+      } finally {
+        orderedPts?.dispose(); approx.dispose();
+      }
     }
     return croppedFiles;
   } catch (e) {
-    print('Smart CV Layer failed: $e');
-    return [];
+    print('Smart CV Layer failed: $e'); return [];
   } finally {
-    src?.dispose();
-    srcClone?.dispose();
-    gray?.dispose();
-    blurred?.dispose();
-    edges?.dispose();
-    kernel?.dispose();
-    closed?.dispose();
-    contours?.dispose();
-    hierarchy?.dispose();
+    src?.dispose(); srcClone?.dispose(); gray?.dispose(); blurred?.dispose();
+    edges?.dispose(); kernel?.dispose(); closed?.dispose(); contours?.dispose(); hierarchy?.dispose();
   }
 }
 
@@ -334,6 +277,33 @@ class ScannerService {
 
     // Stage 2: OpenCV Precision Cropping (in background isolate)
     return await Isolate.run(() => _isolateProcessSmartCVLayer(args));
+  }
+
+  Future<List<File>> processBatchSmartRecognition(List<File> imageFiles, {void Function(int current, int total)? onProgress}) async {
+    List<File> allCroppedFiles = [];
+    final tempDir = await getTemporaryDirectory();
+    final tempPath = tempDir.path;
+
+    for (int i = 0; i < imageFiles.length; i++) {
+      try {
+        final args = {
+          'tempPath': tempPath,
+          'imagePath': imageFiles[i].path,
+        };
+        final result = await Isolate.run(() => _isolateProcessSmartCVLayer(args));
+        allCroppedFiles.addAll(result);
+      } catch (e) {
+        print('Error processing image in batch: $e');
+      }
+
+      // Allow Dart Garbage Collector to reclaim heavy isolate memory
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      // Update progress
+      onProgress?.call(i + 1, imageFiles.length);
+    }
+
+    return allCroppedFiles;
   }
 
   Future<DocumentType> classifyDocument(File imageFile) async {
