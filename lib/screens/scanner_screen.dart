@@ -56,14 +56,13 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
         final bool smartRecog = ref.read(appStateProvider).smartRecognition;
 
         for (var processedFile in pickedFiles) {
-          await _scannerService.classifyDocument(processedFile);
+          final docType = await _scannerService.classifyDocument(processedFile);
 
           List<File> finalFiles = [processedFile];
 
           if (smartRecog) {
             finalFiles = await _scannerService.processSmartRecognition(processedFile);
             if (finalFiles.isEmpty) {
-              if (!mounted) return;
               final result = await Navigator.push(
                 context,
                 MaterialPageRoute(
@@ -78,45 +77,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
             }
           }
 
-
-          final currentState = ref.read(scannedDocumentsProvider);
-          int currentPage = currentState.isEmpty ? 0 : currentState.keys.reduce((a, b) => a > b ? a : b);
-          final appState = ref.read(appStateProvider);
-
-          final result = await ref.read(scannedDocumentsProvider.notifier).batchAddDocuments(finalFiles, appState, currentPage);
-
-          if (result.overflowFiles.isNotEmpty && mounted) {
-            bool? createNewPage = await showDialog<bool>(
-              context: context,
-              builder: (BuildContext context) {
-                return AlertDialog(
-                  title: const Text('الصفحة ممتلئة'),
-                  content: Text('تم إضافة ${result.addedDocuments.length} مستندات بنجاح. الصفحة الحالية لا تتسع لـ ${result.overflowFiles.length} مستندات المتبقية. هل تريد إنشاء صفحة جديدة للمستندات المتبقية؟'),
-                  actions: <Widget>[
-                    TextButton(
-                      child: const Text('إلغاء'),
-                      onPressed: () {
-                        debugPrint("User cancelled overflow.");
-                        Navigator.of(context).pop(false);
-                      },
-                    ),
-                    TextButton(
-                      child: const Text('إنشاء صفحة جديدة'),
-                      onPressed: () {
-                        debugPrint("User chose to create a new page for overflow.");
-                        Navigator.of(context).pop(true);
-                      },
-                    ),
-                  ],
-                );
-              },
-            );
-
-            if (createNewPage == true) {
-              await ref.read(scannedDocumentsProvider.notifier).batchAddDocuments(result.overflowFiles, appState, currentPage + 1);
-            }
-          }
-
+          await _processBatchFiles(finalFiles);
         }
       }
     } catch (e) {
@@ -131,6 +92,64 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
           _isProcessing = false;
         });
       }
+    }
+  }
+
+
+  Future<void> _processBatchFiles(List<File> files) async {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      final appState = ref.read(appStateProvider);
+      final result = await ref.read(scannedDocumentsProvider.notifier).batchAddDocuments(files, appState);
+      if (!mounted) return;
+      Navigator.pop(context); // pop loading dialog
+
+      if (result.addedDocuments.isNotEmpty) {
+        HapticFeedback.mediumImpact();
+      }
+
+      if (result.failedFiles.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('فشل تحميل ${result.failedFiles.length} مستندات. قد تكون تالفة.')),
+        );
+      }
+
+      if (result.overflowFiles.isNotEmpty) {
+        await showDialog(
+          context: context,
+          builder: (context) => Directionality(
+            textDirection: TextDirection.rtl,
+            child: AlertDialog(
+              title: const Text('الصفحة ممتلئة'),
+              content: Text('لم يتبق مساحة كافية. هل تريد إنشاء صفحة جديدة لـ ${result.overflowFiles.length} مستندات متبقية؟'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('إلغاء'),
+                ),
+                ElevatedButton(
+                  onPressed: () async {
+                    Navigator.pop(context);
+                    ref.read(scannedDocumentsProvider.notifier).forceNewPage();
+                    await _processBatchFiles(result.overflowFiles);
+                  },
+                  child: const Text('إنشاء صفحة'),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.pop(context); // pop loading dialog
+      rethrow;
     }
   }
 
