@@ -30,6 +30,7 @@ class ScannedDocument {
   final double height;
   final double originalWidth;
   final double originalHeight;
+  final int rotationAngle;
 
   ScannedDocument({
     required this.file,
@@ -40,6 +41,7 @@ class ScannedDocument {
     this.height = 400,
     this.originalWidth = 300,
     this.originalHeight = 400,
+    this.rotationAngle = 0,
   });
 
   ScannedDocument copyWith({
@@ -51,6 +53,7 @@ class ScannedDocument {
     double? height,
     double? originalWidth,
     double? originalHeight,
+    int? rotationAngle,
   }) {
     return ScannedDocument(
       file: file ?? this.file,
@@ -61,6 +64,7 @@ class ScannedDocument {
       height: height ?? this.height,
       originalWidth: originalWidth ?? this.originalWidth,
       originalHeight: originalHeight ?? this.originalHeight,
+      rotationAngle: rotationAngle ?? this.rotationAngle,
     );
   }
 }
@@ -377,8 +381,8 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
         if (i != docIndex) pageDocs[i]
     ];
 
-    if (updatedDocs.isEmpty) {
-      // Remove the page if empty
+    if (updatedDocs.isEmpty && pageIndex != 0) {
+      // Remove the page if empty, except for page index 0
       final newState = Map<int, List<ScannedDocument>>.from(state)..remove(pageIndex);
       // Re-index pages so they are contiguous starting from 0
       final reindexedState = <int, List<ScannedDocument>>{};
@@ -428,7 +432,7 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
     };
   }
 
-  void updateDocumentLayout(int pageIndex, int docIndex, {double? dx, double? dy, double? width, double? height}) {
+  void updateDocumentLayout(int pageIndex, int docIndex, {double? dx, double? dy, double? width, double? height, int? rotationAngle}) {
     if (!state.containsKey(pageIndex)) return;
 
     final pageDocs = state[pageIndex]!;
@@ -440,6 +444,7 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
       dy: dy,
       width: width,
       height: height,
+      rotationAngle: rotationAngle,
     );
     updateDocumentAt(pageIndex, docIndex, newDoc);
   }

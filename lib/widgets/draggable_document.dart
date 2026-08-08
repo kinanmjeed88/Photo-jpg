@@ -12,7 +12,7 @@ class DraggableResizableDocument extends StatefulWidget {
   final VoidCallback onTap;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
-  final void Function(int pageIndex, int docIndex, double dx, double dy, double width, double height) onLayoutUpdate;
+  final void Function(int pageIndex, int docIndex, double dx, double dy, double width, double height, int rotationAngle) onLayoutUpdate;
   final void Function(int sourcePageIndex, int docIndex, ScannedDocument doc, double dx, double dy) onCrossPageMove;
   final double canvasWidth;
   final double canvasHeight;
@@ -46,6 +46,7 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
   late double dy;
   late double width;
   late double height;
+  late int rotationAngle;
 
   @override
   void initState() {
@@ -54,6 +55,7 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
     dy = widget.document.dy;
     width = widget.document.width;
     height = widget.document.height;
+    rotationAngle = widget.document.rotationAngle;
   }
 
   @override
@@ -64,12 +66,17 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
       dy = widget.document.dy;
       width = widget.document.width;
       height = widget.document.height;
+      rotationAngle = widget.document.rotationAngle;
     }
   }
 
   double get _documentAspectRatio {
+    // Determine aspect ratio considering rotation
+    bool isRotated = rotationAngle % 180 != 0;
+
     if (widget.document.originalHeight > 0) {
-      return widget.document.originalWidth / widget.document.originalHeight;
+      double baseRatio = widget.document.originalWidth / widget.document.originalHeight;
+      return isRotated ? (1 / baseRatio) : baseRatio;
     }
     return 1.0;
   }
@@ -98,7 +105,7 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
   }
 
   void _onResizeEnd(DragEndDetails details) {
-    widget.onLayoutUpdate(widget.pageIndex, widget.docIndex, dx, dy, width, height);
+    widget.onLayoutUpdate(widget.pageIndex, widget.docIndex, dx, dy, width, height, rotationAngle);
   }
 
   void _onPanStart(DragStartDetails details) {
@@ -122,8 +129,41 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
     if (dy < 0 || dy > widget.canvasHeight) {
       widget.onCrossPageMove(widget.pageIndex, widget.docIndex, widget.document, dx, dy);
     } else {
-      widget.onLayoutUpdate(widget.pageIndex, widget.docIndex, dx, dy, width, height);
+      widget.onLayoutUpdate(widget.pageIndex, widget.docIndex, dx, dy, width, height, rotationAngle);
     }
+  }
+
+  void _onRotate() {
+    HapticFeedback.lightImpact();
+    setState(() {
+      // Calculate center point
+      double centerX = dx + width / 2;
+      double centerY = dy + height / 2;
+
+      // Swap width and height
+      double newWidth = height;
+      double newHeight = width;
+
+      // Calculate new dx, dy to keep the center stable
+      double newDx = centerX - newWidth / 2;
+      double newDy = centerY - newHeight / 2;
+
+      // Clamp to virtual A4 canvas bounds
+      if (newDx < 0) newDx = 0;
+      if (newDy < 0) newDy = 0;
+      if (newDx + newWidth > widget.canvasWidth) newDx = widget.canvasWidth - newWidth;
+      if (newDy + newHeight > widget.canvasHeight) newDy = widget.canvasHeight - newHeight;
+
+      // Update state variables
+      dx = newDx;
+      dy = newDy;
+      width = newWidth;
+      height = newHeight;
+      rotationAngle = (rotationAngle + 90) % 360;
+
+      // Commit to parent
+      widget.onLayoutUpdate(widget.pageIndex, widget.docIndex, dx, dy, width, height, rotationAngle);
+    });
   }
 
   Future<void> _saveToGallery() async {
@@ -161,7 +201,10 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
                       ? Border.all(color: Colors.blueAccent, width: 3)
                       : (widget.addFrame ? Border.all(color: Colors.black, width: 1.0) : null),
                 ),
-                child: Image.file(widget.document.file, fit: BoxFit.contain),
+                child: RotatedBox(
+                  quarterTurns: rotationAngle ~/ 90,
+                  child: Image.file(widget.document.file, fit: BoxFit.contain),
+                ),
               ),
             ),
           ),
@@ -184,6 +227,20 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
                       child: const Padding(
                         padding: EdgeInsets.all(10),
                         child: Icon(Icons.open_in_full, size: 20, color: Colors.blueAccent),
+                      ),
+                    ),
+                  ),
+                  Tooltip(
+                    message: 'تدوير',
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(24),
+                        onTap: _onRotate,
+                        child: const Padding(
+                          padding: EdgeInsets.all(10),
+                          child: Icon(Icons.rotate_right, size: 20, color: Colors.blueAccent),
+                        ),
                       ),
                     ),
                   ),
