@@ -20,19 +20,12 @@ Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
 
   final pdf = pw.Document();
 
-  // UI coordinates vs PDF coordinates mapping
-  // UI assumes aspect ratio 1 / 1.414, we need to map to PdfPageFormat.a4
-  final pdfA4Width = PdfPageFormat.a4.width;
-  final pdfA4Height = PdfPageFormat.a4.height;
-
-  // Calculate scaling based on UI reference dimensions explicitly provided
-  final scaleX = pdfA4Width / uiReferenceWidth;
-  final scaleY = pdfA4Height / uiReferenceHeight;
+  final pageFormat = PdfPageFormat(uiReferenceWidth, uiReferenceHeight, marginAll: 0);
 
   for (final docsOnPage in pagesData) {
     pdf.addPage(
       pw.Page(
-        pageFormat: PdfPageFormat.a4,
+        pageFormat: pageFormat,
         margin: pw.EdgeInsets.zero, // Crucial for perfect origin alignment
         build: (pw.Context context) {
           return pw.Stack(
@@ -47,21 +40,18 @@ Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
               final memoryImage = pw.MemoryImage(File(path).readAsBytesSync());
 
               // PDF origin is bottom-left, UI origin is top-left
-              final pdfX = dx * scaleX;
+              final pdfX = dx;
               // Correct Y-axis mapping: pdfY goes from bottom up.
               // Top-left of the document in UI corresponds to top-left in PDF.
               // We need the bottom coordinate of the document in PDF space.
-              final pdfY = pdfA4Height - ((dy + docHeight) * scaleY);
-
-              final pdfWidth = docWidth * scaleX;
-              final pdfHeight = docHeight * scaleY;
+              final pdfY = uiReferenceHeight - (dy + docHeight);
 
               return pw.Positioned(
                 left: pdfX,
                 bottom: pdfY,
                 child: pw.Container(
-                  width: pdfWidth,
-                  height: pdfHeight,
+                  width: docWidth,
+                  height: docHeight,
                   decoration: addFrame
                       ? pw.BoxDecoration(border: pw.Border.all(color: PdfColors.black, width: 1.0))
                       : null,
@@ -78,7 +68,7 @@ Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
   // If there are no pages, at least add one empty page so it doesn't crash
   if (pagesData.isEmpty) {
     pdf.addPage(pw.Page(
-      pageFormat: PdfPageFormat.a4,
+      pageFormat: pageFormat,
       build: (pw.Context context) => pw.Container()
     ));
   }
