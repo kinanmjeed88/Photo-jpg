@@ -419,7 +419,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                             ),
                                                           );
                                                         },
-                                                        onLayoutUpdate: (pIndex, dIndex, dx, dy, width, height) {
+                                                        onLayoutUpdate: (pIndex, dIndex, dx, dy, width, height, rotationAngle) {
                                                           ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
                                                             pIndex,
                                                             dIndex,
@@ -427,6 +427,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                             dy: dy,
                                                             width: width,
                                                             height: height,
+                                                            rotationAngle: rotationAngle,
                                                           );
                                                         },
                                                         onCrossPageMove: (sourcePageIndex, dIndex, movedDoc, dx, dy) {
@@ -501,6 +502,33 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                           },
                         ),
                 ),
+                // Add New Page Button
+                if (pages.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                    child: ElevatedButton(
+                      onPressed: (pages.isNotEmpty && pages[pageKeys.last]!.isEmpty)
+                          ? null
+                          : () {
+                              HapticFeedback.lightImpact();
+                              ref.read(scannedDocumentsProvider.notifier).forceNewPage();
+                            },
+                      style: ElevatedButton.styleFrom(
+                        minimumSize: const Size(double.infinity, 50),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.add),
+                          SizedBox(width: 8),
+                          Text('أضف صفحة جديدة', style: TextStyle(fontSize: 16)),
+                        ],
+                      ),
+                    ),
+                  ),
                 Padding(
                   padding: const EdgeInsets.all(16.0),
                   child: Row(

@@ -1,8 +1,11 @@
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:typed_data';
+import 'dart:math' as math;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:path_provider/path_provider.dart';
+import 'package:image/image.dart' as img;
 import '../providers/app_state.dart';
 
 Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
@@ -36,8 +39,35 @@ Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
               final double dy = docData['dy'] as double;
               final double docWidth = docData['width'] as double;
               final double docHeight = docData['height'] as double;
+              final int rotationAngle = docData['rotationAngle'] as int? ?? 0;
 
-              final memoryImage = pw.MemoryImage(File(path).readAsBytesSync());
+              // High-fidelity image processing with memory safety
+              final Uint8List rawBytes = File(path).readAsBytesSync();
+              img.Image? decodedImage = img.decodeImage(rawBytes);
+
+              Uint8List processedBytes = rawBytes;
+
+              if (decodedImage != null) {
+                // EXIF Orientation fix
+                decodedImage = img.bakeOrientation(decodedImage);
+
+                // RAM safety: scale down only if longest edge exceeds 2400px
+                final int maxEdge = math.max(decodedImage.width, decodedImage.height);
+                if (maxEdge > 2400) {
+                  final double scale = 2400 / maxEdge;
+                  decodedImage = img.copyResize(
+                    decodedImage,
+                    width: (decodedImage.width * scale).toInt(),
+                    height: (decodedImage.height * scale).toInt(),
+                    interpolation: img.Interpolation.linear,
+                  );
+                }
+
+                // Keep 95% quality for high-res output
+                processedBytes = Uint8List.fromList(img.encodeJpg(decodedImage, quality: 95));
+              }
+
+              final memoryImage = pw.MemoryImage(processedBytes);
 
               // PDF origin is bottom-left, UI origin is top-left
               final pdfX = dx;
@@ -45,6 +75,16 @@ Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
               // Top-left of the document in UI corresponds to top-left in PDF.
               // We need the bottom coordinate of the document in PDF space.
               final pdfY = uiReferenceHeight - (dy + docHeight);
+
+              pw.Widget imageWidget = pw.Image(memoryImage, fit: pw.BoxFit.contain);
+
+              if (rotationAngle != 0) {
+                // PDF rotate rotates around its center and takes angle in radians
+                imageWidget = pw.Transform.rotate(
+                  angle: -rotationAngle * math.pi / 180,
+                  child: imageWidget,
+                );
+              }
 
               return pw.Positioned(
                 left: pdfX,
@@ -55,7 +95,7 @@ Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
                   decoration: addFrame
                       ? pw.BoxDecoration(border: pw.Border.all(color: PdfColors.black, width: 1.0))
                       : null,
-                  child: pw.Image(memoryImage, fit: pw.BoxFit.contain),
+                  child: imageWidget,
                 ),
               );
             }).toList(),
@@ -100,6 +140,7 @@ class PdfService {
         'dy': doc.dy,
         'width': doc.width,
         'height': doc.height,
+        'rotationAngle': doc.rotationAngle,
       }).toList());
     }
 
