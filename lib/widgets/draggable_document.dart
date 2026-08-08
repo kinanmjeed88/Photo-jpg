@@ -12,6 +12,7 @@ class DraggableResizableDocument extends StatefulWidget {
   final VoidCallback onTap;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
+  final VoidCallback? onRecrop;
   final void Function(int pageIndex, int docIndex, double dx, double dy, double width, double height, int rotationAngle) onLayoutUpdate;
   final void Function(int sourcePageIndex, int docIndex, ScannedDocument doc, double dx, double dy) onCrossPageMove;
   final double canvasWidth;
@@ -29,6 +30,7 @@ class DraggableResizableDocument extends StatefulWidget {
     required this.onTap,
     required this.onEdit,
     required this.onDelete,
+    this.onRecrop,
     required this.onLayoutUpdate,
     required this.onCrossPageMove,
     required this.canvasWidth,
@@ -240,6 +242,25 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
                         child: const Padding(
                           padding: EdgeInsets.all(10),
                           child: Icon(Icons.rotate_right, size: 20, color: Colors.blueAccent),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Tooltip(
+                    message: 'إعادة قص',
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(24),
+                        onTap: () {
+                          if (widget.onRecrop != null) {
+                            HapticFeedback.lightImpact();
+                            widget.onRecrop!();
+                          }
+                        },
+                        child: const Padding(
+                          padding: EdgeInsets.all(10),
+                          child: Icon(Icons.crop, size: 20, color: Colors.blueAccent),
                         ),
                       ),
                     ),
