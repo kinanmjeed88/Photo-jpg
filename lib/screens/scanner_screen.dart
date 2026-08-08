@@ -54,6 +54,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
       if (mounted) {
         final bool smartRecog = ref.read(appStateProvider).smartRecognition;
+        List<File> allBatchFiles = [];
 
         for (var processedFile in pickedFiles) {
           final docType = await _scannerService.classifyDocument(processedFile);
@@ -71,13 +72,19 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
               );
               if (result != null && result is List<File>) {
                 finalFiles = result;
+              } else if (result != null && result is List<dynamic>) {
+                finalFiles = result.cast<String>().map((path) => File(path)).toList();
               } else {
                 finalFiles = [processedFile];
               }
             }
           }
 
-          await _processBatchFiles(finalFiles);
+          allBatchFiles.addAll(finalFiles);
+        }
+
+        if (allBatchFiles.isNotEmpty) {
+          await _processBatchFiles(allBatchFiles);
         }
       }
     } catch (e) {
@@ -194,8 +201,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
       final pdfFile = await _pdfService.generatePdf(
         groupedPages: pages,
         state: state,
-        uiCanvasWidth: _lastKnownCanvasWidth,
-        uiCanvasHeight: _lastKnownCanvasHeight,
+        uiCanvasWidth: AppConstants.kVirtualCanvasWidth,
+        uiCanvasHeight: AppConstants.kVirtualCanvasHeight,
       );
 
       if (mounted) {
