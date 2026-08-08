@@ -1,6 +1,12 @@
 ---
 layout: default
-title: ماسح المستمسكات الذكي
+title: الصفحة الرئيسية
+description: ماسح المستمسكات الذكي - تطبيق احترافي لمسح وتنظيم المستندات
 ---
 
-{% include_relative README.md %}
+<div dir="rtl" align="right">
+
+{% capture readme_content %}{% include_relative README.md %}{% endcapture %}
+{{ readme_content | markdownify }}
+
+</div>
