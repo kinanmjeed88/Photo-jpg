@@ -1,17 +1,69 @@
-# doc_scanner_app
+<div align="center">
 
-A new Flutter project.
+# 🌟 ماسح المستمسكات الذكي | Smart Doc Scanner
 
-## Getting Started
+![Flutter](https://img.shields.io/badge/Flutter-3.x-%2302569B.svg?style=for-the-badge&logo=Flutter&logoColor=white)
+![Dart](https://img.shields.io/badge/Dart-3.11-%230175C2.svg?style=for-the-badge&logo=dart&logoColor=white)
+![Riverpod](https://img.shields.io/badge/Riverpod-State_Management-%23000000.svg?style=for-the-badge)
+![OpenCV](https://img.shields.io/badge/OpenCV-Computer_Vision-%235C3EE8.svg?style=for-the-badge)
 
-This project is a starting point for a Flutter application.
+> **أداة متكاملة وذكية لمسح، تعديل، وترتيب المستمسكات الرسمية باحترافية، وتصديرها كملف PDF عالي الجودة ومصمم للطباعة.**
 
-A few resources to get you started if this is your first Flutter project:
+</div>
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+---
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## ✨ المميزات الحصرية (Premium Features)
+
+نقدم لك تجربة متكاملة تتجاوز مجرد التقاط الصور، حيث تم دمج أحدث تقنيات الرؤية الحاسوبية لضمان دقة واحترافية لا مثيل لها:
+
+*   **🤖 القص الذكي التلقائي (Smart Crop):** يعتمد على خوارزميات **OpenCV** لتحليل حواف المستندات، استخراج الإحداثيات الدقيقة، وقصها تلقائياً مع تصحيح المنظور (Perspective Transform).
+*   **📑 المعالجة المجمعة (Batch Processing):** إمكانية استيراد ومعالجة عدة مستندات في وقت واحد، وتطبيق التعديلات عليها بسلاسة داخل خط معالجة معزول (Isolates) لضمان أداء فائق دون توقف واجهة المستخدم.
+*   **📐 الشبكة الديناميكية (Dynamic Grid Layout):** نظام ذكي لترتيب المستمسكات على لوحة العمل الافتراضية. يقوم النظام بحساب المساحات المتاحة تلقائياً لتجنب تداخل المستندات وتوزيعها بشكل مثالي على مساحة ورقة A4.
+*   **🖨️ تصدير PDF فائق الدقة (Pixel-Perfect PDF Export):** تحويل لوحة العمل إلى ملف PDF يطابق تماماً ما تراه على الشاشة، باستخدام نظام `PdfPageFormat` المخصص لتطبيق الإحداثيات (dx, dy) والأبعاد بدقة لضمان أفضل جودة طباعة.
+
+---
+
+## 🎨 التميز في واجهة وتجربة المستخدم (UI/UX Excellence)
+
+تم تصميم التطبيق بعناية فائقة لتقديم تجربة مستخدم لا تُنسى، تركز على التفاصيل الدقيقة التي تصنع الفارق:
+
+> **"التصميم ليس فقط كيف يبدو ويشعر، التصميم هو كيف يعمل بسلاسة."**
+
+*   **📳 التفاعلات اللمسية والتجاوب (Haptic & Visual Feedback):** استجابة تفاعلية مريحة عند التفاعل مع الأزرار والعناصر القابلة للسحب (Drag and Drop)، مع الاعتماد على الحركات الانسيابية لتوضيح التغييرات على الشاشة.
+*   **⏳ حالات التحميل غير المتزامنة (Seamless Asynchronous Loading):** استخدام حوارات تحميل ذكية أثناء تشغيل خوارزميات الذكاء الاصطناعي ومعالجة الصور في الخلفية، مما يوفر تجربة سلسة تمنع تجمد التطبيق (UI Freezing).
+*   **🛡️ معالجة ذكية لفيضان الصفحة (Page Overflow Handling):** عندما تتجاوز المستندات المساحة المتاحة في الصفحة، يقوم النظام بذكاء بإدارة عملية الانتقال لصفحة جديدة، مدعوماً بإشعارات (SnackBars) توجيهية واضحة للمستخدم.
+*   **🔒 الحماية والمصادقة (Biometric Authentication):** دمج المصادقة البيومترية عند فتح التطبيق لضمان سرية وخصوصية مستمسكاتك الشخصية.
+
+---
+
+## 🚀 رحلة المستخدم (How It Works)
+
+استخدام التطبيق يتم عبر خطوات بسيطة ومنطقية تضمن لك الوصول للنتيجة المثالية في ثوانٍ:
+
+| الخطوة | المرحلة | تفاصيل العملية |
+| :---: | :--- | :--- |
+| **1️⃣** | **تخصيص مساحة العمل** | حدد نوع العمل (شخص واحد/عائلة)، واختر المستمسكات المطلوبة، وطريقة العرض (ورقة واحدة أم ورقتان). |
+| **2️⃣** | **المسح والاستيراد** | استخدم الكاميرا لالتقاط الصور أو استورد مجموعة من المعرض. سيتولى **التعرف الذكي** قص الحواف تلقائياً. |
+| **3️⃣** | **القص المتعدد اليدوي** | في حال وجود عدة هويات في صورة واحدة، تتيح لك شاشة **القص المتعدد (Multi-Crop)** تحديد إطارات متعددة لاستخراجها دفعة واحدة. |
+| **4️⃣** | **الترتيب الذكي** | قم بسحب وإفلات المستندات بحرية. نظام **الشبكة الديناميكي** سيمنع التداخل ويرتبها آلياً لتوفير مساحة الطباعة. |
+| **5️⃣** | **التصدير النهائي** | بضغطة زر واحدة، يتم توليد ملف **PDF جاهز للطباعة** مطابق تماماً لما قمت بتصميمه على الشاشة. |
+
+---
+
+## 🛠️ التقنيات الأساسية (Tech Stack)
+
+بُني التطبيق باستخدام هندسة برمجية متقدمة لضمان أداء استثنائي وقابلية عالية للتوسع:
+
+*   **Framework:** **Flutter** (Cross-platform UI Engine)
+*   **Language:** **Dart** (v3.11+)
+*   **State Management:** **Riverpod** (Robust & scalable state architecture)
+*   **Computer Vision:** **OpenCV Dart** (Isolate-based image processing & cropping)
+*   **Machine Learning:** **Google ML Kit** (Text Recognition & Classification)
+*   **Security:** **Local Auth** (Biometrics / FaceID integration)
+*   **Document Generation:** **PDF Package** (Custom coordinate mapping engine)
+
+---
+<div align="center">
+  <sub>صُنع بشغف لتقديم أفضل تجربة رقمية.</sub>
+</div>
