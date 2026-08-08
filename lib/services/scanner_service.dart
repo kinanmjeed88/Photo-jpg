@@ -76,8 +76,8 @@ Future<List<File>> _isolateProcessSmartCVLayer(Map<String, dynamic> args) async 
     srcClone = src.clone();
     gray = cv.cvtColor(srcClone, cv.COLOR_BGR2GRAY);
     blurred = cv.gaussianBlur(gray, (7, 7), 0);
-    edges = cv.canny(blurred, 50, 150);
-    kernel = cv.getStructuringElement(cv.MORPH_RECT, (15, 15));
+    edges = cv.canny(blurred, 30, 100);
+    kernel = cv.getStructuringElement(cv.MORPH_RECT, (11, 11));
     closed = cv.morphologyEx(edges, cv.MORPH_CLOSE, kernel);
     final (conts, hier) = cv.findContours(closed, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
     contours = conts; hierarchy = hier;
@@ -85,7 +85,7 @@ Future<List<File>> _isolateProcessSmartCVLayer(Map<String, dynamic> args) async 
 
     for (var contour in contours) {
       final area = cv.contourArea(contour);
-      if (area < imageArea * 0.01 || area > imageArea * 0.90) continue;
+      if (area < imageArea * 0.03 || area > imageArea * 0.85) continue;
       final double peri = cv.arcLength(contour, true);
       final cv.VecPoint approx = cv.approxPolyDP(contour, 0.02 * peri, true);
       cv.VecPoint? orderedPts; bool isValidShape = false;
@@ -115,7 +115,7 @@ Future<List<File>> _isolateProcessSmartCVLayer(Map<String, dynamic> args) async 
           double maxDim = w > h ? w : h; double minDim = w < h ? w : h;
           double ratio = minDim > 0 ? maxDim / minDim : 0;
 
-          if (ratio >= 1.1 && ratio <= 2.5) {
+          if (ratio >= 0.8 && ratio <= 2.5) {
             var p0 = orderedPts[0]; var p1 = orderedPts[1];
             var p2 = orderedPts[2]; var p3 = orderedPts[3];
             int cx = ((p0.x + p1.x + p2.x + p3.x) / 4).toInt();
@@ -136,19 +136,35 @@ Future<List<File>> _isolateProcessSmartCVLayer(Map<String, dynamic> args) async 
             int maxHeight = heightA > heightB ? heightA : heightB;
             if (maxWidth < 10 || maxHeight < 10) continue;
 
+            // Expand bounding box by +20 pixels (10px padding on all sides) BEFORE warpPerspective
+            // Clamping against source bounds
+            int pad = 10;
+            int srcW = srcClone!.cols;
+            int srcH = srcClone.rows;
+
+            p0 = cv.Point((p0.x - pad).clamp(0, srcW - 1), (p0.y - pad).clamp(0, srcH - 1));
+            p1 = cv.Point((p1.x + pad).clamp(0, srcW - 1), (p1.y - pad).clamp(0, srcH - 1));
+            p2 = cv.Point((p2.x + pad).clamp(0, srcW - 1), (p2.y + pad).clamp(0, srcH - 1));
+            p3 = cv.Point((p3.x - pad).clamp(0, srcW - 1), (p3.y + pad).clamp(0, srcH - 1));
+
+            final paddedOrderedPts = cv.VecPoint.fromList([p0, p1, p2, p3]);
+
+            int paddedMaxWidth = maxWidth + 2 * pad;
+            int paddedMaxHeight = maxHeight + 2 * pad;
+
             final dstPts = cv.VecPoint.fromList([
-              cv.Point(0, 0), cv.Point(maxWidth - 1, 0),
-              cv.Point(maxWidth - 1, maxHeight - 1), cv.Point(0, maxHeight - 1),
+              cv.Point(0, 0), cv.Point(paddedMaxWidth - 1, 0),
+              cv.Point(paddedMaxWidth - 1, paddedMaxHeight - 1), cv.Point(0, paddedMaxHeight - 1),
             ]);
-            final transMat = cv.getPerspectiveTransform(orderedPts, dstPts);
-            final warped = cv.warpPerspective(srcClone, transMat, (maxWidth, maxHeight));
+            final transMat = cv.getPerspectiveTransform(paddedOrderedPts, dstPts);
+            final warped = cv.warpPerspective(srcClone, transMat, (paddedMaxWidth, paddedMaxHeight));
 
             String suffix = '_ID'; // Default suffix
             final croppedPath = '$tempPath/smart_cropped_${DateTime.now().millisecondsSinceEpoch}_${count}$suffix.jpg';
 
             cv.imwrite(croppedPath, warped);
             croppedFiles.add(File(croppedPath));
-            warped.dispose(); transMat.dispose(); dstPts.dispose();
+            warped.dispose(); transMat.dispose(); dstPts.dispose(); paddedOrderedPts.dispose();
             count++;
           }
         }

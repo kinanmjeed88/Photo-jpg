@@ -31,6 +31,7 @@ class ScannedDocument {
   final double originalWidth;
   final double originalHeight;
   final int rotationAngle;
+  final String? originalImagePath;
 
   ScannedDocument({
     required this.file,
@@ -42,6 +43,7 @@ class ScannedDocument {
     this.originalWidth = 300,
     this.originalHeight = 400,
     this.rotationAngle = 0,
+    this.originalImagePath,
   });
 
   ScannedDocument copyWith({
@@ -54,6 +56,7 @@ class ScannedDocument {
     double? originalWidth,
     double? originalHeight,
     int? rotationAngle,
+    String? originalImagePath,
   }) {
     return ScannedDocument(
       file: file ?? this.file,
@@ -65,6 +68,7 @@ class ScannedDocument {
       originalWidth: originalWidth ?? this.originalWidth,
       originalHeight: originalHeight ?? this.originalHeight,
       rotationAngle: rotationAngle ?? this.rotationAngle,
+      originalImagePath: originalImagePath ?? this.originalImagePath,
     );
   }
 }
@@ -77,7 +81,7 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
 
 
 
-  Future<BatchAddResult> batchAddDocuments(List<File> files, AppState appState) async {
+  Future<BatchAddResult> batchAddDocuments(List<File> files, AppState appState, {String? originalImagePath}) async {
     List<ScannedDocument> added = [];
     List<File> overflow = [];
     List<File> failed = [];
@@ -153,6 +157,7 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
           height: newDocHeight,
           dx: currentDx,
           dy: currentDy,
+          originalImagePath: originalImagePath ?? f.path, // Use the provided original image path, fallback to itself
         );
 
         localDocs.add(doc);

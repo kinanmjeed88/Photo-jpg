@@ -85,14 +85,77 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
           if (processedFiles.isEmpty) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('لم يتم اكتشاف أي مستمسكات — جرب القص اليدوي')),
+              const SnackBar(content: Text('تعذر القص الذكي، تم التحويل للقص اليدوي')),
             );
+
+            // Push to MultiCropScreen with all original images
+            for (File originalFile in files) {
+              final result = await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => MultiCropScreen(imageFile: originalFile),
+                ),
+              );
+              if (result != null && result is List<File>) {
+                await _processBatchFiles(result, originalImagePath: originalFile.path);
+              } else if (result != null && result is List<dynamic>) {
+                await _processBatchFiles(result.cast<String>().map((path) => File(path)).toList(), originalImagePath: originalFile.path);
+              }
+            }
           } else {
             await _processBatchFiles(processedFiles);
+            // Partial Detection Banner
+            ScaffoldMessenger.of(context).showMaterialBanner(
+              MaterialBanner(
+                content: Text('تم استخراج ${processedFiles.length} مستمسك. هل هناك مستمسكات ناقصة؟'),
+                actions: [
+                  TextButton(
+                    onPressed: () async {
+                      ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+                      for (File originalFile in files) {
+                        final result = await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => MultiCropScreen(imageFile: originalFile),
+                          ),
+                        );
+                        if (result != null && result is List<File>) {
+                          await _processBatchFiles(result, originalImagePath: originalFile.path);
+                        } else if (result != null && result is List<dynamic>) {
+                          await _processBatchFiles(result.cast<String>().map((path) => File(path)).toList(), originalImagePath: originalFile.path);
+                        }
+                      }
+                    },
+                    child: const Text('إضافة يدوياً'),
+                  ),
+                ],
+              ),
+            );
+            Future.delayed(const Duration(seconds: 5), () {
+              if (mounted) {
+                ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+              }
+            });
           }
           return;
         } else {
-          await _processBatchFiles(files);
+          // If Smart Crop toggle is OFF, immediately route to Manual Multi-Crop sequentially
+          for (File originalFile in files) {
+            final result = await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => MultiCropScreen(imageFile: originalFile),
+              ),
+            );
+            if (result != null && result is List<File>) {
+              await _processBatchFiles(result, originalImagePath: originalFile.path);
+            } else if (result != null && result is List<dynamic>) {
+              await _processBatchFiles(result.cast<String>().map((path) => File(path)).toList(), originalImagePath: originalFile.path);
+            } else {
+              // Fallback if null
+              await _processBatchFiles([originalFile], originalImagePath: originalFile.path);
+            }
+          }
           return;
         }
       } else {
@@ -113,6 +176,9 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
           if (smartRecog) {
             finalFiles = await _scannerService.processSmartRecognition(file);
             if (finalFiles.isEmpty) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('تعذر القص الذكي، تم التحويل للقص اليدوي')),
+              );
               final result = await Navigator.push(
                 context,
                 MaterialPageRoute(
@@ -126,12 +192,59 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
               } else {
                 finalFiles = [file];
               }
+              await _processBatchFiles(finalFiles, originalImagePath: file.path);
+              return;
+            } else {
+              ScaffoldMessenger.of(context).showMaterialBanner(
+                MaterialBanner(
+                  content: Text('تم استخراج ${finalFiles.length} مستمسك. هل هناك مستمسكات ناقصة؟'),
+                  actions: [
+                    TextButton(
+                      onPressed: () async {
+                        ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+                        final result = await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => MultiCropScreen(imageFile: file),
+                          ),
+                        );
+                        if (result != null && result is List<File>) {
+                          await _processBatchFiles(result, originalImagePath: file.path);
+                        } else if (result != null && result is List<dynamic>) {
+                          await _processBatchFiles(result.cast<String>().map((path) => File(path)).toList(), originalImagePath: file.path);
+                        }
+                      },
+                      child: const Text('إضافة يدوياً'),
+                    ),
+                  ],
+                ),
+              );
+              Future.delayed(const Duration(seconds: 5), () {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+                }
+              });
             }
+          } else {
+            // Smart Recognition OFF
+            final result = await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => MultiCropScreen(imageFile: file),
+              ),
+            );
+            if (result != null && result is List<File>) {
+              finalFiles = result;
+            } else if (result != null && result is List<dynamic>) {
+              finalFiles = result.cast<String>().map((path) => File(path)).toList();
+            }
+            await _processBatchFiles(finalFiles, originalImagePath: file.path);
+            return;
           }
           allBatchFiles.addAll(finalFiles);
 
           if (allBatchFiles.isNotEmpty) {
-            await _processBatchFiles(allBatchFiles);
+            await _processBatchFiles(allBatchFiles, originalImagePath: file.path);
           }
         }
       }
@@ -151,7 +264,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
   }
 
 
-  Future<void> _processBatchFiles(List<File> files) async {
+  Future<void> _processBatchFiles(List<File> files, {String? originalImagePath}) async {
     if (!mounted) return;
     showDialog(
       context: context,
@@ -161,7 +274,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
     try {
       final appState = ref.read(appStateProvider);
-      final result = await ref.read(scannedDocumentsProvider.notifier).batchAddDocuments(files, appState);
+      final result = await ref.read(scannedDocumentsProvider.notifier).batchAddDocuments(files, appState, originalImagePath: originalImagePath);
       if (!mounted) return;
       Navigator.pop(context); // pop loading dialog
 
@@ -381,6 +494,28 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                             _selectionNotifier.value = (pageIndex: pageKey, docIndex: currentDocsCount > 0 ? currentDocsCount - 1 : docIndex);
                                                           }
                                                         },
+                                                        onRecrop: doc.originalImagePath != null
+                                                            ? () async {
+                                                                final cropped = await _scannerService.manualCrop(doc.originalImagePath!);
+                                                                if (cropped != null) {
+                                                                  // Get fresh bytes to recalculate sizes
+                                                                  final bytes = await cropped.readAsBytes();
+                                                                  final decoded = await decodeImageFromList(bytes);
+                                                                  final double newOrigWidth = decoded.width.toDouble();
+                                                                  final double newOrigHeight = decoded.height.toDouble();
+                                                                  decoded.dispose();
+
+                                                                  final updatedDoc = doc.copyWith(
+                                                                    file: cropped,
+                                                                    originalWidth: newOrigWidth,
+                                                                    originalHeight: newOrigHeight,
+                                                                    // We preserve dx, dy, width, height, and rotationAngle as requested,
+                                                                    // but visually aspect ratio will fix itself due to originalWidth/Height update.
+                                                                  );
+                                                                  ref.read(scannedDocumentsProvider.notifier).updateDocumentAt(pageKey, docIndex, updatedDoc);
+                                                                }
+                                                              }
+                                                            : null,
                                                         onEdit: () {
                                                           Navigator.push(
                                                             context,
