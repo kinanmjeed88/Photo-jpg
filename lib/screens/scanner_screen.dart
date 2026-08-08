@@ -72,7 +72,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
             },
           );
 
-          final processedFiles = await _scannerService.processBatchSmartRecognition(
+          final Map<File, List<File>> mappedProcessedFiles = await _scannerService.processBatchSmartRecognition(
             files,
             onProgress: (current, total) {
               progressNotifier.value = current;
@@ -83,7 +83,9 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
           Navigator.pop(context); // Close dialog
           progressNotifier.dispose();
 
-          if (processedFiles.isEmpty) {
+          int totalProcessed = mappedProcessedFiles.values.fold(0, (sum, list) => sum + list.length);
+
+          if (totalProcessed == 0) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text('تعذر القص الذكي، تم التحويل للقص اليدوي')),
             );
@@ -103,11 +105,16 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
               }
             }
           } else {
-            await _processBatchFiles(processedFiles);
+            for (var entry in mappedProcessedFiles.entries) {
+              if (entry.value.isNotEmpty) {
+                await _processBatchFiles(entry.value, originalImagePath: entry.key.path);
+              }
+            }
+
             // Partial Detection Banner
             ScaffoldMessenger.of(context).showMaterialBanner(
               MaterialBanner(
-                content: Text('تم استخراج ${processedFiles.length} مستمسك. هل هناك مستمسكات ناقصة؟'),
+                content: Text('تم استخراج $totalProcessed مستمسك. هل هناك مستمسكات ناقصة؟'),
                 actions: [
                   TextButton(
                     onPressed: () async {
@@ -446,14 +453,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                       return ValueListenableBuilder<({int? pageIndex, int? docIndex})>(
                                         valueListenable: _selectionNotifier,
                                         builder: (context, selection, child) {
+                                          // Direct array rendering since Riverpod array reordering guarantees Z-Index
                                           final sortedDocs = List.of(docsOnPage);
-                                          sortedDocs.sort((a, b) {
-                                            bool aSelected = (selection.pageIndex == pageKey && selection.docIndex == a.key);
-                                            bool bSelected = (selection.pageIndex == pageKey && selection.docIndex == b.key);
-                                            if (aSelected) return 1;
-                                            if (bSelected) return -1;
-                                            return 0;
-                                          });
 
                                           return FittedBox(
                                             fit: BoxFit.contain,
@@ -483,15 +484,25 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                         canvasHeight: AppConstants.kVirtualCanvasHeight,
                                                         canvasScale: constraints.maxWidth / AppConstants.kVirtualCanvasWidth,
                                                         onDragStarted: () {
-                                                          ref.read(scannedDocumentsProvider.notifier).moveDocumentToTop(pageKey, docIndex);
+                                                          int actualIndex = docIndex;
+                                                          final currentDocs = ref.read(scannedDocumentsProvider)[pageKey] ?? [];
+                                                          actualIndex = currentDocs.indexWhere((d) => d.file.path == doc.file.path);
+                                                          if (actualIndex == -1) actualIndex = docIndex;
+
+                                                          ref.read(scannedDocumentsProvider.notifier).moveDocumentToTop(pageKey, actualIndex);
                                                           final currentDocsCount = ref.read(scannedDocumentsProvider)[pageKey]?.length ?? 0;
-                                                          _selectionNotifier.value = (pageIndex: pageKey, docIndex: currentDocsCount > 0 ? currentDocsCount - 1 : docIndex);
+                                                          _selectionNotifier.value = (pageIndex: pageKey, docIndex: currentDocsCount > 0 ? currentDocsCount - 1 : actualIndex);
                                                         },
                                                         onTap: () {
-                                                          if (selection.pageIndex != pageKey || selection.docIndex != docIndex) {
-                                                            ref.read(scannedDocumentsProvider.notifier).moveDocumentToTop(pageKey, docIndex);
+                                                          int actualIndex = docIndex;
+                                                          final currentDocs = ref.read(scannedDocumentsProvider)[pageKey] ?? [];
+                                                          actualIndex = currentDocs.indexWhere((d) => d.file.path == doc.file.path);
+                                                          if (actualIndex == -1) actualIndex = docIndex;
+
+                                                          if (selection.pageIndex != pageKey || selection.docIndex != actualIndex) {
+                                                            ref.read(scannedDocumentsProvider.notifier).moveDocumentToTop(pageKey, actualIndex);
                                                             final currentDocsCount = ref.read(scannedDocumentsProvider)[pageKey]?.length ?? 0;
-                                                            _selectionNotifier.value = (pageIndex: pageKey, docIndex: currentDocsCount > 0 ? currentDocsCount - 1 : docIndex);
+                                                            _selectionNotifier.value = (pageIndex: pageKey, docIndex: currentDocsCount > 0 ? currentDocsCount - 1 : actualIndex);
                                                           }
                                                         },
                                                         onRecrop: doc.originalImagePath != null
@@ -509,10 +520,19 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                                     file: cropped,
                                                                     originalWidth: newOrigWidth,
                                                                     originalHeight: newOrigHeight,
-                                                                    // We preserve dx, dy, width, height, and rotationAngle as requested,
-                                                                    // but visually aspect ratio will fix itself due to originalWidth/Height update.
                                                                   );
+
+                                                                  // 4a: First, update the state with the new cropped image path
                                                                   ref.read(scannedDocumentsProvider.notifier).updateDocumentAt(pageKey, docIndex, updatedDoc);
+
+                                                                  // 4b: Then, delete the OLD cropped image file (crash-safe)
+                                                                  if (doc.file.existsSync() && doc.file.path != doc.originalImagePath) {
+                                                                    try {
+                                                                      doc.file.deleteSync();
+                                                                    } catch (e) {
+                                                                      debugPrint('Failed to delete old cropped file: $e');
+                                                                    }
+                                                                  }
                                                                 }
                                                               }
                                                             : null,
@@ -540,12 +560,52 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                                 ),
                                                                 TextButton(
                                                                   onPressed: () {
-                                                                    ref.read(scannedDocumentsProvider.notifier).removeDocumentAt(pageKey, docIndex);
+                                                                    final allDocs = ref.read(scannedDocumentsProvider);
+                                                                    int actualIndex = docIndex;
+                                                                    final currentDocs = allDocs[pageKey] ?? [];
+                                                                    actualIndex = currentDocs.indexWhere((d) => d.file.path == doc.file.path);
+                                                                    if (actualIndex == -1) actualIndex = docIndex;
+                                                                    ref.read(scannedDocumentsProvider.notifier).removeDocumentAt(pageKey, actualIndex);
+
                                                                     if (selection.pageIndex == pageKey && selection.docIndex == docIndex) {
                                                                       _selectionNotifier.value = (pageIndex: null, docIndex: null);
                                                                     } else if (selection.pageIndex == pageKey && selection.docIndex != null && selection.docIndex! > docIndex) {
                                                                       _selectionNotifier.value = (pageIndex: selection.pageIndex, docIndex: selection.docIndex! - 1);
                                                                     }
+
+                                                                    // Delete specific cropped file
+                                                                    if (doc.file.existsSync() && doc.file.path != doc.originalImagePath) {
+                                                                      try {
+                                                                        doc.file.deleteSync();
+                                                                      } catch (e) {
+                                                                        debugPrint('Failed to delete cropped file: $e');
+                                                                      }
+                                                                    }
+
+                                                                    // Check if originalImagePath is shared by any other document
+                                                                    if (doc.originalImagePath != null) {
+                                                                      bool isShared = false;
+                                                                      // Re-read state after removing document
+                                                                      final currentState = ref.read(scannedDocumentsProvider);
+                                                                      for (var pageDocs in currentState.values) {
+                                                                        if (pageDocs.any((d) => d.originalImagePath == doc.originalImagePath)) {
+                                                                          isShared = true;
+                                                                          break;
+                                                                        }
+                                                                      }
+
+                                                                      if (!isShared) {
+                                                                        final originalFile = File(doc.originalImagePath!);
+                                                                        if (originalFile.existsSync()) {
+                                                                          try {
+                                                                            originalFile.deleteSync();
+                                                                          } catch (e) {
+                                                                            debugPrint('Failed to delete original file: $e');
+                                                                          }
+                                                                        }
+                                                                      }
+                                                                    }
+
                                                                     Navigator.pop(context);
                                                                   },
                                                                   child: const Text('حذف', style: TextStyle(color: Colors.red)),
@@ -563,6 +623,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                             width: width,
                                                             height: height,
                                                             rotationAngle: rotationAngle,
+                                                            originalDoc: doc,
                                                           );
                                                         },
                                                         onCrossPageMove: (sourcePageIndex, dIndex, movedDoc, dx, dy) {

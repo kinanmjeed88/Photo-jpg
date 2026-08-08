@@ -218,31 +218,47 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
                                   clipBehavior: Clip.none,
                                   children: [
                                     Positioned(
-                                      top: -16,
-                                      right: -16,
+                                      top: -30,
+                                      right: -30,
                                       child: GestureDetector(
+                                        behavior: HitTestBehavior.opaque,
                                         onTap: () => _removeCropBox(idx),
-                                        child: const CircleAvatar(
-                                          radius: 12,
-                                          backgroundColor: Colors.red,
-                                          child: Icon(Icons.close, size: 16, color: Colors.white),
+                                        child: Container(
+                                          width: 60,
+                                          height: 60,
+                                          color: Colors.transparent,
+                                          child: const Center(
+                                            child: CircleAvatar(
+                                              radius: 12,
+                                              backgroundColor: Colors.red,
+                                              child: Icon(Icons.close, size: 16, color: Colors.white),
+                                            ),
+                                          ),
                                         ),
                                       ),
                                     ),
                                     Positioned(
-                                      bottom: -10,
-                                      right: -10,
+                                      bottom: -30,
+                                      right: -30,
                                       child: GestureDetector(
+                                        behavior: HitTestBehavior.opaque,
                                         onPanUpdate: (details) {
                                           setState(() {
                                             rect.width = math.max(50, rect.width + details.delta.dx);
                                             rect.height = math.max(50, rect.height + details.delta.dy);
                                           });
                                         },
-                                        child: const CircleAvatar(
-                                          radius: 12,
-                                          backgroundColor: Colors.blue,
-                                          child: Icon(Icons.open_in_full, size: 16, color: Colors.white),
+                                        child: Container(
+                                          width: 60,
+                                          height: 60,
+                                          color: Colors.transparent,
+                                          child: const Center(
+                                            child: CircleAvatar(
+                                              radius: 12,
+                                              backgroundColor: Colors.blue,
+                                              child: Icon(Icons.open_in_full, size: 16, color: Colors.white),
+                                            ),
+                                          ),
                                         ),
                                       ),
                                     ),
