@@ -33,41 +33,90 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
   Future<void> _scanDocument(ImageSource source) async {
     try {
-      final List<File> pickedFiles = [];
       if (source == ImageSource.gallery) {
         final List<File>? files = await _scannerService.scanMultipleDocuments();
-        if (files != null && files.isNotEmpty) {
-          pickedFiles.addAll(files);
+        if (files == null || files.isEmpty) return;
+
+        if (!mounted) return;
+
+        final bool smartRecog = ref.read(appStateProvider).smartRecognition;
+        if (smartRecog) {
+          final progressNotifier = ValueNotifier<int>(0);
+          int totalImages = files.length;
+
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (context) {
+              return PopScope(
+                canPop: false,
+                child: AlertDialog(
+                  title: const Text('جاري المعالجة', textAlign: TextAlign.right),
+                  content: ValueListenableBuilder<int>(
+                    valueListenable: progressNotifier,
+                    builder: (context, currentProgress, child) {
+                      return Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          LinearProgressIndicator(
+                            value: totalImages > 0 ? currentProgress / totalImages : null,
+                          ),
+                          const SizedBox(height: 16),
+                          Text('جاري معالجة الصورة $currentProgress من $totalImages'),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+              );
+            },
+          );
+
+          final processedFiles = await _scannerService.processBatchSmartRecognition(
+            files,
+            onProgress: (current, total) {
+              progressNotifier.value = current;
+            }
+          );
+
+          if (!mounted) return;
+          Navigator.pop(context); // Close dialog
+          progressNotifier.dispose();
+
+          if (processedFiles.isEmpty) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('لم يتم اكتشاف أي مستمسكات — جرب القص اليدوي')),
+            );
+          } else {
+            await _processBatchFiles(processedFiles);
+          }
+          return;
+        } else {
+          await _processBatchFiles(files);
+          return;
         }
       } else {
         final File? file = await _scannerService.scanDocument(source: source);
-        if (file != null) {
-          pickedFiles.add(file);
-        }
-      }
+        if (file == null) return;
 
-      if (pickedFiles.isEmpty) return;
+        setState(() {
+          _isProcessing = true;
+        });
 
-      setState(() {
-        _isProcessing = true;
-      });
+        if (mounted) {
+          final bool smartRecog = ref.read(appStateProvider).smartRecognition;
+          List<File> allBatchFiles = [];
 
-      if (mounted) {
-        final bool smartRecog = ref.read(appStateProvider).smartRecognition;
-        List<File> allBatchFiles = [];
-
-        for (var processedFile in pickedFiles) {
-          final docType = await _scannerService.classifyDocument(processedFile);
-
-          List<File> finalFiles = [processedFile];
+          final docType = await _scannerService.classifyDocument(file);
+          List<File> finalFiles = [file];
 
           if (smartRecog) {
-            finalFiles = await _scannerService.processSmartRecognition(processedFile);
+            finalFiles = await _scannerService.processSmartRecognition(file);
             if (finalFiles.isEmpty) {
               final result = await Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (context) => MultiCropScreen(imageFile: processedFile),
+                  builder: (context) => MultiCropScreen(imageFile: file),
                 ),
               );
               if (result != null && result is List<File>) {
@@ -75,16 +124,15 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
               } else if (result != null && result is List<dynamic>) {
                 finalFiles = result.cast<String>().map((path) => File(path)).toList();
               } else {
-                finalFiles = [processedFile];
+                finalFiles = [file];
               }
             }
           }
-
           allBatchFiles.addAll(finalFiles);
-        }
 
-        if (allBatchFiles.isNotEmpty) {
-          await _processBatchFiles(allBatchFiles);
+          if (allBatchFiles.isNotEmpty) {
+            await _processBatchFiles(allBatchFiles);
+          }
         }
       }
     } catch (e) {
