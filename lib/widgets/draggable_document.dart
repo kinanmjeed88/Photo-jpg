@@ -43,6 +43,7 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
   late double height;
   late int rotationAngle;
   bool isDragging = false;
+  bool _isResizing = false;
 
   @override
   void initState() {
@@ -148,6 +149,50 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
               ),
             ),
           ),
+          if (widget.isSelected)
+            PositionedDirectional(
+              bottom: -20,
+              end: -20,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onPanStart: (details) {
+                  HapticFeedback.selectionClick();
+                  setState(() => _isResizing = true);
+                },
+                onPanUpdate: (details) {
+                  setState(() {
+                    width += details.delta.dx / widget.canvasScale;
+                    // Prevent width from going below a minimum value
+                    if (width < 50) width = 50;
+                    height = width / _documentAspectRatio;
+                  });
+
+                  final scalePercent = (width / widget.document.originalWidth * 100).toInt();
+                  if (scalePercent % 25 == 0) HapticFeedback.lightImpact();
+                },
+                onPanEnd: (details) {
+                  setState(() => _isResizing = false);
+                  widget.onLayoutUpdate(widget.pageIndex, widget.docIndex, dx, dy, width, height, rotationAngle);
+                },
+                child: Container(
+                  width: 60, height: 60,
+                  color: Colors.transparent,
+                  child: Center(
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      decoration: BoxDecoration(
+                        color: _isResizing ? Colors.orange : Colors.blue,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4, spreadRadius: 1)],
+                      ),
+                      padding: const EdgeInsets.all(6),
+                      child: const Icon(Icons.open_in_full, size: 16, color: Colors.white),
+                    ),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
