@@ -32,6 +32,7 @@ class ScannedDocument {
   final double originalHeight;
   final int rotationAngle;
   final String? originalImagePath;
+  final double scale;
 
   ScannedDocument({
     required this.file,
@@ -44,6 +45,7 @@ class ScannedDocument {
     this.originalHeight = 400,
     this.rotationAngle = 0,
     this.originalImagePath,
+    this.scale = 1.0,
   });
 
   ScannedDocument copyWith({
@@ -57,6 +59,7 @@ class ScannedDocument {
     double? originalHeight,
     int? rotationAngle,
     String? originalImagePath,
+    double? scale,
   }) {
     assert(originalImagePath == null || originalImagePath == this.originalImagePath,
            'originalImagePath is immutable once set and cannot be changed during copyWith.');
@@ -71,6 +74,7 @@ class ScannedDocument {
       originalHeight: originalHeight ?? this.originalHeight,
       rotationAngle: rotationAngle ?? this.rotationAngle,
       originalImagePath: originalImagePath ?? this.originalImagePath,
+      scale: scale ?? this.scale,
     );
   }
 }
@@ -439,7 +443,7 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
     };
   }
 
-  void updateDocumentLayout(int pageIndex, int docIndex, {double? dx, double? dy, double? width, double? height, int? rotationAngle, ScannedDocument? originalDoc}) {
+  void updateDocumentLayout(int pageIndex, int docIndex, {double? dx, double? dy, double? width, double? height, int? rotationAngle, double? scale, ScannedDocument? originalDoc}) {
     if (!state.containsKey(pageIndex)) return;
 
     final pageDocs = state[pageIndex]!;
@@ -460,6 +464,7 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
       width: width,
       height: height,
       rotationAngle: rotationAngle,
+      scale: scale,
     );
 
     final updatedDocs = [

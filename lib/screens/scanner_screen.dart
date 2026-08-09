@@ -739,17 +739,17 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                         canvasWidth: AppConstants.kVirtualCanvasWidth,
                                                         canvasHeight: AppConstants.kVirtualCanvasHeight,
                                                         canvasScale: constraints.maxWidth / AppConstants.kVirtualCanvasWidth,
-                                                        onResizeUpdate: (details) {
-                                                            double aspect = doc.width / doc.height;
-                                                            double newWidth = doc.width + details.delta.dx / (constraints.maxWidth / AppConstants.kVirtualCanvasWidth);
-                                                            double newHeight = newWidth / aspect;
+                                                        onTransformUpdate: (newScale, newPos) {
                                                             ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
-                                                              pageKey, docIndex, dx: doc.dx, dy: doc.dy, width: newWidth, height: newHeight, rotationAngle: doc.rotationAngle
+                                                              pageKey, docIndex, dx: newPos.dx, dy: newPos.dy, scale: newScale, width: doc.width, height: doc.height, rotationAngle: doc.rotationAngle
                                                             );
                                                         },
-                                                        onResizeEnd: (details) {
+                                                        onHandleResize: (scaleDelta) {
+                                                            ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
+                                                              pageKey, docIndex, scale: (doc.scale + scaleDelta).clamp(0.3, 3.0), dx: doc.dx, dy: doc.dy, width: doc.width, height: doc.height, rotationAngle: doc.rotationAngle
+                                                            );
                                                         },
-                                                        onDragStarted: () {
+                                                        onGestureStart: () {
                                                           int actualIndex = docIndex;
                                                           final currentDocs = ref.read(scannedDocumentsProvider)[pageKey] ?? [];
                                                           actualIndex = currentDocs.indexWhere((d) => d.file.path == doc.file.path);

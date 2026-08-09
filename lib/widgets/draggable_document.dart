@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'dart:math' as math;
 import '../providers/app_state.dart';
 
 class DraggableResizableDocument extends StatefulWidget {
@@ -14,9 +15,10 @@ class DraggableResizableDocument extends StatefulWidget {
   final double canvasWidth;
   final double canvasHeight;
   final double canvasScale;
-  final VoidCallback? onDragStarted;
-  final void Function(DragUpdateDetails)? onResizeUpdate;
-  final void Function(DragEndDetails)? onResizeEnd;
+  final VoidCallback? onGestureStart;
+  final void Function(double newScale, Offset newPosition)? onTransformUpdate;
+  final void Function(double scaleDelta)? onHandleResize;
+  final VoidCallback? onGestureEnd;
 
   const DraggableResizableDocument({
     super.key,
@@ -31,9 +33,10 @@ class DraggableResizableDocument extends StatefulWidget {
     required this.canvasWidth,
     required this.canvasHeight,
     required this.canvasScale,
-    this.onDragStarted,
-    this.onResizeUpdate,
-    this.onResizeEnd,
+    this.onGestureStart,
+    this.onTransformUpdate,
+    this.onHandleResize,
+    this.onGestureEnd,
   });
 
   @override
@@ -47,6 +50,7 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
   late double height;
   late int rotationAngle;
   bool isDragging = false;
+  double _baseScale = 1.0;      // Snapshot of scale at gesture start
   bool _isResizing = false;
 
   @override
@@ -82,41 +86,47 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
     return 1.0;
   }
 
-  void _onPanStart(DragStartDetails details) {
-    setState(() {
-      isDragging = true;
-    });
-    if (widget.onDragStarted != null) {
-      widget.onDragStarted!();
-    }
+  Widget _buildDocumentImage() {
+    return RepaintBoundary(
+      child: SizedBox(
+        width: width,
+        height: height,
+        child: AspectRatio(
+          aspectRatio: _documentAspectRatio,
+          child: Container(
+            decoration: BoxDecoration(
+              border: widget.isSelected
+                  ? Border.all(color: Colors.blueAccent, width: 3)
+                  : (widget.addFrame ? Border.all(color: Colors.black, width: 1.0) : null),
+            ),
+            child: RotatedBox(
+              quarterTurns: rotationAngle ~/ 90,
+              child: Image.file(widget.document.file, fit: BoxFit.contain),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
-  void _onPanUpdate(DragUpdateDetails details) {
-    setState(() {
-      dx += details.delta.dx / widget.canvasScale;
-      dy += details.delta.dy / widget.canvasScale;
-
-      // Clamp horizontally
-      dx = dx.clamp(0.0, widget.canvasWidth - width);
-    });
-  }
-
-  void _onPanEnd(DragEndDetails details) {
-    setState(() {
-      isDragging = false;
-    });
-    // Check if we need to do cross-page move
-    if (dy < 0 || dy > widget.canvasHeight) {
-      widget.onCrossPageMove(widget.pageIndex, widget.docIndex, widget.document, dx, dy);
-    } else {
-      widget.onLayoutUpdate(widget.pageIndex, widget.docIndex, dx, dy, width, height, rotationAngle);
-    }
-  }
-
-  void _onPanCancel() {
-    setState(() {
-      isDragging = false;
-    });
+  Widget _buildHandleUI() {
+    return Container(
+      width: 60, height: 60,
+      color: Colors.transparent,
+      child: Center(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          decoration: BoxDecoration(
+            color: _isResizing ? Colors.orange : Colors.blue,
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white, width: 2),
+            boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4, spreadRadius: 1)],
+          ),
+          padding: const EdgeInsets.all(6),
+          child: const Icon(Icons.open_in_full, size: 16, color: Colors.white),
+        ),
+      ),
+    );
   }
 
   @override
@@ -132,24 +142,40 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
           Positioned(
             left: 0,
             top: 0,
-            child: RepaintBoundary(
-              child: SizedBox(
-                width: width,
-                height: height,
-                child: AspectRatio(
-                  aspectRatio: _documentAspectRatio,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      border: widget.isSelected
-                          ? Border.all(color: Colors.blueAccent, width: 3)
-                          : (widget.addFrame ? Border.all(color: Colors.black, width: 1.0) : null),
-                    ),
-                    child: RotatedBox(
-                      quarterTurns: rotationAngle ~/ 90,
-                      child: Image.file(widget.document.file, fit: BoxFit.contain),
-                    ),
-                  ),
-                ),
+            child: GestureDetector(
+              behavior: HitTestBehavior.deferToChild,
+              onScaleStart: (details) {
+                _baseScale = widget.document.scale;
+                if (widget.onGestureStart != null) widget.onGestureStart!();
+              },
+              onScaleUpdate: (details) {
+                // details.scale = 1.0 at start, grows/shrinks relatively
+                final double newScale = (_baseScale * details.scale).clamp(0.3, 3.0);
+
+                setState(() {
+                  // Update local dx, dy to avoid snap-back and accumulate delta correctly
+                  dx += details.focalPointDelta.dx / widget.canvasScale;
+                  dy += details.focalPointDelta.dy / widget.canvasScale;
+                  dx = dx.clamp(0.0, widget.canvasWidth - width);
+                });
+
+                if (widget.onTransformUpdate != null) {
+                  widget.onTransformUpdate!(newScale, Offset(dx, dy));
+                }
+              },
+              onScaleEnd: (details) {
+                // Check if we need to do cross-page move
+                if (dy < 0 || dy > widget.canvasHeight) {
+                  widget.onCrossPageMove(widget.pageIndex, widget.docIndex, widget.document, dx, dy);
+                } else {
+                  widget.onLayoutUpdate(widget.pageIndex, widget.docIndex, dx, dy, width, height, rotationAngle);
+                }
+                if (widget.onGestureEnd != null) widget.onGestureEnd!();
+              },
+              child: Transform.scale(
+                scale: widget.document.scale,
+                alignment: Alignment.center,
+                child: _buildDocumentImage(),
               ),
             ),
           ),
@@ -161,30 +187,30 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
                 behavior: HitTestBehavior.opaque,
                 onPanStart: (details) {
                   HapticFeedback.selectionClick();
+                  _baseScale = widget.document.scale;
                   setState(() => _isResizing = true);
                 },
-                onPanUpdate: widget.onResizeUpdate,
-                onPanEnd: (details) {
-                  setState(() => _isResizing = false);
-                  if (widget.onResizeEnd != null) widget.onResizeEnd!(details);
+                onPanUpdate: (details) {
+                  // RTL-aware direction normalization
+                  final bool isRTL = Directionality.of(context) == TextDirection.rtl;
+                  final double deltaDx = isRTL ? -details.delta.dx : details.delta.dx;
+                  final double deltaDy = details.delta.dy;
+
+                  // Euclidean magnitude with signed direction
+                  final double magnitude = math.sqrt(deltaDx * deltaDx + deltaDy * deltaDy);
+                  final double direction = (deltaDx + deltaDy) >= 0 ? 1.0 : -1.0;
+                  final double scaleDelta = magnitude * direction * 0.005;
+
+                  if (widget.onHandleResize != null) {
+                    widget.onHandleResize!(scaleDelta);
+                  }
                 },
-                child: Container(
-                  width: 60, height: 60,
-                  color: Colors.transparent,
-                  child: Center(
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 150),
-                      decoration: BoxDecoration(
-                        color: _isResizing ? Colors.orange : Colors.blue,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 2),
-                        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4, spreadRadius: 1)],
-                      ),
-                      padding: const EdgeInsets.all(6),
-                      child: const Icon(Icons.open_in_full, size: 16, color: Colors.white),
-                    ),
-                  ),
-                ),
+                onPanEnd: (_) {
+                  setState(() => _isResizing = false);
+                  widget.onLayoutUpdate(widget.pageIndex, widget.docIndex, dx, dy, width, height, rotationAngle);
+                },
+                onPanCancel: () => setState(() => _isResizing = false),
+                child: _buildHandleUI(),
               ),
             ),
         ],
@@ -197,10 +223,6 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: widget.onTap,
-        onPanStart: _onPanStart,
-        onPanUpdate: _onPanUpdate,
-        onPanEnd: _onPanEnd,
-        onPanCancel: _onPanCancel,
         child: Stack(
           clipBehavior: Clip.none,
           children: [
