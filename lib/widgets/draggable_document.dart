@@ -210,20 +210,22 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
           Positioned(
             left: 0,
             top: 0,
-            child: SizedBox(
-              width: width,
-              height: height,
-              child: AspectRatio(
-                aspectRatio: _documentAspectRatio,
-                child: Container(
-                  decoration: BoxDecoration(
-                    border: widget.isSelected
-                        ? Border.all(color: Colors.blueAccent, width: 3)
-                        : (widget.addFrame ? Border.all(color: Colors.black, width: 1.0) : null),
-                  ),
-                  child: RotatedBox(
-                    quarterTurns: rotationAngle ~/ 90,
-                    child: Image.file(widget.document.file, fit: BoxFit.contain),
+            child: RepaintBoundary(
+              child: SizedBox(
+                width: width,
+                height: height,
+                child: AspectRatio(
+                  aspectRatio: _documentAspectRatio,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      border: widget.isSelected
+                          ? Border.all(color: Colors.blueAccent, width: 3)
+                          : (widget.addFrame ? Border.all(color: Colors.black, width: 1.0) : null),
+                    ),
+                    child: RotatedBox(
+                      quarterTurns: rotationAngle ~/ 90,
+                      child: Image.file(widget.document.file, fit: BoxFit.contain),
+                    ),
                   ),
                 ),
               ),
@@ -236,40 +238,38 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
     return Positioned(
       left: dx,
       top: dy,
-      child: RepaintBoundary(
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: widget.onTap,
-          onPanStart: _onPanStart,
-          onPanUpdate: _onPanUpdate,
-          onPanEnd: _onPanEnd,
-          onPanCancel: _onPanCancel,
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              documentWidget,
-              AnimatedPositioned(
-                duration: const Duration(milliseconds: 250),
-                curve: Curves.easeOutBack,
-                bottom: (widget.isSelected && !isDragging) ? -70 : -110, // DRAG-AWARE VISIBILITY
-                left: 0,
-                right: 0,
-                height: 70, // Explicit height prevents layout collapse
-                child: OverflowBox(
-                  maxWidth: double.infinity,
-                  maxHeight: 70,
-                  alignment: Alignment.center,
-                  child: AnimatedOpacity(
-                    duration: const Duration(milliseconds: 200),
-                    opacity: (widget.isSelected && !isDragging) ? 1.0 : 0.0, // DRAG-AWARE VISIBILITY
-                    child: Center(
-                      child: _buildToolbarPill(),
-                    ),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        onPanStart: _onPanStart,
+        onPanUpdate: _onPanUpdate,
+        onPanEnd: _onPanEnd,
+        onPanCancel: _onPanCancel,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            documentWidget,
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 250),
+              curve: Curves.easeOutBack,
+              bottom: (widget.isSelected && !isDragging) ? -70 : -110, // DRAG-AWARE VISIBILITY
+              left: 0,
+              right: 0,
+              height: 70, // Explicit height prevents layout collapse
+              child: OverflowBox(
+                maxWidth: double.infinity,
+                maxHeight: 70,
+                alignment: Alignment.center,
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 200),
+                  opacity: (widget.isSelected && !isDragging) ? 1.0 : 0.0, // DRAG-AWARE VISIBILITY
+                  child: Center(
+                    child: _buildToolbarPill(),
                   ),
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
