@@ -258,27 +258,34 @@ class ScannerService {
   }
 
   Future<File?> applyFilter(File imageFile, bool highContrast) async {
+    // Read bytes on main thread
     final bytes = await imageFile.readAsBytes();
-    img.Image? decodedImage = img.decodeImage(bytes);
 
-    if (decodedImage == null) return null;
+    // Pass only raw data to isolate for heavy processing
+    final processedBytes = await Isolate.run(() {
+      img.Image? decodedImage = img.decodeImage(bytes);
 
-    // Apply Grayscale
-    decodedImage = img.grayscale(decodedImage);
+      if (decodedImage == null) return null;
 
-    if (highContrast) {
-      // Basic contrast adjustment for a "scanner" look
-      decodedImage = img.adjustColor(
-        decodedImage,
-        contrast: 1.5,
-        exposure: 0.1,
-      );
-    }
+      // Apply Grayscale
+      decodedImage = img.grayscale(decodedImage);
 
-    final newBytes = img.encodeJpg(decodedImage, quality: 90);
-    final filteredFile = File(imageFile.path)..writeAsBytesSync(newBytes);
+      if (highContrast) {
+        // Basic contrast adjustment for a "scanner" look
+        decodedImage = img.adjustColor(
+          decodedImage,
+          contrast: 1.5,
+          exposure: 0.1,
+        );
+      }
 
-    return filteredFile;
+      return Uint8List.fromList(img.encodeJpg(decodedImage, quality: 90));
+    });
+
+    if (processedBytes == null) return null;
+
+    // Write safely on main thread asynchronously
+    return await imageFile.writeAsBytes(processedBytes);
   }
 
   Future<List<File>> processSmartRecognition(File imageFile) async {

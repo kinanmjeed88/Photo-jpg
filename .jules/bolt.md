@@ -4,3 +4,6 @@
 ## 2024-05-18 - Non-blocking UI Optimizations
 **Learning:** In Dart/Flutter, synchronous filesystem calls (`listSync()`) and heavy tasks like parsing images or creating PDFs directly on the main thread will cause severe UI jank or ANR (Application Not Responding) crashes, especially with large numbers of images or high resolutions.
 **Action:** Always prefer asynchronous API variants (`list()`) for I/O operations and aggressively offload CPU/Memory heavy tasks (like image and PDF processing) to a background thread using `Isolate.run()`. When passing data to an isolate, remember to pass simple primitive types (like Strings for file paths) rather than complex objects or platform channel dependencies.
+## 2026-08-09 - Isolate Data Transfer Pattern for File I/O
+**Learning:** When offloading heavy image processing to an isolate, passing `File` objects directly and doing I/O inside the isolate can sometimes lead to issues or suboptimal performance depending on how the platform channel interacts with the isolate.
+**Action:** Always read the file bytes asynchronously on the main thread FIRST, pass only the raw `Uint8List` data to the `Isolate.run()`, do the heavy decoding/encoding work there, return the new `Uint8List`, and then perform the asynchronous write operation safely back on the main thread.
