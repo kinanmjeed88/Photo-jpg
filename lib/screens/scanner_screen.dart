@@ -417,6 +417,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                       ? const Center(child: Text('لم يتم مسح أي مستمسكات بعد'))
                       : ListView.separated(
                           padding: const EdgeInsets.all(16),
+                          clipBehavior: Clip.none,
                           itemCount: pageKeys.length,
                           separatorBuilder: (context, index) => const SizedBox(height: 20),
                           itemBuilder: (context, pageIndex) {
@@ -426,6 +427,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
                             return Center(
                               child: Container(
+                                clipBehavior: Clip.none,
                                 decoration: BoxDecoration(
                                   color: Colors.white,
                                   boxShadow: [
@@ -458,6 +460,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
                                           return FittedBox(
                                             fit: BoxFit.contain,
+                                            clipBehavior: Clip.none,
                                             child: SizedBox(
                                               width: AppConstants.kVirtualCanvasWidth,
                                               height: AppConstants.kVirtualCanvasHeight,
