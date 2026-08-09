@@ -51,7 +51,6 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
   late int rotationAngle;
   bool isDragging = false;
   double _baseScale = 1.0;      // Snapshot of scale at gesture start
-  Offset _baseOffset = Offset.zero;
   bool _isResizing = false;
 
   @override
@@ -139,16 +138,20 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
       height: height,
       child: GestureDetector(
         behavior: HitTestBehavior.deferToChild,
+        onTapDown: (_) {
+          // CRITICAL FIX: Restore tap selection for Z-index ordering
+          // Using onTapDown ensures it fires before scale gestures win the arena
+          // ignore: unnecessary_null_comparison
+          if (widget.onTap != null) widget.onTap();
+        },
         onScaleStart: (details) {
           _baseScale = widget.document.scale;
-          _baseOffset = widget.document.position;
           if (widget.onGestureStart != null) widget.onGestureStart!();
         },
         onScaleUpdate: (details) {
           final double newScale = (_baseScale * details.scale).clamp(0.3, 3.0);
-          final Offset newPosition = _baseOffset + details.focalPointDelta;
           if (widget.onTransformUpdate != null) {
-            widget.onTransformUpdate!(newScale, newPosition);
+            widget.onTransformUpdate!(newScale, details.focalPointDelta);
           }
         },
         onScaleEnd: (details) {
