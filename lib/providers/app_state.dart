@@ -34,6 +34,8 @@ class ScannedDocument {
   final String? originalImagePath;
   final double scale;
 
+  Offset get position => Offset(dx, dy);
+
   ScannedDocument({
     required this.file,
     this.type = DocumentType.unknown,
