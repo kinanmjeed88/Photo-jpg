@@ -467,7 +467,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                   _selectionNotifier.value = (pageIndex: null, docIndex: null);
                                                 },
                                                 child: Stack(
-                                                  clipBehavior: Clip.hardEdge,
+                                                  clipBehavior: Clip.none,
                                                   children: [
                                                     ...sortedDocs.map((entry) {
                                                       final docIndex = entry.key;
