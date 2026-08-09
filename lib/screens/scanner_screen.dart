@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:gal/gal.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter/services.dart';
@@ -397,6 +398,258 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     }
   }
 
+
+  Future<void> _handleDelete(({int? pageIndex, int? docIndex}) selection) async {
+    final pageIndex = selection.pageIndex;
+    final docIndex = selection.docIndex;
+    if (pageIndex == null || docIndex == null) return;
+
+    final allDocs = ref.read(scannedDocumentsProvider);
+    final pageDocs = allDocs[pageIndex] ?? [];
+    if (docIndex >= pageDocs.length) return;
+    final doc = pageDocs[docIndex];
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('تأكيد الحذف'),
+        content: const Text('هل أنت متأكد من أنك تريد حذف هذا المستمسك؟'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('إلغاء'),
+          ),
+          TextButton(
+            onPressed: () {
+              final currentAllDocs = ref.read(scannedDocumentsProvider);
+              final currentDocs = currentAllDocs[pageIndex] ?? [];
+              int actualIndex = currentDocs.indexWhere((d) => d.file.path == doc.file.path);
+              if (actualIndex == -1) actualIndex = docIndex;
+              ref.read(scannedDocumentsProvider.notifier).removeDocumentAt(pageIndex, actualIndex);
+
+              if (_selectionNotifier.value.pageIndex == pageIndex && _selectionNotifier.value.docIndex == docIndex) {
+                _selectionNotifier.value = (pageIndex: null, docIndex: null);
+              } else if (_selectionNotifier.value.pageIndex == pageIndex && _selectionNotifier.value.docIndex != null && _selectionNotifier.value.docIndex! > docIndex) {
+                _selectionNotifier.value = (pageIndex: _selectionNotifier.value.pageIndex, docIndex: _selectionNotifier.value.docIndex! - 1);
+              }
+
+              if (doc.file.existsSync() && doc.file.path != doc.originalImagePath) {
+                try {
+                  doc.file.deleteSync();
+                } catch (e) {
+                  debugPrint('Failed to delete cropped file: $e');
+                }
+              }
+
+              if (doc.originalImagePath != null) {
+                bool isShared = false;
+                final currentState = ref.read(scannedDocumentsProvider);
+                for (var pDocs in currentState.values) {
+                  if (pDocs.any((d) => d.originalImagePath == doc.originalImagePath)) {
+                    isShared = true;
+                    break;
+                  }
+                }
+
+                if (!isShared) {
+                  final originalFile = File(doc.originalImagePath!);
+                  if (originalFile.existsSync()) {
+                    try {
+                      originalFile.deleteSync();
+                    } catch (e) {
+                      debugPrint('Failed to delete original file: $e');
+                    }
+                  }
+                }
+              }
+
+              Navigator.pop(context);
+            },
+            child: const Text('حذف', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _handleEdit(({int? pageIndex, int? docIndex}) selection) {
+    final pageIndex = selection.pageIndex;
+    final docIndex = selection.docIndex;
+    if (pageIndex == null || docIndex == null) return;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ImageEditorScreen(
+          pageIndex: pageIndex,
+          documentIndex: docIndex
+        ),
+      ),
+    );
+  }
+
+  Future<void> _handleCrop(({int? pageIndex, int? docIndex}) selection) async {
+    final pageIndex = selection.pageIndex;
+    final docIndex = selection.docIndex;
+    if (pageIndex == null || docIndex == null) return;
+
+    final allDocs = ref.read(scannedDocumentsProvider);
+    final pageDocs = allDocs[pageIndex] ?? [];
+    if (docIndex >= pageDocs.length) return;
+    final doc = pageDocs[docIndex];
+
+    if (doc.originalImagePath == null) return;
+
+    final cropped = await _scannerService.manualCrop(doc.originalImagePath!);
+    if (cropped != null) {
+      final bytes = await cropped.readAsBytes();
+      final decoded = await decodeImageFromList(bytes);
+      final double newOrigWidth = decoded.width.toDouble();
+      final double newOrigHeight = decoded.height.toDouble();
+      decoded.dispose();
+
+      final updatedDoc = doc.copyWith(
+        file: cropped,
+        originalWidth: newOrigWidth,
+        originalHeight: newOrigHeight,
+      );
+
+      ref.read(scannedDocumentsProvider.notifier).updateDocumentAt(pageIndex, docIndex, updatedDoc);
+
+      if (doc.file.existsSync() && doc.file.path != doc.originalImagePath) {
+        try {
+          doc.file.deleteSync();
+        } catch (e) {
+          debugPrint('Failed to delete old cropped file: $e');
+        }
+      }
+    }
+  }
+
+  Future<void> _handleSave(({int? pageIndex, int? docIndex}) selection) async {
+    final pageIndex = selection.pageIndex;
+    final docIndex = selection.docIndex;
+    if (pageIndex == null || docIndex == null) return;
+
+    final allDocs = ref.read(scannedDocumentsProvider);
+    final pageDocs = allDocs[pageIndex] ?? [];
+    if (docIndex >= pageDocs.length) return;
+    final doc = pageDocs[docIndex];
+
+    try {
+      await Gal.putImage(doc.file.path);
+      if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم الحفظ في المعرض')));
+      }
+    } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطأ في الحفظ: $e')));
+        }
+    }
+  }
+
+  void _handleRotate(({int? pageIndex, int? docIndex}) selection) {
+    HapticFeedback.lightImpact();
+    final pageIndex = selection.pageIndex;
+    final docIndex = selection.docIndex;
+    if (pageIndex == null || docIndex == null) return;
+
+    final allDocs = ref.read(scannedDocumentsProvider);
+    final pageDocs = allDocs[pageIndex] ?? [];
+    if (docIndex >= pageDocs.length) return;
+    final doc = pageDocs[docIndex];
+
+    double centerX = doc.dx + doc.width / 2;
+    double centerY = doc.dy + doc.height / 2;
+
+    double newWidth = doc.height;
+    double newHeight = doc.width;
+
+    double newDx = centerX - newWidth / 2;
+    double newDy = centerY - newHeight / 2;
+
+    if (newDx < 0) newDx = 0;
+    if (newDy < 0) newDy = 0;
+    if (newDx + newWidth > AppConstants.kVirtualCanvasWidth) newDx = AppConstants.kVirtualCanvasWidth - newWidth;
+    if (newDy + newHeight > AppConstants.kVirtualCanvasHeight) newDy = AppConstants.kVirtualCanvasHeight - newHeight;
+
+    int newRotation = (doc.rotationAngle + 90) % 360;
+
+    ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
+      pageIndex,
+      docIndex,
+      dx: newDx,
+      dy: newDy,
+      width: newWidth,
+      height: newHeight,
+      rotationAngle: newRotation
+    );
+  }
+
+  void _handleScale(({int? pageIndex, int? docIndex}) selection) {
+    HapticFeedback.lightImpact();
+    final pageIndex = selection.pageIndex;
+    final docIndex = selection.docIndex;
+    if (pageIndex == null || docIndex == null) return;
+
+    final allDocs = ref.read(scannedDocumentsProvider);
+    final pageDocs = allDocs[pageIndex] ?? [];
+    if (docIndex >= pageDocs.length) return;
+    final doc = pageDocs[docIndex];
+
+    double aspectRatio = doc.width / doc.height;
+
+    double newWidth = AppConstants.kVirtualCanvasWidth;
+    double newHeight = newWidth / aspectRatio;
+
+    if (newHeight > AppConstants.kVirtualCanvasHeight) {
+      newHeight = AppConstants.kVirtualCanvasHeight;
+      newWidth = newHeight * aspectRatio;
+    }
+
+    ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
+      pageIndex,
+      docIndex,
+      dx: 0.0,
+      dy: 0.0,
+      width: newWidth,
+      height: newHeight,
+    );
+  }
+
+
+  Widget _buildDivider() {
+    return Container(
+      height: 24,
+      width: 1,
+      color: Colors.grey.withValues(alpha: 0.3),
+      margin: const EdgeInsets.symmetric(horizontal: 4),
+    );
+  }
+
+  Widget _globalToolbarButton(IconData icon, Color color, VoidCallback? onTap, String tooltip) {
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(24),
+          onTap: onTap != null ? () {
+            HapticFeedback.lightImpact();
+            onTap();
+          } : null,
+          child: SizedBox(
+            width: 48,
+            height: 48,
+            child: Center(
+              child: Icon(icon, size: 20, color: onTap != null ? color : Colors.grey),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final pages = ref.watch(scannedDocumentsProvider);
@@ -432,7 +685,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                   color: Colors.white,
                                   boxShadow: [
                                     BoxShadow(
-                                      color: Colors.black.withOpacity(0.1),
+                                      color: Colors.black.withValues(alpha: 0.1),
                                       blurRadius: 10,
                                       spreadRadius: 2,
                                     )
@@ -508,115 +761,6 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                             _selectionNotifier.value = (pageIndex: pageKey, docIndex: currentDocsCount > 0 ? currentDocsCount - 1 : actualIndex);
                                                           }
                                                         },
-                                                        onRecrop: doc.originalImagePath != null
-                                                            ? () async {
-                                                                final cropped = await _scannerService.manualCrop(doc.originalImagePath!);
-                                                                if (cropped != null) {
-                                                                  // Get fresh bytes to recalculate sizes
-                                                                  final bytes = await cropped.readAsBytes();
-                                                                  final decoded = await decodeImageFromList(bytes);
-                                                                  final double newOrigWidth = decoded.width.toDouble();
-                                                                  final double newOrigHeight = decoded.height.toDouble();
-                                                                  decoded.dispose();
-
-                                                                  final updatedDoc = doc.copyWith(
-                                                                    file: cropped,
-                                                                    originalWidth: newOrigWidth,
-                                                                    originalHeight: newOrigHeight,
-                                                                  );
-
-                                                                  // 4a: First, update the state with the new cropped image path
-                                                                  ref.read(scannedDocumentsProvider.notifier).updateDocumentAt(pageKey, docIndex, updatedDoc);
-
-                                                                  // 4b: Then, delete the OLD cropped image file (crash-safe)
-                                                                  if (doc.file.existsSync() && doc.file.path != doc.originalImagePath) {
-                                                                    try {
-                                                                      doc.file.deleteSync();
-                                                                    } catch (e) {
-                                                                      debugPrint('Failed to delete old cropped file: $e');
-                                                                    }
-                                                                  }
-                                                                }
-                                                              }
-                                                            : null,
-                                                        onEdit: () {
-                                                          Navigator.push(
-                                                            context,
-                                                            MaterialPageRoute(
-                                                              builder: (context) => ImageEditorScreen(
-                                                                pageIndex: pageKey,
-                                                                documentIndex: docIndex
-                                                              ),
-                                                            ),
-                                                          );
-                                                        },
-                                                        onDelete: () {
-                                                          showDialog(
-                                                            context: context,
-                                                            builder: (context) => AlertDialog(
-                                                              title: const Text('تأكيد الحذف'),
-                                                              content: const Text('هل أنت متأكد من أنك تريد حذف هذا المستمسك؟'),
-                                                              actions: [
-                                                                TextButton(
-                                                                  onPressed: () => Navigator.pop(context),
-                                                                  child: const Text('إلغاء'),
-                                                                ),
-                                                                TextButton(
-                                                                  onPressed: () {
-                                                                    final allDocs = ref.read(scannedDocumentsProvider);
-                                                                    int actualIndex = docIndex;
-                                                                    final currentDocs = allDocs[pageKey] ?? [];
-                                                                    actualIndex = currentDocs.indexWhere((d) => d.file.path == doc.file.path);
-                                                                    if (actualIndex == -1) actualIndex = docIndex;
-                                                                    ref.read(scannedDocumentsProvider.notifier).removeDocumentAt(pageKey, actualIndex);
-
-                                                                    if (selection.pageIndex == pageKey && selection.docIndex == docIndex) {
-                                                                      _selectionNotifier.value = (pageIndex: null, docIndex: null);
-                                                                    } else if (selection.pageIndex == pageKey && selection.docIndex != null && selection.docIndex! > docIndex) {
-                                                                      _selectionNotifier.value = (pageIndex: selection.pageIndex, docIndex: selection.docIndex! - 1);
-                                                                    }
-
-                                                                    // Delete specific cropped file
-                                                                    if (doc.file.existsSync() && doc.file.path != doc.originalImagePath) {
-                                                                      try {
-                                                                        doc.file.deleteSync();
-                                                                      } catch (e) {
-                                                                        debugPrint('Failed to delete cropped file: $e');
-                                                                      }
-                                                                    }
-
-                                                                    // Check if originalImagePath is shared by any other document
-                                                                    if (doc.originalImagePath != null) {
-                                                                      bool isShared = false;
-                                                                      // Re-read state after removing document
-                                                                      final currentState = ref.read(scannedDocumentsProvider);
-                                                                      for (var pageDocs in currentState.values) {
-                                                                        if (pageDocs.any((d) => d.originalImagePath == doc.originalImagePath)) {
-                                                                          isShared = true;
-                                                                          break;
-                                                                        }
-                                                                      }
-
-                                                                      if (!isShared) {
-                                                                        final originalFile = File(doc.originalImagePath!);
-                                                                        if (originalFile.existsSync()) {
-                                                                          try {
-                                                                            originalFile.deleteSync();
-                                                                          } catch (e) {
-                                                                            debugPrint('Failed to delete original file: $e');
-                                                                          }
-                                                                        }
-                                                                      }
-                                                                    }
-
-                                                                    Navigator.pop(context);
-                                                                  },
-                                                                  child: const Text('حذف', style: TextStyle(color: Colors.red)),
-                                                                ),
-                                                              ],
-                                                            ),
-                                                          );
-                                                        },
                                                         onLayoutUpdate: (pIndex, dIndex, dx, dy, width, height, rotationAngle) {
                                                           ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
                                                             pIndex,
@@ -686,7 +830,59 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                         }
                                                       );
                                                     }).toList(),
-                                                  ],
+
+                                                    Positioned(
+                                                      bottom: 24,
+                                                      left: 16,
+                                                      right: 16,
+                                                      child: IgnorePointer(
+                                                        ignoring: selection.pageIndex == null,
+                                                        child: AnimatedSlide(
+                                                          duration: const Duration(milliseconds: 250),
+                                                          curve: Curves.easeOutBack,
+                                                          offset: selection.pageIndex != null ? Offset.zero : const Offset(0, 1.5),
+                                                          child: AnimatedOpacity(
+                                                            duration: const Duration(milliseconds: 200),
+                                                            opacity: selection.pageIndex != null ? 1.0 : 0.0,
+                                                            child: Center(
+                                                              child: Material(
+                                                                color: Colors.transparent,
+                                                                child: Container(
+                                                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                                                                  decoration: BoxDecoration(
+                                                                    color: Theme.of(context).cardColor,
+                                                                    borderRadius: BorderRadius.circular(30),
+                                                                    boxShadow: [
+                                                                      BoxShadow(
+                                                                        color: Colors.black.withValues(alpha: 0.15),
+                                                                        blurRadius: 15, offset: const Offset(0, 5),
+                                                                      ),
+                                                                    ],
+                                                                  ),
+                                                                  child: SingleChildScrollView(
+                                                                    scrollDirection: Axis.horizontal,
+                                                                    child: Row(
+                                                                      mainAxisSize: MainAxisSize.min,
+                                                                      children: [
+                                                                        _globalToolbarButton(Icons.close, Colors.red, selection.pageIndex != null ? () => _handleDelete(selection) : null, 'حذف'),
+                                                                        _globalToolbarButton(Icons.download, Colors.green, selection.pageIndex != null ? () => _handleSave(selection) : null, 'حفظ'),
+                                                                        _buildDivider(),
+                                                                        _globalToolbarButton(Icons.edit, Colors.blue, selection.pageIndex != null ? () => _handleEdit(selection) : null, 'تعديل'),
+                                                                        _globalToolbarButton(Icons.crop, Colors.blue, selection.pageIndex != null ? () => _handleCrop(selection) : null, 'قص'),
+                                                                        _buildDivider(),
+                                                                        _globalToolbarButton(Icons.rotate_right, Colors.blue, selection.pageIndex != null ? () => _handleRotate(selection) : null, 'تدوير'),
+                                                                        _globalToolbarButton(Icons.open_in_full, Colors.blue, selection.pageIndex != null ? () => _handleScale(selection) : null, 'تكبير'),
+                                                                      ],
+                                                                    ),
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ),
+],
                                                 ),
                                               ),
                                             ),
