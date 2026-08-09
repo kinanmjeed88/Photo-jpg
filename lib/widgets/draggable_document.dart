@@ -51,6 +51,7 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
   late int rotationAngle;
   bool isDragging = false;
   double _baseScale = 1.0;      // Snapshot of scale at gesture start
+  Offset _baseOffset = Offset.zero;
   bool _isResizing = false;
 
   @override
@@ -136,84 +137,67 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
     Widget documentWidget = SizedBox(
       width: width,
       height: height,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          Positioned(
-            left: 0,
-            top: 0,
-            child: GestureDetector(
-              behavior: HitTestBehavior.deferToChild,
-              onScaleStart: (details) {
-                _baseScale = widget.document.scale;
-                if (widget.onGestureStart != null) widget.onGestureStart!();
-              },
-              onScaleUpdate: (details) {
-                // details.scale = 1.0 at start, grows/shrinks relatively
-                final double newScale = (_baseScale * details.scale).clamp(0.3, 3.0);
+      child: GestureDetector(
+        behavior: HitTestBehavior.deferToChild,
+        onScaleStart: (details) {
+          _baseScale = widget.document.scale;
+          _baseOffset = widget.document.position;
+          if (widget.onGestureStart != null) widget.onGestureStart!();
+        },
+        onScaleUpdate: (details) {
+          final double newScale = (_baseScale * details.scale).clamp(0.3, 3.0);
+          final Offset newPosition = _baseOffset + details.focalPointDelta;
+          if (widget.onTransformUpdate != null) {
+            widget.onTransformUpdate!(newScale, newPosition);
+          }
+        },
+        onScaleEnd: (details) {
+          if (widget.onGestureEnd != null) widget.onGestureEnd!();
+        },
+        child: Transform.scale(
+          scale: widget.document.scale,
+          alignment: Alignment.center,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              _buildDocumentImage(), // Keep your existing document image widget here
 
-                setState(() {
-                  // Update local dx, dy to avoid snap-back and accumulate delta correctly
-                  dx += details.focalPointDelta.dx / widget.canvasScale;
-                  dy += details.focalPointDelta.dy / widget.canvasScale;
-                  dx = dx.clamp(0.0, widget.canvasWidth - width);
-                });
+              if (widget.isSelected)
+                Positioned( // CRITICAL: Forced to physical Right, NOT Directional
+                  bottom: -20 / widget.document.scale,
+                  right: -20 / widget.document.scale,
+                  child: Transform.scale(
+                    scale: 1.0 / widget.document.scale, // Inverse scale to maintain 60x60 physical size
+                    alignment: Alignment.center,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onPanStart: (details) {
+                        HapticFeedback.selectionClick();
+                        _baseScale = widget.document.scale;
+                        setState(() => _isResizing = true);
+                      },
+                      onPanUpdate: (details) {
+                        // Fixed Right Handle math: Right (+dx) or Down (+dy) = Grow.
+                        final double dx = details.delta.dx * widget.document.scale;
+                        final double dy = details.delta.dy * widget.document.scale;
 
-                if (widget.onTransformUpdate != null) {
-                  widget.onTransformUpdate!(newScale, Offset(dx, dy));
-                }
-              },
-              onScaleEnd: (details) {
-                // Check if we need to do cross-page move
-                if (dy < 0 || dy > widget.canvasHeight) {
-                  widget.onCrossPageMove(widget.pageIndex, widget.docIndex, widget.document, dx, dy);
-                } else {
-                  widget.onLayoutUpdate(widget.pageIndex, widget.docIndex, dx, dy, width, height, rotationAngle);
-                }
-                if (widget.onGestureEnd != null) widget.onGestureEnd!();
-              },
-              child: Transform.scale(
-                scale: widget.document.scale,
-                alignment: Alignment.center,
-                child: _buildDocumentImage(),
-              ),
-            ),
+                        final double magnitude = math.sqrt(dx * dx + dy * dy);
+                        final double direction = (dx + dy) >= 0 ? 1.0 : -1.0;
+                        final double scaleDelta = magnitude * direction * 0.005;
+
+                        if (widget.onHandleResize != null) {
+                          widget.onHandleResize!(scaleDelta);
+                        }
+                      },
+                      onPanEnd: (_) => setState(() => _isResizing = false),
+                      onPanCancel: () => setState(() => _isResizing = false),
+                      child: _buildHandleUI(), // Keep your existing 60x60 animated handle UI
+                    ),
+                  ),
+                ),
+            ],
           ),
-          if (widget.isSelected)
-            PositionedDirectional(
-              bottom: -20,
-              end: -20,
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onPanStart: (details) {
-                  HapticFeedback.selectionClick();
-                  _baseScale = widget.document.scale;
-                  setState(() => _isResizing = true);
-                },
-                onPanUpdate: (details) {
-                  // RTL-aware direction normalization
-                  final bool isRTL = Directionality.of(context) == TextDirection.rtl;
-                  final double deltaDx = isRTL ? -details.delta.dx : details.delta.dx;
-                  final double deltaDy = details.delta.dy;
-
-                  // Euclidean magnitude with signed direction
-                  final double magnitude = math.sqrt(deltaDx * deltaDx + deltaDy * deltaDy);
-                  final double direction = (deltaDx + deltaDy) >= 0 ? 1.0 : -1.0;
-                  final double scaleDelta = magnitude * direction * 0.005;
-
-                  if (widget.onHandleResize != null) {
-                    widget.onHandleResize!(scaleDelta);
-                  }
-                },
-                onPanEnd: (_) {
-                  setState(() => _isResizing = false);
-                  widget.onLayoutUpdate(widget.pageIndex, widget.docIndex, dx, dy, width, height, rotationAngle);
-                },
-                onPanCancel: () => setState(() => _isResizing = false),
-                child: _buildHandleUI(),
-              ),
-            ),
-        ],
+        ),
       ),
     );
 
