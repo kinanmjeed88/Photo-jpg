@@ -739,6 +739,16 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                         canvasWidth: AppConstants.kVirtualCanvasWidth,
                                                         canvasHeight: AppConstants.kVirtualCanvasHeight,
                                                         canvasScale: constraints.maxWidth / AppConstants.kVirtualCanvasWidth,
+                                                        onResizeUpdate: (details) {
+                                                            double aspect = doc.width / doc.height;
+                                                            double newWidth = doc.width + details.delta.dx / (constraints.maxWidth / AppConstants.kVirtualCanvasWidth);
+                                                            double newHeight = newWidth / aspect;
+                                                            ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
+                                                              pageKey, docIndex, dx: doc.dx, dy: doc.dy, width: newWidth, height: newHeight, rotationAngle: doc.rotationAngle
+                                                            );
+                                                        },
+                                                        onResizeEnd: (details) {
+                                                        },
                                                         onDragStarted: () {
                                                           int actualIndex = docIndex;
                                                           final currentDocs = ref.read(scannedDocumentsProvider)[pageKey] ?? [];
@@ -871,7 +881,6 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                                         _globalToolbarButton(Icons.crop, Colors.blue, selection.pageIndex != null ? () => _handleCrop(selection) : null, 'قص'),
                                                                         _buildDivider(),
                                                                         _globalToolbarButton(Icons.rotate_right, Colors.blue, selection.pageIndex != null ? () => _handleRotate(selection) : null, 'تدوير'),
-                                                                        _globalToolbarButton(Icons.open_in_full, Colors.blue, selection.pageIndex != null ? () => _handleScale(selection) : null, 'تكبير'),
                                                                       ],
                                                                     ),
                                                                   ),
