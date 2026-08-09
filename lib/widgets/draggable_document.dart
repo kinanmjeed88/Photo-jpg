@@ -252,64 +252,59 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
             AnimatedPositioned(
               duration: const Duration(milliseconds: 250),
               curve: Curves.easeOutBack,
-              bottom: (widget.isSelected && !isDragging) ? -70 : -110, // DRAG-AWARE VISIBILITY
+              bottom: (widget.isSelected && !isDragging) ? -70 : -110,
               left: 0,
               right: 0,
-              height: 70, // Explicit height prevents layout collapse
+              height: 70, // CRITICAL: Prevents layout collapse
               child: OverflowBox(
                 maxWidth: double.infinity,
-                maxHeight: 70,
-                alignment: Alignment.center,
+                maxHeight: 70, // CRITICAL: Prevents layout collapse
                 child: AnimatedOpacity(
                   duration: const Duration(milliseconds: 200),
-                  opacity: (widget.isSelected && !isDragging) ? 1.0 : 0.0, // DRAG-AWARE VISIBILITY
+                  opacity: (widget.isSelected && !isDragging) ? 1.0 : 0.0,
                   child: Center(
-                    child: _buildToolbarPill(),
+                    child: GestureDetector(
+                      onTap: () {}, // CRITICAL: Swallows taps to prevent bubbling
+                      behavior: HitTestBehavior.opaque,
+                      child: Material(
+                        color: Colors.transparent,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).cardColor,
+                            borderRadius: BorderRadius.circular(28),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(
+                                  alpha: Theme.of(context).brightness == Brightness.dark ? 0.5 : 0.18
+                                ),
+                                blurRadius: 10, offset: const Offset(0, 3),
+                              ),
+                            ],
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _toolbarButton(Icons.close, Colors.red, widget.onDelete, 'حذف'),
+                              _toolbarButton(Icons.download, Colors.green, _saveToGallery, 'حفظ'),
+                              _buildDivider(),
+                              _toolbarButton(Icons.edit, Colors.blue, widget.onEdit, 'تعديل'),
+                              _toolbarButton(Icons.crop, Colors.blue, widget.onRecrop, 'قص'),
+                              _buildDivider(),
+                              _toolbarButton(Icons.rotate_right, Colors.blue, _onRotate, 'تدوير'),
+                              _toolbarButton(Icons.open_in_full, Colors.blue, null, 'تكبير',
+                                  onResizeUpdate: _onResizeUpdate, onResizeEnd: _onResizeEnd),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildToolbarPill() {
-    return GestureDetector(
-      onTap: () {},
-      behavior: HitTestBehavior.opaque,
-      child: Material(
-      color: Colors.transparent,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: Theme.of(context).cardColor,
-          borderRadius: BorderRadius.circular(28),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(
-                  Theme.of(context).brightness == Brightness.dark ? 0.5 : 0.18),
-              blurRadius: 10,
-              offset: const Offset(0, 3),
-            ),
-          ],
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _toolbarButton(Icons.close, Colors.red, widget.onDelete, 'حذف'),
-            _toolbarButton(Icons.download, Colors.green, _saveToGallery, 'حفظ'),
-            _buildDivider(),
-            _toolbarButton(Icons.edit, Colors.blue, widget.onEdit, 'تعديل'),
-            _toolbarButton(Icons.crop, Colors.blue, widget.onRecrop, 'قص'),
-            _buildDivider(),
-            _toolbarButton(Icons.rotate_right, Colors.blue, _onRotate, 'تدوير'),
-            _toolbarButton(Icons.open_in_full, Colors.blue, null, 'تكبير',
-                onResizeUpdate: _onResizeUpdate, onResizeEnd: _onResizeEnd),
-          ],
-        ),
-      ),
       ),
     );
   }
