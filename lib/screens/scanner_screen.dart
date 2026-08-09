@@ -586,38 +586,6 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     );
   }
 
-  void _handleScale(({int? pageIndex, int? docIndex}) selection) {
-    HapticFeedback.lightImpact();
-    final pageIndex = selection.pageIndex;
-    final docIndex = selection.docIndex;
-    if (pageIndex == null || docIndex == null) return;
-
-    final allDocs = ref.read(scannedDocumentsProvider);
-    final pageDocs = allDocs[pageIndex] ?? [];
-    if (docIndex >= pageDocs.length) return;
-    final doc = pageDocs[docIndex];
-
-    double aspectRatio = doc.width / doc.height;
-
-    double newWidth = AppConstants.kVirtualCanvasWidth;
-    double newHeight = newWidth / aspectRatio;
-
-    if (newHeight > AppConstants.kVirtualCanvasHeight) {
-      newHeight = AppConstants.kVirtualCanvasHeight;
-      newWidth = newHeight * aspectRatio;
-    }
-
-    ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
-      pageIndex,
-      docIndex,
-      dx: 0.0,
-      dy: 0.0,
-      width: newWidth,
-      height: newHeight,
-    );
-  }
-
-
   Widget _buildDivider() {
     return Container(
       height: 24,
@@ -871,7 +839,6 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                                         _globalToolbarButton(Icons.crop, Colors.blue, selection.pageIndex != null ? () => _handleCrop(selection) : null, 'قص'),
                                                                         _buildDivider(),
                                                                         _globalToolbarButton(Icons.rotate_right, Colors.blue, selection.pageIndex != null ? () => _handleRotate(selection) : null, 'تدوير'),
-                                                                        _globalToolbarButton(Icons.open_in_full, Colors.blue, selection.pageIndex != null ? () => _handleScale(selection) : null, 'تكبير'),
                                                                       ],
                                                                     ),
                                                                   ),
