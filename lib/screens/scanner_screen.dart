@@ -667,7 +667,18 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
               children: [
                 Expanded(
                   child: pages.isEmpty
-                      ? const Center(child: Text('لم يتم مسح أي مستمسكات بعد'))
+                      ? Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(Icons.document_scanner_outlined, size: 64, color: Colors.grey),
+                              const SizedBox(height: 16),
+                              const Text('لم يتم مسح أي مستمسكات بعد', style: TextStyle(fontSize: 18, color: Colors.grey)),
+                              const SizedBox(height: 8),
+                              Text('اضغط على \'إضافة صورة\' بالأسفل للبدء', style: TextStyle(fontSize: 14, color: Colors.grey[600])),
+                            ],
+                          ),
+                        )
                       : ListView.separated(
                           padding: const EdgeInsets.all(16),
                           clipBehavior: Clip.none,
