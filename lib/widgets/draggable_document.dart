@@ -17,7 +17,7 @@ class DraggableResizableDocument extends StatefulWidget {
   final double canvasScale;
   final VoidCallback? onGestureStart;
   final void Function(double newScale, Offset delta)? onTransformUpdate;
-  final void Function(double scaleDelta)? onHandleResize;
+  final ValueChanged<double>? onHandleResize;
   final VoidCallback? onGestureEnd;
 
   const DraggableResizableDocument({
@@ -52,6 +52,8 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
   bool isDragging = false;
   double _baseScale = 1.0;      // Snapshot of scale at gesture start
   bool _isResizing = false;
+  double _handleBaseScale = 1.0;
+  double _accumulatedDrag = 0.0;
 
   @override
   void initState() {
@@ -167,43 +169,48 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
 
               if (widget.isSelected)
                 Positioned(
-                  // 1. Shift the offset to accommodate the 80x80 hitbox logically
                   bottom: -40 / widget.document.scale,
                   right: -40 / widget.document.scale,
                   child: SizedBox(
-                    // 2. Dynamically counter-scale the HitBox layout size!
-                    // This guarantees it is ALWAYS exactly 80x80 physical pixels.
+                    // Massive 80x80 physical thumb target that never shrinks
                     width: 80 / widget.document.scale,
                     height: 80 / widget.document.scale,
                     child: GestureDetector(
-                      behavior: HitTestBehavior.opaque, // CRITICAL: Must be opaque
+                      behavior: HitTestBehavior.opaque,
                       onPanStart: (details) {
                         HapticFeedback.selectionClick();
-                        setState(() => _isResizing = true);
+                        setState(() {
+                          _isResizing = true;
+                          _handleBaseScale = widget.document.scale;
+                          _accumulatedDrag = 0.0;
+                        });
                       },
                       onPanUpdate: (details) {
-                        final bool isRTL = Directionality.of(context) == TextDirection.rtl;
-                        final double dx = (isRTL ? -details.delta.dx : details.delta.dx) * widget.document.scale;
-                        final double dy = details.delta.dy * widget.document.scale;
-                        final double magnitude = math.sqrt(dx * dx + dy * dy);
-                        final double direction = (dx + dy) >= 0 ? 1.0 : -1.0;
-                        final double scaleDelta = magnitude * direction * 0.005;
-                        if (widget.onHandleResize != null) widget.onHandleResize!(scaleDelta);
+                        // Handle is physically locked to the RIGHT corner.
+                        // Right (+dx) and Down (+dy) ALWAYS mean OUTWARD. NO RTL INVERSION.
+                        final double dx = details.delta.dx;
+                        final double dy = details.delta.dy;
+
+                        // Smooth Euclidean projection for diagonal dragging
+                        final double diagonalDrag = (dx + dy) / math.sqrt(2);
+                        _accumulatedDrag += diagonalDrag;
+
+                        // Convert drag pixels to scale (150px = 1.0 scale change)
+                        final double newScale = (_handleBaseScale + (_accumulatedDrag / 150.0)).clamp(0.3, 3.0);
+
+                        if (widget.onHandleResize != null) {
+                          widget.onHandleResize!(newScale);
+                        }
                       },
                       onPanEnd: (_) => setState(() => _isResizing = false),
                       onPanCancel: () => setState(() => _isResizing = false),
                       child: Center(
-                        // 3. Apply inverse scale ONLY to the visual element.
-                        // Explicit alignment ensures no drifting at extreme scales.
                         child: Transform.scale(
                           scale: 1.0 / widget.document.scale,
                           alignment: Alignment.center,
                           child: SizedBox(
-                            width: 80,
-                            height: 80,
-                            child: Center(
-                              child: _buildHandleUI(), // Your existing visual handle
-                            ),
+                            width: 80, height: 80,
+                            child: Center(child: _buildHandleUI()),
                           ),
                         ),
                       ),

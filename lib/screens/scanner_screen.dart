@@ -746,9 +746,9 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                               pageKey, docIndex, dx: doc.position.dx, dy: doc.position.dy, scale: newScale, width: doc.width, height: doc.height, rotationAngle: doc.rotationAngle
                                                             );
                                                         },
-                                                        onHandleResize: (scaleDelta) {
+                                                        onHandleResize: (newScale) {
                                                             ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
-                                                              pageKey, docIndex, scale: (doc.scale + scaleDelta).clamp(0.3, 3.0), dx: doc.dx, dy: doc.dy, width: doc.width, height: doc.height, rotationAngle: doc.rotationAngle
+                                                              pageKey, docIndex, scale: newScale, dx: doc.dx, dy: doc.dy, width: doc.width, height: doc.height, rotationAngle: doc.rotationAngle
                                                             );
                                                         },
                                                         onGestureStart: () {
