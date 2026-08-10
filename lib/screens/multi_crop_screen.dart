@@ -244,8 +244,8 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
                                         behavior: HitTestBehavior.opaque,
                                         onPanUpdate: (details) {
                                           setState(() {
-                                            rect.width = math.max(50, rect.width + details.delta.dx);
-                                            rect.height = math.max(50, rect.height + details.delta.dy);
+                                            rect.width = math.max(10, rect.width + details.delta.dx);
+                                            rect.height = math.max(10, rect.height + details.delta.dy);
                                           });
                                         },
                                         child: Container(
