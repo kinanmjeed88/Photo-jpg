@@ -111,7 +111,16 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
         title: const Text('أرشيف المستمسكات'),
       ),
       body: _files.isEmpty
-          ? const Center(child: Text('لا توجد ملفات محفوظة'))
+          ? const Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.folder_open, size: 64, color: Colors.grey),
+                  SizedBox(height: 16),
+                  Text('لا توجد ملفات محفوظة', style: TextStyle(fontSize: 18, color: Colors.grey)),
+                ],
+              ),
+            )
           : ListView.builder(
               itemCount: _files.length,
               itemBuilder: (context, index) {

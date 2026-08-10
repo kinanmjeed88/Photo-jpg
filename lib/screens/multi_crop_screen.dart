@@ -172,6 +172,7 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.check),
+            tooltip: 'تأكيد',
             onPressed: _isProcessing ? null : _finishCropping,
           )
         ],
