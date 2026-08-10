@@ -166,35 +166,47 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
               _buildDocumentImage(), // Keep your existing document image widget here
 
               if (widget.isSelected)
-                Positioned( // CRITICAL: Forced to physical Right, NOT Directional
-                  bottom: -20 / widget.document.scale,
-                  right: -20 / widget.document.scale,
-                  child: Transform.scale(
-                    scale: 1.0 / widget.document.scale, // Inverse scale to maintain 60x60 physical size
-                    alignment: Alignment.center,
+                Positioned(
+                  // 1. Shift the offset to accommodate the 80x80 hitbox logically
+                  bottom: -40 / widget.document.scale,
+                  right: -40 / widget.document.scale,
+                  child: SizedBox(
+                    // 2. Dynamically counter-scale the HitBox layout size!
+                    // This guarantees it is ALWAYS exactly 80x80 physical pixels.
+                    width: 80 / widget.document.scale,
+                    height: 80 / widget.document.scale,
                     child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
+                      behavior: HitTestBehavior.opaque, // CRITICAL: Must be opaque
                       onPanStart: (details) {
                         HapticFeedback.selectionClick();
-                        _baseScale = widget.document.scale;
                         setState(() => _isResizing = true);
                       },
                       onPanUpdate: (details) {
-                        // Fixed Right Handle math: Right (+dx) or Down (+dy) = Grow.
-                        final double dx = details.delta.dx * widget.document.scale;
+                        final bool isRTL = Directionality.of(context) == TextDirection.rtl;
+                        final double dx = (isRTL ? -details.delta.dx : details.delta.dx) * widget.document.scale;
                         final double dy = details.delta.dy * widget.document.scale;
-
                         final double magnitude = math.sqrt(dx * dx + dy * dy);
                         final double direction = (dx + dy) >= 0 ? 1.0 : -1.0;
                         final double scaleDelta = magnitude * direction * 0.005;
-
-                        if (widget.onHandleResize != null) {
-                          widget.onHandleResize!(scaleDelta);
-                        }
+                        if (widget.onHandleResize != null) widget.onHandleResize!(scaleDelta);
                       },
                       onPanEnd: (_) => setState(() => _isResizing = false),
                       onPanCancel: () => setState(() => _isResizing = false),
-                      child: _buildHandleUI(), // Keep your existing 60x60 animated handle UI
+                      child: Center(
+                        // 3. Apply inverse scale ONLY to the visual element.
+                        // Explicit alignment ensures no drifting at extreme scales.
+                        child: Transform.scale(
+                          scale: 1.0 / widget.document.scale,
+                          alignment: Alignment.center,
+                          child: SizedBox(
+                            width: 80,
+                            height: 80,
+                            child: Center(
+                              child: _buildHandleUI(), // Your existing visual handle
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ),
