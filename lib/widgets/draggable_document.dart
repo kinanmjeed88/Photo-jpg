@@ -16,7 +16,7 @@ class DraggableResizableDocument extends StatefulWidget {
   final double canvasHeight;
   final double canvasScale;
   final VoidCallback? onGestureStart;
-  final void Function(double newScale, Offset newPosition)? onTransformUpdate;
+  final void Function(double newScale, Offset delta)? onTransformUpdate;
   final void Function(double scaleDelta)? onHandleResize;
   final VoidCallback? onGestureEnd;
 
@@ -205,8 +205,8 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
     );
 
     return Positioned(
-      left: dx,
-      top: dy,
+      left: widget.document.position.dx,
+      top: widget.document.position.dy,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: widget.onTap,

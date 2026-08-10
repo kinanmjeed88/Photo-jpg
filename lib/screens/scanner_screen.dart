@@ -739,9 +739,11 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                         canvasWidth: AppConstants.kVirtualCanvasWidth,
                                                         canvasHeight: AppConstants.kVirtualCanvasHeight,
                                                         canvasScale: constraints.maxWidth / AppConstants.kVirtualCanvasWidth,
-                                                        onTransformUpdate: (newScale, newPos) {
+                                                        onTransformUpdate: (newScale, delta) {
+                                                            doc.scale = newScale;
+                                                            doc.position += delta / (constraints.maxWidth / AppConstants.kVirtualCanvasWidth);
                                                             ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
-                                                              pageKey, docIndex, dx: newPos.dx, dy: newPos.dy, scale: newScale, width: doc.width, height: doc.height, rotationAngle: doc.rotationAngle
+                                                              pageKey, docIndex, dx: doc.position.dx, dy: doc.position.dy, scale: newScale, width: doc.width, height: doc.height, rotationAngle: doc.rotationAngle
                                                             );
                                                         },
                                                         onHandleResize: (scaleDelta) {
