@@ -24,17 +24,21 @@ class BatchAddResult {
 class ScannedDocument {
   final File file;
   final DocumentType type;
-  final double dx;
-  final double dy;
-  final double width;
-  final double height;
+  double dx;
+  double dy;
+  double width;
+  double height;
   final double originalWidth;
   final double originalHeight;
-  final int rotationAngle;
+  int rotationAngle;
   final String? originalImagePath;
-  final double scale;
+  double scale;
 
   Offset get position => Offset(dx, dy);
+  set position(Offset newPosition) {
+    dx = newPosition.dx;
+    dy = newPosition.dy;
+  }
 
   ScannedDocument({
     required this.file,
