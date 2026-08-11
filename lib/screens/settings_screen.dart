@@ -34,37 +34,6 @@ class SettingsScreen extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'وضع العمل:',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: Color(0xFFF59E0B),
-              ),
-            ),
-            Row(
-              children: [
-                Expanded(
-                  child: RadioListTile<WorkMode>(
-                    title: const Text('مستمسك واحد / شخص واحد'),
-                    value: WorkMode.single,
-                    groupValue: state.workMode,
-                    onChanged: (val) => notifier.updateWorkMode(val!),
-                    activeColor: const Color(0xFFF59E0B),
-                  ),
-                ),
-                Expanded(
-                  child: RadioListTile<WorkMode>(
-                    title: const Text('ملف عائلة كامل'),
-                    value: WorkMode.family,
-                    groupValue: state.workMode,
-                    onChanged: (val) => notifier.updateWorkMode(val!),
-                    activeColor: const Color(0xFFF59E0B),
-                  ),
-                ),
-              ],
-            ),
-            const Divider(),
-            const Text(
               'المستمسكات المطلوبة:',
               style: TextStyle(
                 fontSize: 18,

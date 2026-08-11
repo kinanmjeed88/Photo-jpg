@@ -4,8 +4,6 @@ import 'dart:math' as math;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../constants/app_constants.dart';
 
-enum WorkMode { single, family }
-
 enum DisplayMethod { onePage, twoPages, frontOnly }
 
 enum DocumentType {
@@ -549,7 +547,6 @@ final scannedDocumentsProvider =
     );
 
 class AppState {
-  final WorkMode workMode;
   final bool hasNationalId;
   final bool hasHousingCard;
   final bool hasRationCard;
@@ -560,7 +557,6 @@ class AppState {
   final bool smartRecognition;
 
   AppState({
-    this.workMode = WorkMode.single,
     this.hasNationalId = false,
     this.hasHousingCard = false,
     this.hasRationCard = false,
@@ -572,7 +568,6 @@ class AppState {
   });
 
   AppState copyWith({
-    WorkMode? workMode,
     bool? hasNationalId,
     bool? hasHousingCard,
     bool? hasRationCard,
@@ -583,7 +578,6 @@ class AppState {
     bool? smartRecognition,
   }) {
     return AppState(
-      workMode: workMode ?? this.workMode,
       hasNationalId: hasNationalId ?? this.hasNationalId,
       hasHousingCard: hasHousingCard ?? this.hasHousingCard,
       hasRationCard: hasRationCard ?? this.hasRationCard,
@@ -602,8 +596,6 @@ class AppState {
 class AppStateNotifier extends Notifier<AppState> {
   @override
   AppState build() => AppState();
-
-  void updateWorkMode(WorkMode mode) => state = state.copyWith(workMode: mode);
 
   void toggleNationalId(bool? value) =>
       state = state.copyWith(hasNationalId: value ?? false);
