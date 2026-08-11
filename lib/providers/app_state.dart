@@ -17,37 +17,6 @@ enum DocumentType {
   a4Document,
 }
 
-extension DocumentTypeSettings on DocumentType {
-  double get aspectRatio {
-    switch (this) {
-      case DocumentType.nationalId:
-      case DocumentType.housingCard:
-        return 1.58; // Standard card aspect ratio (85.60 × 53.98 mm)
-      case DocumentType.rationCard:
-      case DocumentType.passport:
-        return 1.41; // Standard A-series / Passport aspect ratio
-      case DocumentType.a4Document:
-      case DocumentType.unknown:
-        return 1.0;
-    }
-  }
-
-  double get widthMultiplier {
-    switch (this) {
-      case DocumentType.nationalId:
-      case DocumentType.housingCard:
-        return 0.45;
-      case DocumentType.rationCard:
-        return 0.90;
-      case DocumentType.passport:
-        return 0.85;
-      case DocumentType.a4Document:
-      case DocumentType.unknown:
-        return 1.0;
-    }
-  }
-}
-
 class BatchAddResult {
   final List<ScannedDocument> addedDocuments;
   final List<File> overflowFiles;
@@ -168,13 +137,13 @@ class ScannedDocumentsNotifier
 
         DocumentType effectiveType = specificType != DocumentType.unknown
             ? specificType
-            : ref.read(appStateProvider).expectedCurrentType;
+            : _guessDocumentType(appState);
 
         double intrinsicAspectRatio = originalHeight > 0
             ? originalWidth / originalHeight
             : 1.0;
 
-        double newDocWidth = VIRTUAL_A4_WIDTH * effectiveType.widthMultiplier;
+        double newDocWidth = VIRTUAL_A4_WIDTH * 0.45;
         double newDocHeight = newDocWidth / intrinsicAspectRatio;
 
         double currentDx = margin;
@@ -191,7 +160,7 @@ class ScannedDocumentsNotifier
           currentDx = 20.0;
           currentDy = 20.0;
         } else if (index == 1) {
-          currentDx = (VIRTUAL_A4_WIDTH * effectiveType.widthMultiplier) + 40.0;
+          currentDx = (VIRTUAL_A4_WIDTH * 0.45) + 40.0;
           // Align with the first item on the same row if possible
           currentDy = localDocs.isNotEmpty ? localDocs.first.dy : 20.0;
         } else if (index == 2) {
@@ -199,7 +168,7 @@ class ScannedDocumentsNotifier
           // Safe Y is already calculated to be below all existing docs
           currentDy = safeY;
         } else if (index == 3) {
-          currentDx = (VIRTUAL_A4_WIDTH * effectiveType.widthMultiplier) + 40.0;
+          currentDx = (VIRTUAL_A4_WIDTH * 0.45) + 40.0;
           // Align with the third item (index 2) on the same row
           currentDy = localDocs.length > 2 ? localDocs[2].dy : safeY;
         }
@@ -220,9 +189,6 @@ class ScannedDocumentsNotifier
 
         localDocs.add(doc);
         added.add(doc);
-
-        // Advance the capture pointer for the next file
-        ref.read(appStateProvider.notifier).advanceCapture();
       } catch (e) {
         failed.add(f);
       }
@@ -250,13 +216,29 @@ class ScannedDocumentsNotifier
 
     DocumentType effectiveType = doc.type != DocumentType.unknown
         ? doc.type
-        : ref.read(appStateProvider).expectedCurrentType;
+        : _guessDocumentType(appState);
 
     double intrinsicAspectRatio = doc.originalHeight > 0
         ? doc.originalWidth / doc.originalHeight
         : 1.0;
 
-    double newDocWidth = VIRTUAL_A4_WIDTH * effectiveType.widthMultiplier;
+    double newDocWidth;
+
+    if (effectiveType == DocumentType.a4Document) {
+      newDocWidth = VIRTUAL_A4_WIDTH;
+    } else if (effectiveType == DocumentType.rationCard) {
+      newDocWidth = VIRTUAL_A4_WIDTH * 0.90;
+    } else if (effectiveType == DocumentType.passport) {
+      newDocWidth = VIRTUAL_A4_WIDTH * 0.85;
+    } else if (effectiveType == DocumentType.nationalId ||
+        effectiveType == DocumentType.housingCard) {
+      // National ID / Housing Card: MUST be EXACTLY VIRTUAL_A4_WIDTH * 0.45
+      newDocWidth = VIRTUAL_A4_WIDTH * 0.45;
+    } else {
+      effectiveType = DocumentType.nationalId;
+      newDocWidth = VIRTUAL_A4_WIDTH * 0.45;
+    }
+
     double newDocHeight = newDocWidth / intrinsicAspectRatio;
 
     // Only clamp if not explicitly hard-clamped to 0.45
@@ -288,7 +270,6 @@ class ScannedDocumentsNotifier
       state = {
         0: [newDoc.copyWith(dx: margin, dy: margin)],
       };
-      ref.read(appStateProvider.notifier).advanceCapture();
       return;
     }
 
@@ -329,7 +310,7 @@ class ScannedDocumentsNotifier
         currentDx = 20.0;
         currentDy = 20.0;
       } else if (index == 1) {
-        currentDx = (VIRTUAL_A4_WIDTH * effectiveType.widthMultiplier) + 40.0;
+        currentDx = (VIRTUAL_A4_WIDTH * 0.45) + 40.0;
         currentDy = 20.0;
       } else if (index == 2) {
         double firstDocHeight = pageDocs.isNotEmpty
@@ -341,7 +322,7 @@ class ScannedDocumentsNotifier
         double firstDocHeight = pageDocs.isNotEmpty
             ? pageDocs.first.height
             : newDocHeight;
-        currentDx = (VIRTUAL_A4_WIDTH * effectiveType.widthMultiplier) + 40.0;
+        currentDx = (VIRTUAL_A4_WIDTH * 0.45) + 40.0;
         currentDy = firstDocHeight + 40.0;
       } else {
         // If more than 4 on page, fallback to forcing new page
@@ -433,7 +414,13 @@ class ScannedDocumentsNotifier
       ...state,
       pageIndex: [...pageDocs, newDoc.copyWith(dx: currentDx, dy: currentDy)],
     };
-    ref.read(appStateProvider.notifier).advanceCapture();
+  }
+
+  DocumentType _guessDocumentType(AppState appState) {
+    if (appState.hasRationCard) return DocumentType.rationCard;
+    if (appState.hasPassport) return DocumentType.passport;
+    if (appState.hasHousingCard) return DocumentType.housingCard;
+    return DocumentType.nationalId;
   }
 
   void removeDocumentAt(int pageIndex, int docIndex) {
@@ -462,8 +449,6 @@ class ScannedDocumentsNotifier
     } else {
       state = {...state, pageIndex: updatedDocs};
     }
-
-    ref.read(appStateProvider.notifier).revertCapture();
   }
 
   void updateDocumentAt(int pageIndex, int docIndex, ScannedDocument newDoc) {
@@ -573,8 +558,6 @@ class AppState {
   final bool addFrame;
   final String fileName;
   final bool smartRecognition;
-  final List<DocumentType> captureQueue;
-  final int currentCaptureIndex;
 
   AppState({
     this.workMode = WorkMode.single,
@@ -586,8 +569,6 @@ class AppState {
     this.addFrame = false,
     this.fileName = 'مستمسكاتي',
     this.smartRecognition = false,
-    this.captureQueue = const [],
-    this.currentCaptureIndex = 0,
   });
 
   AppState copyWith({
@@ -600,8 +581,6 @@ class AppState {
     bool? addFrame,
     String? fileName,
     bool? smartRecognition,
-    List<DocumentType>? captureQueue,
-    int? currentCaptureIndex,
   }) {
     return AppState(
       workMode: workMode ?? this.workMode,
@@ -613,24 +592,11 @@ class AppState {
       addFrame: addFrame ?? this.addFrame,
       fileName: fileName ?? this.fileName,
       smartRecognition: smartRecognition ?? this.smartRecognition,
-      captureQueue: captureQueue ?? this.captureQueue,
-      currentCaptureIndex: currentCaptureIndex ?? this.currentCaptureIndex,
     );
   }
 
   bool get hasAtLeastOneDocument =>
       hasNationalId || hasHousingCard || hasRationCard || hasPassport;
-
-  bool get isSessionActive => captureQueue.isNotEmpty;
-
-  DocumentType get expectedCurrentType {
-    if (captureQueue.isEmpty) return DocumentType.a4Document;
-    if (currentCaptureIndex >= 0 && currentCaptureIndex < captureQueue.length) {
-      return captureQueue[currentCaptureIndex];
-    }
-    // Fallback for over-capture: yield the last document type in the queue or a4Document
-    return captureQueue.isNotEmpty ? captureQueue.last : DocumentType.a4Document;
-  }
 }
 
 class AppStateNotifier extends Notifier<AppState> {
@@ -657,48 +623,6 @@ class AppStateNotifier extends Notifier<AppState> {
 
   void toggleSmartRecognition(bool value) =>
       state = state.copyWith(smartRecognition: value);
-
-  void startSession() {
-    final List<DocumentType> queue = [];
-    if (state.hasPassport) queue.add(DocumentType.passport);
-    if (state.hasNationalId) {
-      queue.add(DocumentType.nationalId);
-      queue.add(DocumentType.nationalId);
-    }
-    if (state.hasHousingCard) {
-      queue.add(DocumentType.housingCard);
-      queue.add(DocumentType.housingCard);
-    }
-    if (state.hasRationCard) {
-      queue.add(DocumentType.rationCard);
-      queue.add(DocumentType.rationCard);
-    }
-
-    state = state.copyWith(
-      captureQueue: List.unmodifiable(queue),
-      currentCaptureIndex: 0,
-    );
-  }
-
-  void endSession() {
-    state = state.copyWith(
-      captureQueue: const [],
-      currentCaptureIndex: 0,
-    );
-  }
-
-  void advanceCapture([int count = 1]) {
-    state = state.copyWith(
-      currentCaptureIndex: state.currentCaptureIndex + count,
-    );
-  }
-
-  void revertCapture([int count = 1]) {
-    final newIndex = state.currentCaptureIndex - count;
-    state = state.copyWith(
-      currentCaptureIndex: newIndex < 0 ? 0 : newIndex,
-    );
-  }
 }
 
 final appStateProvider = NotifierProvider<AppStateNotifier, AppState>(() {
