@@ -68,10 +68,13 @@ class _DraggableResizableDocumentState
   late double height;
   late int rotationAngle;
   bool isDragging = false;
-  double _baseScale = 1.0; // Snapshot of scale at gesture start
+  double _baseScale = 1.0;
   bool _isResizing = false;
   double _handleBaseScale = 1.0;
   double _accumulatedDrag = 0.0;
+
+  final LayerLink _layerLink = LayerLink();
+  OverlayEntry? _overlayEntry;
 
   @override
   void initState() {
@@ -81,6 +84,17 @@ class _DraggableResizableDocumentState
     width = widget.document.width;
     height = widget.document.height;
     rotationAngle = widget.document.rotationAngle;
+  }
+
+  @override
+  void dispose() {
+    _removeOverlay();
+    super.dispose();
+  }
+
+  void _removeOverlay() {
+    _overlayEntry?.remove();
+    _overlayEntry = null;
   }
 
   @override
@@ -96,7 +110,6 @@ class _DraggableResizableDocumentState
   }
 
   double get _documentAspectRatio {
-    // Determine aspect ratio considering rotation
     bool isRotated = rotationAngle % 180 != 0;
 
     if (widget.document.originalHeight > 0) {
@@ -107,7 +120,7 @@ class _DraggableResizableDocumentState
     return 1.0;
   }
 
-  Widget _buildDocumentImage() {
+  Widget _buildDocumentImage({bool isOverlay = false}) {
     return RepaintBoundary(
       child: SizedBox(
         width: width,
@@ -130,6 +143,67 @@ class _DraggableResizableDocumentState
         ),
       ),
     );
+  }
+
+  void _showOverlay(BuildContext context) {
+    if (_overlayEntry != null) return;
+    final overlay = Overlay.of(context);
+
+    _overlayEntry = OverlayEntry(
+      builder: (context) {
+        return Positioned(
+          left: 0,
+          top: 0,
+          child: CompositedTransformFollower(
+            link: _layerLink,
+            showWhenUnlinked: false,
+            child: IgnorePointer(
+              ignoring: true,
+              child: Transform.scale(
+                scale: widget.canvasScale,
+                alignment: Alignment.topLeft,
+                child: SizedBox(
+                  width: width,
+                  height: height,
+                  child: Transform.scale(
+                    scale: widget.document.scale,
+                    alignment: Alignment.center,
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        _buildDocumentImage(isOverlay: true),
+                        if (widget.isSelected)
+                          Positioned(
+                            bottom: -60 / widget.document.scale,
+                            right: -60 / widget.document.scale,
+                            child: SizedBox(
+                              width: 120 / widget.document.scale,
+                              height: 120 / widget.document.scale,
+                              child: Center(
+                                child: Transform.scale(
+                                  scale: 1.0 / widget.document.scale,
+                                  alignment: Alignment.center,
+                                  child: SizedBox(
+                                    width: 120,
+                                    height: 120,
+                                    child: Center(child: _buildHandleUI()),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    overlay.insert(_overlayEntry!);
   }
 
   Widget _buildHandleUI() {
@@ -159,93 +233,113 @@ class _DraggableResizableDocumentState
   Widget build(BuildContext context) {
     debugPrint('isSelected: ${widget.isSelected}, isDragging: $isDragging');
 
-    Widget documentWidget = SizedBox(
-      width: width,
-      height: height,
-      child: Transform.scale(
-        scale: widget.document.scale,
-        alignment: Alignment.center,
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            GestureDetector(
-              behavior: HitTestBehavior.deferToChild,
-              onTapDown: (_) {
-                // CRITICAL FIX: Restore tap selection for Z-index ordering
-                // Using onTapDown ensures it fires before scale gestures win the arena
-                // ignore: unnecessary_null_comparison
-                if (widget.onTap != null) widget.onTap();
-              },
-              onScaleStart: (details) {
-                _baseScale = widget.document.scale;
-                if (widget.onGestureStart != null) widget.onGestureStart!();
-              },
-              onScaleUpdate: (details) {
-                final double newScale = (_baseScale * details.scale).clamp(0.3, 3.0);
-                if (widget.onTransformUpdate != null) {
-                  widget.onTransformUpdate!(newScale, details.focalPointDelta);
-                }
-              },
-              onScaleEnd: (details) {
-                if (widget.onGestureEnd != null) widget.onGestureEnd!();
-              },
-              child: _buildDocumentImage(),
-            ),
+    Widget documentWidget = CompositedTransformTarget(
+      link: _layerLink,
+      child: Opacity(
+        opacity: isDragging ? 0.0 : 1.0,
+        child: SizedBox(
+          width: width,
+          height: height,
+          child: Transform.scale(
+            scale: widget.document.scale,
+            alignment: Alignment.center,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                GestureDetector(
+                  behavior: HitTestBehavior.deferToChild,
+                  onTapDown: (_) {
+                    // ignore: unnecessary_null_comparison
+                    if (widget.onTap != null) widget.onTap();
+                  },
+                  onScaleStart: (details) {
+                    _baseScale = widget.document.scale;
+                    setState(() {
+                      isDragging = true;
+                    });
+                    _showOverlay(context);
+                    if (widget.onGestureStart != null) widget.onGestureStart!();
+                  },
+                  onScaleUpdate: (details) {
+                    final double newScale = (_baseScale * details.scale).clamp(0.3, 3.0);
+                    if (widget.onTransformUpdate != null) {
+                      widget.onTransformUpdate!(newScale, details.focalPointDelta);
+                    }
+                    _overlayEntry?.markNeedsBuild();
+                  },
+                  onScaleEnd: (details) {
+                    setState(() {
+                      isDragging = false;
+                    });
+                    _removeOverlay();
 
-            if (widget.isSelected)
-              Positioned(
-                bottom: -60 / widget.document.scale,
-                right: -60 / widget.document.scale,
-                child: SizedBox(
-                  // Massive 120x120 physical thumb target that never shrinks
-                  width: 120 / widget.document.scale,
-                  height: 120 / widget.document.scale,
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onPanStart: (details) {
-                      HapticFeedback.selectionClick();
-                      setState(() {
-                        _isResizing = true;
-                        _handleBaseScale = widget.document.scale;
-                        _accumulatedDrag = 0.0;
-                      });
-                    },
-                    onPanUpdate: (details) {
-                      // Handle is physically locked to the RIGHT corner.
-                      // Right (+dx) and Down (+dy) ALWAYS mean OUTWARD. NO RTL INVERSION.
-                      final double dx = details.delta.dx;
-                      final double dy = details.delta.dy;
+                    if (widget.document.position.dy < 0 || widget.document.position.dy > widget.canvasHeight) {
+                      widget.onCrossPageMove(
+                        widget.pageIndex,
+                        widget.docIndex,
+                        widget.document,
+                        widget.document.position.dx,
+                        widget.document.position.dy,
+                      );
+                    }
 
-                      // Smooth Euclidean projection for diagonal dragging
-                      final double diagonalDrag = (dx + dy) / math.sqrt(2);
-                      _accumulatedDrag += diagonalDrag;
+                    if (widget.onGestureEnd != null) widget.onGestureEnd!();
+                  },
+                  child: _buildDocumentImage(isOverlay: false),
+                ),
 
-                      // Convert drag pixels to scale (150px = 1.0 scale change)
-                      final double newScale =
-                          (_handleBaseScale + (_accumulatedDrag / 150.0))
-                              .clamp(0.3, 3.0);
+                if (widget.isSelected)
+                  Positioned(
+                    bottom: -60 / widget.document.scale,
+                    right: -60 / widget.document.scale,
+                    child: SizedBox(
+                      width: 120 / widget.document.scale,
+                      height: 120 / widget.document.scale,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onPanStart: (details) {
+                          HapticFeedback.selectionClick();
+                          setState(() {
+                            _isResizing = true;
+                            _handleBaseScale = widget.document.scale;
+                            _accumulatedDrag = 0.0;
+                          });
+                        },
+                        onPanUpdate: (details) {
+                          final double dx = details.delta.dx;
+                          final double dy = details.delta.dy;
 
-                      if (widget.onHandleResize != null) {
-                        widget.onHandleResize!(newScale);
-                      }
-                    },
-                    onPanEnd: (_) => setState(() => _isResizing = false),
-                    onPanCancel: () => setState(() => _isResizing = false),
-                    child: Center(
-                      child: Transform.scale(
-                        scale: 1.0 / widget.document.scale,
-                        alignment: Alignment.center,
-                        child: SizedBox(
-                          width: 120,
-                          height: 120,
-                          child: Center(child: _buildHandleUI()),
+                          final double diagonalDrag = (dx + dy) / math.sqrt(2);
+                          _accumulatedDrag += diagonalDrag;
+
+                          final double newScale =
+                              (_handleBaseScale + (_accumulatedDrag / 150.0))
+                                  .clamp(0.3, 3.0);
+
+                          if (widget.onHandleResize != null) {
+                            widget.onHandleResize!(newScale);
+                          }
+                          _overlayEntry?.markNeedsBuild();
+                        },
+                        onPanEnd: (_) => setState(() => _isResizing = false),
+                        onPanCancel: () => setState(() => _isResizing = false),
+                        child: Center(
+                          child: Transform.scale(
+                            scale: 1.0 / widget.document.scale,
+                            alignment: Alignment.center,
+                            child: SizedBox(
+                              width: 120,
+                              height: 120,
+                              child: Center(child: _buildHandleUI()),
+                            ),
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
-              ),
-          ],
+              ],
+            ),
+          ),
         ),
       ),
     );
