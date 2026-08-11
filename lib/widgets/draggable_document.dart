@@ -134,8 +134,8 @@ class _DraggableResizableDocumentState
 
   Widget _buildHandleUI() {
     return Container(
-      width: 60,
-      height: 60,
+      width: 120,
+      height: 120,
       color: Colors.transparent,
       child: Center(
         child: AnimatedContainer(
@@ -148,8 +148,8 @@ class _DraggableResizableDocumentState
               BoxShadow(color: Colors.black26, blurRadius: 4, spreadRadius: 1),
             ],
           ),
-          padding: const EdgeInsets.all(6),
-          child: const Icon(Icons.open_in_full, size: 16, color: Colors.white),
+          padding: const EdgeInsets.all(12),
+          child: const Icon(Icons.open_in_full, size: 32, color: Colors.white),
         ),
       ),
     );
@@ -162,90 +162,90 @@ class _DraggableResizableDocumentState
     Widget documentWidget = SizedBox(
       width: width,
       height: height,
-      child: GestureDetector(
-        behavior: HitTestBehavior.deferToChild,
-        onTapDown: (_) {
-          // CRITICAL FIX: Restore tap selection for Z-index ordering
-          // Using onTapDown ensures it fires before scale gestures win the arena
-          // ignore: unnecessary_null_comparison
-          if (widget.onTap != null) widget.onTap();
-        },
-        onScaleStart: (details) {
-          _baseScale = widget.document.scale;
-          if (widget.onGestureStart != null) widget.onGestureStart!();
-        },
-        onScaleUpdate: (details) {
-          final double newScale = (_baseScale * details.scale).clamp(0.3, 3.0);
-          if (widget.onTransformUpdate != null) {
-            widget.onTransformUpdate!(newScale, details.focalPointDelta);
-          }
-        },
-        onScaleEnd: (details) {
-          if (widget.onGestureEnd != null) widget.onGestureEnd!();
-        },
-        child: Transform.scale(
-          scale: widget.document.scale,
-          alignment: Alignment.center,
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              _buildDocumentImage(), // Keep your existing document image widget here
+      child: Transform.scale(
+        scale: widget.document.scale,
+        alignment: Alignment.center,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            GestureDetector(
+              behavior: HitTestBehavior.deferToChild,
+              onTapDown: (_) {
+                // CRITICAL FIX: Restore tap selection for Z-index ordering
+                // Using onTapDown ensures it fires before scale gestures win the arena
+                // ignore: unnecessary_null_comparison
+                if (widget.onTap != null) widget.onTap();
+              },
+              onScaleStart: (details) {
+                _baseScale = widget.document.scale;
+                if (widget.onGestureStart != null) widget.onGestureStart!();
+              },
+              onScaleUpdate: (details) {
+                final double newScale = (_baseScale * details.scale).clamp(0.3, 3.0);
+                if (widget.onTransformUpdate != null) {
+                  widget.onTransformUpdate!(newScale, details.focalPointDelta);
+                }
+              },
+              onScaleEnd: (details) {
+                if (widget.onGestureEnd != null) widget.onGestureEnd!();
+              },
+              child: _buildDocumentImage(),
+            ),
 
-              if (widget.isSelected)
-                Positioned(
-                  bottom: -40 / widget.document.scale,
-                  right: -40 / widget.document.scale,
-                  child: SizedBox(
-                    // Massive 80x80 physical thumb target that never shrinks
-                    width: 80 / widget.document.scale,
-                    height: 80 / widget.document.scale,
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onPanStart: (details) {
-                        HapticFeedback.selectionClick();
-                        setState(() {
-                          _isResizing = true;
-                          _handleBaseScale = widget.document.scale;
-                          _accumulatedDrag = 0.0;
-                        });
-                      },
-                      onPanUpdate: (details) {
-                        // Handle is physically locked to the RIGHT corner.
-                        // Right (+dx) and Down (+dy) ALWAYS mean OUTWARD. NO RTL INVERSION.
-                        final double dx = details.delta.dx;
-                        final double dy = details.delta.dy;
+            if (widget.isSelected)
+              Positioned(
+                bottom: -60 / widget.document.scale,
+                right: -60 / widget.document.scale,
+                child: SizedBox(
+                  // Massive 120x120 physical thumb target that never shrinks
+                  width: 120 / widget.document.scale,
+                  height: 120 / widget.document.scale,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onPanStart: (details) {
+                      HapticFeedback.selectionClick();
+                      setState(() {
+                        _isResizing = true;
+                        _handleBaseScale = widget.document.scale;
+                        _accumulatedDrag = 0.0;
+                      });
+                    },
+                    onPanUpdate: (details) {
+                      // Handle is physically locked to the RIGHT corner.
+                      // Right (+dx) and Down (+dy) ALWAYS mean OUTWARD. NO RTL INVERSION.
+                      final double dx = details.delta.dx;
+                      final double dy = details.delta.dy;
 
-                        // Smooth Euclidean projection for diagonal dragging
-                        final double diagonalDrag = (dx + dy) / math.sqrt(2);
-                        _accumulatedDrag += diagonalDrag;
+                      // Smooth Euclidean projection for diagonal dragging
+                      final double diagonalDrag = (dx + dy) / math.sqrt(2);
+                      _accumulatedDrag += diagonalDrag;
 
-                        // Convert drag pixels to scale (150px = 1.0 scale change)
-                        final double newScale =
-                            (_handleBaseScale + (_accumulatedDrag / 150.0))
-                                .clamp(0.3, 3.0);
+                      // Convert drag pixels to scale (150px = 1.0 scale change)
+                      final double newScale =
+                          (_handleBaseScale + (_accumulatedDrag / 150.0))
+                              .clamp(0.3, 3.0);
 
-                        if (widget.onHandleResize != null) {
-                          widget.onHandleResize!(newScale);
-                        }
-                      },
-                      onPanEnd: (_) => setState(() => _isResizing = false),
-                      onPanCancel: () => setState(() => _isResizing = false),
-                      child: Center(
-                        child: Transform.scale(
-                          scale: 1.0 / widget.document.scale,
-                          alignment: Alignment.center,
-                          child: SizedBox(
-                            width: 80,
-                            height: 80,
-                            child: Center(child: _buildHandleUI()),
-                          ),
+                      if (widget.onHandleResize != null) {
+                        widget.onHandleResize!(newScale);
+                      }
+                    },
+                    onPanEnd: (_) => setState(() => _isResizing = false),
+                    onPanCancel: () => setState(() => _isResizing = false),
+                    child: Center(
+                      child: Transform.scale(
+                        scale: 1.0 / widget.document.scale,
+                        alignment: Alignment.center,
+                        child: SizedBox(
+                          width: 120,
+                          height: 120,
+                          child: Center(child: _buildHandleUI()),
                         ),
                       ),
                     ),
                   ),
                 ),
-            ],
-          ),
+              ),
+          ],
         ),
       ),
     );
