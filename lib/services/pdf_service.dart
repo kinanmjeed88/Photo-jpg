@@ -23,7 +23,11 @@ Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
 
   final pdf = pw.Document();
 
-  final pageFormat = PdfPageFormat(uiReferenceWidth, uiReferenceHeight, marginAll: 0);
+  final pageFormat = PdfPageFormat(
+    uiReferenceWidth,
+    uiReferenceHeight,
+    marginAll: 0,
+  );
 
   for (final docsOnPage in pagesData) {
     pdf.addPage(
@@ -52,7 +56,10 @@ Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
                 decodedImage = img.bakeOrientation(decodedImage);
 
                 // RAM safety: scale down only if longest edge exceeds 2400px
-                final int maxEdge = math.max(decodedImage.width, decodedImage.height);
+                final int maxEdge = math.max(
+                  decodedImage.width,
+                  decodedImage.height,
+                );
                 if (maxEdge > 2400) {
                   final double scale = 2400 / maxEdge;
                   decodedImage = img.copyResize(
@@ -64,7 +71,9 @@ Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
                 }
 
                 // Keep 95% quality for high-res output
-                processedBytes = Uint8List.fromList(img.encodeJpg(decodedImage, quality: 95));
+                processedBytes = Uint8List.fromList(
+                  img.encodeJpg(decodedImage, quality: 95),
+                );
               }
 
               final memoryImage = pw.MemoryImage(processedBytes);
@@ -76,7 +85,10 @@ Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
               // We need the bottom coordinate of the document in PDF space.
               final pdfY = uiReferenceHeight - (dy + docHeight);
 
-              pw.Widget imageWidget = pw.Image(memoryImage, fit: pw.BoxFit.contain);
+              pw.Widget imageWidget = pw.Image(
+                memoryImage,
+                fit: pw.BoxFit.contain,
+              );
 
               if (rotationAngle != 0) {
                 // PDF rotate rotates around its center and takes angle in radians
@@ -93,7 +105,12 @@ Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
                   width: docWidth,
                   height: docHeight,
                   decoration: addFrame
-                      ? pw.BoxDecoration(border: pw.Border.all(color: PdfColors.black, width: 1.0))
+                      ? pw.BoxDecoration(
+                          border: pw.Border.all(
+                            color: PdfColors.black,
+                            width: 1.0,
+                          ),
+                        )
                       : null,
                   child: imageWidget,
                 ),
@@ -107,10 +124,12 @@ Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
 
   // If there are no pages, at least add one empty page so it doesn't crash
   if (pagesData.isEmpty) {
-    pdf.addPage(pw.Page(
-      pageFormat: pageFormat,
-      build: (pw.Context context) => pw.Container()
-    ));
+    pdf.addPage(
+      pw.Page(
+        pageFormat: pageFormat,
+        build: (pw.Context context) => pw.Container(),
+      ),
+    );
   }
 
   final file = File(outputPath);
@@ -134,14 +153,20 @@ class PdfService {
 
     for (var key in keys) {
       final docs = groupedPages[key]!;
-      pagesData.add(docs.map((doc) => {
-        'path': doc.file.path,
-        'dx': doc.dx,
-        'dy': doc.dy,
-        'width': doc.width,
-        'height': doc.height,
-        'rotationAngle': doc.rotationAngle,
-      }).toList());
+      pagesData.add(
+        docs
+            .map(
+              (doc) => {
+                'path': doc.file.path,
+                'dx': doc.dx,
+                'dy': doc.dy,
+                'width': doc.width,
+                'height': doc.height,
+                'rotationAngle': doc.rotationAngle,
+              },
+            )
+            .toList(),
+      );
     }
 
     final args = {

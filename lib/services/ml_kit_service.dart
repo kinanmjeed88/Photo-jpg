@@ -11,16 +11,24 @@ class MLKitService {
     final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
 
     try {
-      final RecognizedText recognizedText = await textRecognizer.processImage(inputImage);
+      final RecognizedText recognizedText = await textRecognizer.processImage(
+        inputImage,
+      );
       final text = recognizedText.text;
 
       if (text.contains('البطاقة الوطنية') || text.contains('جمهورية العراق')) {
         return DocumentType.nationalId;
-      } else if (text.contains('مكتب معلومات') || text.contains('اسم رب الاسرة') || text.contains('بطاقة السكن')) {
+      } else if (text.contains('مكتب معلومات') ||
+          text.contains('اسم رب الاسرة') ||
+          text.contains('بطاقة السكن')) {
         return DocumentType.housingCard;
-      } else if (text.contains('وزارة التجارة') || text.contains('بطاقة تموين') || text.contains('البطاقة التموينية')) {
+      } else if (text.contains('وزارة التجارة') ||
+          text.contains('بطاقة تموين') ||
+          text.contains('البطاقة التموينية')) {
         return DocumentType.rationCard;
-      } else if (text.contains('Passport') || text.contains('جواز سفر') || text.contains('جواز السفر')) {
+      } else if (text.contains('Passport') ||
+          text.contains('جواز سفر') ||
+          text.contains('جواز السفر')) {
         return DocumentType.passport;
       }
 
@@ -41,7 +49,9 @@ class MLKitService {
     final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
 
     try {
-      final RecognizedText recognizedText = await textRecognizer.processImage(inputImage);
+      final RecognizedText recognizedText = await textRecognizer.processImage(
+        inputImage,
+      );
       // Stub logic: iterate over blocks and find a probable name line
       // Real logic would involve regex or position-based heuristics for Iraqi docs
       for (TextBlock block in recognizedText.blocks) {

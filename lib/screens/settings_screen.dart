@@ -33,7 +33,14 @@ class SettingsScreen extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('وضع العمل:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFFF59E0B))),
+            const Text(
+              'وضع العمل:',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFFF59E0B),
+              ),
+            ),
             Row(
               children: [
                 Expanded(
@@ -57,7 +64,14 @@ class SettingsScreen extends ConsumerWidget {
               ],
             ),
             const Divider(),
-            const Text('المستمسكات المطلوبة:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFFF59E0B))),
+            const Text(
+              'المستمسكات المطلوبة:',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFFF59E0B),
+              ),
+            ),
             CheckboxListTile(
               title: const Text('البطاقة الموحدة'),
               value: state.hasNationalId,
@@ -83,7 +97,14 @@ class SettingsScreen extends ConsumerWidget {
               activeColor: const Color(0xFF4F46E5),
             ),
             const Divider(),
-            const Text('طريقة العرض:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFFF59E0B))),
+            const Text(
+              'طريقة العرض:',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFFF59E0B),
+              ),
+            ),
             RadioListTile<DisplayMethod>(
               title: const Text('ورقة واحدة - وجه وظهر في نفس الصفحة'),
               value: DisplayMethod.onePage,
@@ -106,7 +127,14 @@ class SettingsScreen extends ConsumerWidget {
               activeColor: const Color(0xFFF59E0B),
             ),
             const Divider(),
-            const Text('ميزات الذكاء الاصطناعي:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFFF59E0B))),
+            const Text(
+              'ميزات الذكاء الاصطناعي:',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFFF59E0B),
+              ),
+            ),
             SwitchListTile(
               title: const Text('التعرف الذكي (قص وتصنيف تلقائي)'),
               value: state.smartRecognition,
@@ -114,7 +142,14 @@ class SettingsScreen extends ConsumerWidget {
               activeColor: const Color(0xFFF59E0B),
             ),
             const Divider(),
-            const Text('إخراج الملف:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFFF59E0B))),
+            const Text(
+              'إخراج الملف:',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFFF59E0B),
+              ),
+            ),
             SwitchListTile(
               title: const Text('إضافة إطار حول الصور'),
               value: state.addFrame,
@@ -135,7 +170,9 @@ class SettingsScreen extends ConsumerWidget {
             const SizedBox(height: 20),
             Center(
               child: Text(
-                state.hasAtLeastOneDocument ? '' : 'الحالة: لازم تختار مستمسك واحد على الأقل',
+                state.hasAtLeastOneDocument
+                    ? ''
+                    : 'الحالة: لازم تختار مستمسك واحد على الأقل',
                 style: const TextStyle(color: Colors.redAccent, fontSize: 16),
               ),
             ),
@@ -146,13 +183,18 @@ class SettingsScreen extends ConsumerWidget {
               child: ElevatedButton(
                 onPressed: state.hasAtLeastOneDocument
                     ? () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (context) => const ScannerScreen()),
-                          );
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const ScannerScreen(),
+                          ),
+                        );
                       }
                     : null,
-                  child: const Text('متابعة إلى المسح', style: TextStyle(fontSize: 18)),
+                child: const Text(
+                  'متابعة إلى المسح',
+                  style: TextStyle(fontSize: 18),
+                ),
               ),
             ),
           ],

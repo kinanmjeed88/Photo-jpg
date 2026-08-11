@@ -16,7 +16,8 @@ Future<List<File>> _runMultiCropIsolate(Map<String, dynamic> args) {
 
 List<File> _processMultiCrop(Map<String, dynamic> args) {
   final String imagePath = args['imagePath'];
-  final List<Map<String, double>> rects = (args['rects'] as List).cast<Map<String, double>>();
+  final List<Map<String, double>> rects = (args['rects'] as List)
+      .cast<Map<String, double>>();
   final String tempPath = args['tempPath'];
 
   cv.Mat? src;
@@ -47,10 +48,15 @@ List<File> _processMultiCrop(Map<String, dynamic> args) {
       double cropArea = (w * h).toDouble();
       double aspect = w / h;
 
-      bool isA4 = cropArea > (imageArea * 0.6) || (aspect >= 0.67 && aspect <= 0.75) || (aspect >= 1.35 && aspect <= 1.48); // A4 portrait ~0.71, landscape ~1.41
+      bool isA4 =
+          cropArea > (imageArea * 0.6) ||
+          (aspect >= 0.67 && aspect <= 0.75) ||
+          (aspect >= 1.35 &&
+              aspect <= 1.48); // A4 portrait ~0.71, landscape ~1.41
 
       String suffix = isA4 ? '_A4' : '_ID';
-      String path = '$tempPath/manual_crop_${DateTime.now().millisecondsSinceEpoch}_$i$suffix.jpg';
+      String path =
+          '$tempPath/manual_crop_${DateTime.now().millisecondsSinceEpoch}_$i$suffix.jpg';
 
       cv.imwrite(path, cropped);
       croppedFiles.add(File(path));
@@ -89,9 +95,14 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
   }
 
   Future<void> _loadImageSize() async {
-    final decodedImage = await decodeImageFromList(await widget.imageFile.readAsBytes());
+    final decodedImage = await decodeImageFromList(
+      await widget.imageFile.readAsBytes(),
+    );
     setState(() {
-      _imageSize = Size(decodedImage.width.toDouble(), decodedImage.height.toDouble());
+      _imageSize = Size(
+        decodedImage.width.toDouble(),
+        decodedImage.height.toDouble(),
+      );
     });
   }
 
@@ -123,7 +134,8 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
     setState(() => _isProcessing = true);
 
     try {
-      final RenderBox? imageBox = _imageKey.currentContext?.findRenderObject() as RenderBox?;
+      final RenderBox? imageBox =
+          _imageKey.currentContext?.findRenderObject() as RenderBox?;
       if (imageBox == null || _imageSize == null) {
         throw Exception("Could not determine image layout.");
       }
@@ -152,7 +164,10 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
       final croppedFiles = await _runMultiCropIsolate(args);
 
       if (mounted) {
-        Navigator.pop(context, croppedFiles.isEmpty ? [widget.imageFile] : croppedFiles);
+        Navigator.pop(
+          context,
+          croppedFiles.isEmpty ? [widget.imageFile] : croppedFiles,
+        );
       }
     } catch (e) {
       print("Manual crop failed: $e");
@@ -174,116 +189,135 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
             icon: const Icon(Icons.check),
             tooltip: 'تأكيد',
             onPressed: _isProcessing ? null : _finishCropping,
-          )
+          ),
         ],
       ),
       body: _isProcessing
-        ? const Center(child: CircularProgressIndicator())
-        : Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(8.0),
-                child: Text('حدد إطارات حول المستندات. يمكنك إضافة حتى 5 إطارات.',
-                  style: Theme.of(context).textTheme.titleMedium),
-              ),
-              Expanded(
-                child: InteractiveViewer(
-                  maxScale: 5.0,
-                  child: Center(
-                    child: Stack(
-                      key: _imageKey,
-                      children: [
-                        if (_imageProvider != null)
-                          Image(image: _imageProvider!, fit: BoxFit.contain),
-                        ..._cropRects.asMap().entries.map((entry) {
-                          final idx = entry.key;
-                          final rect = entry.value;
-                          return Positioned(
-                            left: rect.left,
-                            top: rect.top,
-                            child: GestureDetector(
-                              onPanUpdate: (details) {
-                                setState(() {
-                                  rect.left += details.delta.dx;
-                                  rect.top += details.delta.dy;
-                                });
-                              },
-                              child: Container(
-                                width: rect.width,
-                                height: rect.height,
-                                decoration: BoxDecoration(
-                                  border: Border.all(color: Colors.redAccent, width: 2),
-                                  color: Colors.redAccent.withOpacity(0.1),
-                                ),
-                                child: Stack(
-                                  clipBehavior: Clip.none,
-                                  children: [
-                                    Positioned(
-                                      top: -30,
-                                      right: -30,
-                                      child: GestureDetector(
-                                        behavior: HitTestBehavior.opaque,
-                                        onTap: () => _removeCropBox(idx),
-                                        child: Container(
-                                          width: 60,
-                                          height: 60,
-                                          color: Colors.transparent,
-                                          child: const Center(
-                                            child: CircleAvatar(
-                                              radius: 12,
-                                              backgroundColor: Colors.red,
-                                              child: Icon(Icons.close, size: 16, color: Colors.white),
+          ? const Center(child: CircularProgressIndicator())
+          : Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Text(
+                    'حدد إطارات حول المستندات. يمكنك إضافة حتى 5 إطارات.',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+                Expanded(
+                  child: InteractiveViewer(
+                    maxScale: 5.0,
+                    child: Center(
+                      child: Stack(
+                        key: _imageKey,
+                        children: [
+                          if (_imageProvider != null)
+                            Image(image: _imageProvider!, fit: BoxFit.contain),
+                          ..._cropRects.asMap().entries.map((entry) {
+                            final idx = entry.key;
+                            final rect = entry.value;
+                            return Positioned(
+                              left: rect.left,
+                              top: rect.top,
+                              child: GestureDetector(
+                                onPanUpdate: (details) {
+                                  setState(() {
+                                    rect.left += details.delta.dx;
+                                    rect.top += details.delta.dy;
+                                  });
+                                },
+                                child: Container(
+                                  width: rect.width,
+                                  height: rect.height,
+                                  decoration: BoxDecoration(
+                                    border: Border.all(
+                                      color: Colors.redAccent,
+                                      width: 2,
+                                    ),
+                                    color: Colors.redAccent.withOpacity(0.1),
+                                  ),
+                                  child: Stack(
+                                    clipBehavior: Clip.none,
+                                    children: [
+                                      Positioned(
+                                        top: -30,
+                                        right: -30,
+                                        child: GestureDetector(
+                                          behavior: HitTestBehavior.opaque,
+                                          onTap: () => _removeCropBox(idx),
+                                          child: Container(
+                                            width: 60,
+                                            height: 60,
+                                            color: Colors.transparent,
+                                            child: const Center(
+                                              child: CircleAvatar(
+                                                radius: 12,
+                                                backgroundColor: Colors.red,
+                                                child: Icon(
+                                                  Icons.close,
+                                                  size: 16,
+                                                  color: Colors.white,
+                                                ),
+                                              ),
                                             ),
                                           ),
                                         ),
                                       ),
-                                    ),
-                                    Positioned(
-                                      bottom: -30,
-                                      right: -30,
-                                      child: GestureDetector(
-                                        behavior: HitTestBehavior.opaque,
-                                        onPanUpdate: (details) {
-                                          setState(() {
-                                            rect.width = math.max(10, rect.width + details.delta.dx);
-                                            rect.height = math.max(10, rect.height + details.delta.dy);
-                                          });
-                                        },
-                                        child: Container(
-                                          width: 60,
-                                          height: 60,
-                                          color: Colors.transparent,
-                                          child: const Center(
-                                            child: CircleAvatar(
-                                              radius: 12,
-                                              backgroundColor: Colors.blue,
-                                              child: Icon(Icons.open_in_full, size: 16, color: Colors.white),
+                                      Positioned(
+                                        bottom: -30,
+                                        right: -30,
+                                        child: GestureDetector(
+                                          behavior: HitTestBehavior.opaque,
+                                          onPanUpdate: (details) {
+                                            setState(() {
+                                              rect.width = math.max(
+                                                10,
+                                                rect.width + details.delta.dx,
+                                              );
+                                              rect.height = math.max(
+                                                10,
+                                                rect.height + details.delta.dy,
+                                              );
+                                            });
+                                          },
+                                          child: Container(
+                                            width: 60,
+                                            height: 60,
+                                            color: Colors.transparent,
+                                            child: const Center(
+                                              child: CircleAvatar(
+                                                radius: 12,
+                                                backgroundColor: Colors.blue,
+                                                child: Icon(
+                                                  Icons.open_in_full,
+                                                  size: 16,
+                                                  color: Colors.white,
+                                                ),
+                                              ),
                                             ),
                                           ),
                                         ),
                                       ),
-                                    ),
-                                  ],
+                                    ],
+                                  ),
                                 ),
                               ),
-                            ),
-                          );
-                        }).toList(),
-                      ],
+                            );
+                          }).toList(),
+                        ],
+                      ),
                     ),
                   ),
                 ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: ElevatedButton.icon(
-                  onPressed: _addCropBox,
-                  icon: const Icon(Icons.add_box),
-                  label: const Text('إضافة إطار قص'),
+                Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: ElevatedButton.icon(
+                    onPressed: _addCropBox,
+                    icon: const Icon(Icons.add_box),
+                    label: const Text('إضافة إطار قص'),
+                  ),
                 ),
-              )
-            ],
-          ),
+              ],
+            ),
     );
   }
 }

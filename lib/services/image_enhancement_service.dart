@@ -7,7 +7,7 @@ class ImageEnhancementService {
   Future<File?> applyMagicEnhance(File imageFile, String outputPath) async {
     cv.Mat? src;
     cv.Mat? lab;
-        cv.Mat? blurred;
+    cv.Mat? blurred;
     cv.Mat? sharpened;
 
     try {
@@ -41,7 +41,6 @@ class ImageEnhancementService {
     } finally {
       src?.dispose();
       lab?.dispose();
-
 
       blurred?.dispose();
       sharpened?.dispose();

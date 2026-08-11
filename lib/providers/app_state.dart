@@ -5,9 +5,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../constants/app_constants.dart';
 
 enum WorkMode { single, family }
-enum DisplayMethod { onePage, twoPages, frontOnly }
-enum DocumentType { nationalId, housingCard, rationCard, passport, unknown, a4Document }
 
+enum DisplayMethod { onePage, twoPages, frontOnly }
+
+enum DocumentType {
+  nationalId,
+  housingCard,
+  rationCard,
+  passport,
+  unknown,
+  a4Document,
+}
 
 class BatchAddResult {
   final List<ScannedDocument> addedDocuments;
@@ -67,8 +75,10 @@ class ScannedDocument {
     String? originalImagePath,
     double? scale,
   }) {
-    assert(originalImagePath == null || originalImagePath == this.originalImagePath,
-           'originalImagePath is immutable once set and cannot be changed during copyWith.');
+    assert(
+      originalImagePath == null || originalImagePath == this.originalImagePath,
+      'originalImagePath is immutable once set and cannot be changed during copyWith.',
+    );
     return ScannedDocument(
       file: file ?? this.file,
       type: type ?? this.type,
@@ -85,15 +95,16 @@ class ScannedDocument {
   }
 }
 
-class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>> {
+class ScannedDocumentsNotifier
+    extends Notifier<Map<int, List<ScannedDocument>>> {
   @override
   Map<int, List<ScannedDocument>> build() => {};
 
-
-
-
-
-  Future<BatchAddResult> batchAddDocuments(List<File> files, AppState appState, {String? originalImagePath}) async {
+  Future<BatchAddResult> batchAddDocuments(
+    List<File> files,
+    AppState appState, {
+    String? originalImagePath,
+  }) async {
     List<ScannedDocument> added = [];
     List<File> overflow = [];
     List<File> failed = [];
@@ -102,7 +113,9 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
     const double margin = 12.0;
 
     int pageIndex = state.isEmpty ? 0 : state.keys.reduce(math.max);
-    List<ScannedDocument> localDocs = List<ScannedDocument>.from(state[pageIndex] ?? []);
+    List<ScannedDocument> localDocs = List<ScannedDocument>.from(
+      state[pageIndex] ?? [],
+    );
 
     for (var f in files) {
       try {
@@ -169,32 +182,31 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
           height: newDocHeight,
           dx: currentDx,
           dy: currentDy,
-          originalImagePath: originalImagePath ?? f.path, // Use the provided original image path, fallback to itself
+          originalImagePath:
+              originalImagePath ??
+              f.path, // Use the provided original image path, fallback to itself
         );
 
         localDocs.add(doc);
         added.add(doc);
-
       } catch (e) {
         failed.add(f);
       }
     }
 
     // Single atomic state assignment
-    state = {
-        ...state,
-        pageIndex: localDocs
-    };
+    state = {...state, pageIndex: localDocs};
 
-    return BatchAddResult(addedDocuments: added, overflowFiles: overflow, failedFiles: failed);
+    return BatchAddResult(
+      addedDocuments: added,
+      overflowFiles: overflow,
+      failedFiles: failed,
+    );
   }
 
   void forceNewPage() {
     int pageIndex = state.isEmpty ? 0 : state.keys.reduce(math.max) + 1;
-    state = {
-      ...state,
-      pageIndex: [],
-    };
+    state = {...state, pageIndex: []};
   }
 
   void addDocument(ScannedDocument doc, AppState appState) {
@@ -218,7 +230,8 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
       newDocWidth = VIRTUAL_A4_WIDTH * 0.90;
     } else if (effectiveType == DocumentType.passport) {
       newDocWidth = VIRTUAL_A4_WIDTH * 0.85;
-    } else if (effectiveType == DocumentType.nationalId || effectiveType == DocumentType.housingCard) {
+    } else if (effectiveType == DocumentType.nationalId ||
+        effectiveType == DocumentType.housingCard) {
       // National ID / Housing Card: MUST be EXACTLY VIRTUAL_A4_WIDTH * 0.45
       newDocWidth = VIRTUAL_A4_WIDTH * 0.45;
     } else {
@@ -229,18 +242,21 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
     double newDocHeight = newDocWidth / intrinsicAspectRatio;
 
     // Only clamp if not explicitly hard-clamped to 0.45
-    if (effectiveType != DocumentType.nationalId && effectiveType != DocumentType.housingCard) {
+    if (effectiveType != DocumentType.nationalId &&
+        effectiveType != DocumentType.housingCard) {
       if (newDocWidth > VIRTUAL_A4_WIDTH) {
-          newDocWidth = VIRTUAL_A4_WIDTH;
-          newDocHeight = newDocWidth / intrinsicAspectRatio;
+        newDocWidth = VIRTUAL_A4_WIDTH;
+        newDocHeight = newDocWidth / intrinsicAspectRatio;
       }
       if (newDocHeight > VIRTUAL_A4_HEIGHT) {
-          newDocHeight = VIRTUAL_A4_HEIGHT;
-          newDocWidth = newDocHeight * intrinsicAspectRatio;
+        newDocHeight = VIRTUAL_A4_HEIGHT;
+        newDocWidth = newDocHeight * intrinsicAspectRatio;
       }
     }
 
-    if (appState.displayMethod == DisplayMethod.frontOnly && state.isNotEmpty && (state[0] ?? []).isNotEmpty) {
+    if (appState.displayMethod == DisplayMethod.frontOnly &&
+        state.isNotEmpty &&
+        (state[0] ?? []).isNotEmpty) {
       return;
     }
 
@@ -251,18 +267,23 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
     );
 
     if (state.isEmpty) {
-      state = {0: [newDoc.copyWith(dx: margin, dy: margin)]};
+      state = {
+        0: [newDoc.copyWith(dx: margin, dy: margin)],
+      };
       return;
     }
 
     int pageIndex = state.keys.reduce(math.max);
-    List<ScannedDocument> pageDocs = List<ScannedDocument>.from(state[pageIndex] ?? []);
+    List<ScannedDocument> pageDocs = List<ScannedDocument>.from(
+      state[pageIndex] ?? [],
+    );
 
-    if (appState.displayMethod == DisplayMethod.twoPages && pageDocs.isNotEmpty) {
+    if (appState.displayMethod == DisplayMethod.twoPages &&
+        pageDocs.isNotEmpty) {
       pageIndex++;
       state = {
         ...state,
-        pageIndex: [newDoc.copyWith(dx: margin, dy: margin)]
+        pageIndex: [newDoc.copyWith(dx: margin, dy: margin)],
       };
       return;
     }
@@ -282,7 +303,8 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
     double currentDy = margin;
 
     // Advanced layout engine to find the first non-overlapping position
-    if (effectiveType == DocumentType.nationalId || effectiveType == DocumentType.housingCard) {
+    if (effectiveType == DocumentType.nationalId ||
+        effectiveType == DocumentType.housingCard) {
       int index = pageDocs.length;
       if (index == 0) {
         currentDx = 20.0;
@@ -291,11 +313,15 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
         currentDx = (VIRTUAL_A4_WIDTH * 0.45) + 40.0;
         currentDy = 20.0;
       } else if (index == 2) {
-        double firstDocHeight = pageDocs.isNotEmpty ? pageDocs.first.height : newDocHeight;
+        double firstDocHeight = pageDocs.isNotEmpty
+            ? pageDocs.first.height
+            : newDocHeight;
         currentDx = 20.0;
         currentDy = firstDocHeight + 40.0;
       } else if (index == 3) {
-        double firstDocHeight = pageDocs.isNotEmpty ? pageDocs.first.height : newDocHeight;
+        double firstDocHeight = pageDocs.isNotEmpty
+            ? pageDocs.first.height
+            : newDocHeight;
         currentDx = (VIRTUAL_A4_WIDTH * 0.45) + 40.0;
         currentDy = firstDocHeight + 40.0;
       } else {
@@ -316,54 +342,64 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
 
       // Try to place to the right of the last document, or below it
       if (sortedDocs.isNotEmpty) {
-          ScannedDocument lastDoc = sortedDocs.last;
-          double rightDx = lastDoc.dx + lastDoc.width + margin;
-          if (rightDx + newDocWidth <= VIRTUAL_A4_WIDTH) {
-              currentDx = rightDx;
-              currentDy = lastDoc.dy;
-          } else {
-              currentDx = margin;
-              // Find max height in the current row
-              double maxRowHeight = 0;
-              for (var d in sortedDocs) {
-                  if (d.dy >= lastDoc.dy - 10 && d.dy <= lastDoc.dy + 10) {
-                      if (d.height > maxRowHeight) maxRowHeight = d.height;
-                  }
-              }
-              if (maxRowHeight == 0) maxRowHeight = lastDoc.height; // Fallback
-              currentDy = lastDoc.dy + maxRowHeight + margin;
+        ScannedDocument lastDoc = sortedDocs.last;
+        double rightDx = lastDoc.dx + lastDoc.width + margin;
+        if (rightDx + newDocWidth <= VIRTUAL_A4_WIDTH) {
+          currentDx = rightDx;
+          currentDy = lastDoc.dy;
+        } else {
+          currentDx = margin;
+          // Find max height in the current row
+          double maxRowHeight = 0;
+          for (var d in sortedDocs) {
+            if (d.dy >= lastDoc.dy - 10 && d.dy <= lastDoc.dy + 10) {
+              if (d.height > maxRowHeight) maxRowHeight = d.height;
+            }
           }
+          if (maxRowHeight == 0) maxRowHeight = lastDoc.height; // Fallback
+          currentDy = lastDoc.dy + maxRowHeight + margin;
+        }
       }
 
       // Check overlap helper
       bool hasOverlap(double x, double y, double w, double h) {
-          for (var d in pageDocs) {
-              if (!(x + w + margin < d.dx || x > d.dx + d.width + margin ||
-                    y + h + margin < d.dy || y > d.dy + d.height + margin)) {
-                  return true;
-              }
+        for (var d in pageDocs) {
+          if (!(x + w + margin < d.dx ||
+              x > d.dx + d.width + margin ||
+              y + h + margin < d.dy ||
+              y > d.dy + d.height + margin)) {
+            return true;
           }
-          return false;
+        }
+        return false;
       }
 
       // Grid search if the heuristic placement overlaps
       if (hasOverlap(currentDx, currentDy, newDocWidth, newDocHeight)) {
-          foundPosition = false;
-          for (double y = margin; y + newDocHeight <= VIRTUAL_A4_HEIGHT; y += 20) {
-              for (double x = margin; x + newDocWidth <= VIRTUAL_A4_WIDTH; x += 20) {
-                  if (!hasOverlap(x, y, newDocWidth, newDocHeight)) {
-                      currentDx = x;
-                      currentDy = y;
-                      foundPosition = true;
-                      break;
-                  }
-              }
-              if (foundPosition) break;
+        foundPosition = false;
+        for (
+          double y = margin;
+          y + newDocHeight <= VIRTUAL_A4_HEIGHT;
+          y += 20
+        ) {
+          for (
+            double x = margin;
+            x + newDocWidth <= VIRTUAL_A4_WIDTH;
+            x += 20
+          ) {
+            if (!hasOverlap(x, y, newDocWidth, newDocHeight)) {
+              currentDx = x;
+              currentDy = y;
+              foundPosition = true;
+              break;
+            }
           }
-          if (!foundPosition) {
-              // Force new page if no room
-              currentDy = VIRTUAL_A4_HEIGHT + 1;
-          }
+          if (foundPosition) break;
+        }
+        if (!foundPosition) {
+          // Force new page if no room
+          currentDy = VIRTUAL_A4_HEIGHT + 1;
+        }
       }
     }
 
@@ -376,7 +412,7 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
 
     state = {
       ...state,
-      pageIndex: [...pageDocs, newDoc.copyWith(dx: currentDx, dy: currentDy)]
+      pageIndex: [...pageDocs, newDoc.copyWith(dx: currentDx, dy: currentDy)],
     };
   }
 
@@ -395,12 +431,13 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
 
     final updatedDocs = [
       for (int i = 0; i < pageDocs.length; i++)
-        if (i != docIndex) pageDocs[i]
+        if (i != docIndex) pageDocs[i],
     ];
 
     if (updatedDocs.isEmpty && pageIndex != 0) {
       // Remove the page if empty, except for page index 0
-      final newState = Map<int, List<ScannedDocument>>.from(state)..remove(pageIndex);
+      final newState = Map<int, List<ScannedDocument>>.from(state)
+        ..remove(pageIndex);
       // Re-index pages so they are contiguous starting from 0
       final reindexedState = <int, List<ScannedDocument>>{};
       int newIdx = 0;
@@ -410,10 +447,7 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
       }
       state = reindexedState;
     } else {
-      state = {
-        ...state,
-        pageIndex: updatedDocs,
-      };
+      state = {...state, pageIndex: updatedDocs};
     }
   }
 
@@ -425,13 +459,10 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
 
     final updatedDocs = [
       for (int i = 0; i < pageDocs.length; i++)
-        if (i == docIndex) newDoc else pageDocs[i]
+        if (i == docIndex) newDoc else pageDocs[i],
     ];
 
-    state = {
-      ...state,
-      pageIndex: updatedDocs,
-    };
+    state = {...state, pageIndex: updatedDocs};
   }
 
   void updateAndMoveToTop(int pageIndex, int docIndex, ScannedDocument newDoc) {
@@ -443,13 +474,20 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
     pageDocs.removeAt(docIndex);
     pageDocs.add(newDoc);
 
-    state = {
-      ...state,
-      pageIndex: pageDocs,
-    };
+    state = {...state, pageIndex: pageDocs};
   }
 
-  void updateDocumentLayout(int pageIndex, int docIndex, {double? dx, double? dy, double? width, double? height, int? rotationAngle, double? scale, ScannedDocument? originalDoc}) {
+  void updateDocumentLayout(
+    int pageIndex,
+    int docIndex, {
+    double? dx,
+    double? dy,
+    double? width,
+    double? height,
+    int? rotationAngle,
+    double? scale,
+    ScannedDocument? originalDoc,
+  }) {
     if (!state.containsKey(pageIndex)) return;
 
     final pageDocs = state[pageIndex]!;
@@ -457,7 +495,9 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
     // Fix stale docIndex by finding actual index if originalDoc is provided
     int actualIndex = docIndex;
     if (originalDoc != null) {
-      actualIndex = pageDocs.indexWhere((d) => d.file.path == originalDoc.file.path);
+      actualIndex = pageDocs.indexWhere(
+        (d) => d.file.path == originalDoc.file.path,
+      );
       if (actualIndex == -1) actualIndex = docIndex;
     }
 
@@ -475,15 +515,11 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
 
     final updatedDocs = [
       for (int i = 0; i < pageDocs.length; i++)
-        if (i == actualIndex) newDoc else pageDocs[i]
+        if (i == actualIndex) newDoc else pageDocs[i],
     ];
 
-    state = {
-      ...state,
-      pageIndex: updatedDocs,
-    };
+    state = {...state, pageIndex: updatedDocs};
   }
-
 
   void moveDocumentToTop(int pageIndex, int docIndex) {
     if (!state.containsKey(pageIndex)) return;
@@ -493,10 +529,7 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
     final doc = pageDocs.removeAt(docIndex);
     pageDocs.add(doc);
 
-    state = {
-      ...state,
-      pageIndex: pageDocs,
-    };
+    state = {...state, pageIndex: pageDocs};
   }
 
   void setRawState(Map<int, List<ScannedDocument>> newState) {
@@ -508,9 +541,12 @@ class ScannedDocumentsNotifier extends Notifier<Map<int, List<ScannedDocument>>>
   }
 }
 
-final scannedDocumentsProvider = NotifierProvider<ScannedDocumentsNotifier, Map<int, List<ScannedDocument>>>(() {
-  return ScannedDocumentsNotifier();
-});
+final scannedDocumentsProvider =
+    NotifierProvider<ScannedDocumentsNotifier, Map<int, List<ScannedDocument>>>(
+      () {
+        return ScannedDocumentsNotifier();
+      },
+    );
 
 class AppState {
   final WorkMode workMode;
@@ -569,18 +605,24 @@ class AppStateNotifier extends Notifier<AppState> {
 
   void updateWorkMode(WorkMode mode) => state = state.copyWith(workMode: mode);
 
-  void toggleNationalId(bool? value) => state = state.copyWith(hasNationalId: value ?? false);
-  void toggleHousingCard(bool? value) => state = state.copyWith(hasHousingCard: value ?? false);
-  void toggleRationCard(bool? value) => state = state.copyWith(hasRationCard: value ?? false);
-  void togglePassport(bool? value) => state = state.copyWith(hasPassport: value ?? false);
+  void toggleNationalId(bool? value) =>
+      state = state.copyWith(hasNationalId: value ?? false);
+  void toggleHousingCard(bool? value) =>
+      state = state.copyWith(hasHousingCard: value ?? false);
+  void toggleRationCard(bool? value) =>
+      state = state.copyWith(hasRationCard: value ?? false);
+  void togglePassport(bool? value) =>
+      state = state.copyWith(hasPassport: value ?? false);
 
-  void updateDisplayMethod(DisplayMethod method) => state = state.copyWith(displayMethod: method);
+  void updateDisplayMethod(DisplayMethod method) =>
+      state = state.copyWith(displayMethod: method);
 
   void toggleAddFrame(bool value) => state = state.copyWith(addFrame: value);
 
   void updateFileName(String name) => state = state.copyWith(fileName: name);
 
-  void toggleSmartRecognition(bool value) => state = state.copyWith(smartRecognition: value);
+  void toggleSmartRecognition(bool value) =>
+      state = state.copyWith(smartRecognition: value);
 }
 
 final appStateProvider = NotifierProvider<AppStateNotifier, AppState>(() {

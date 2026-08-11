@@ -12,7 +12,6 @@ import 'package:gal/gal.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../providers/app_state.dart';
 
-
 Future<Map<String, dynamic>> _runProxyIsolate(Map<String, dynamic> args) {
   return Isolate.run(() => _generateProxy(args));
 }
@@ -80,7 +79,10 @@ Uint8List _processGalleryImage(Map<String, dynamic> args) {
       src = sharpened;
     }
 
-    if (rectLeft != null && rectTop != null && rectWidth != null && rectHeight != null) {
+    if (rectLeft != null &&
+        rectTop != null &&
+        rectWidth != null &&
+        rectHeight != null) {
       cropped = src.region(cv.Rect(rectLeft, rectTop, rectWidth, rectHeight));
       final (_, encodedBytes) = cv.imencode('.jpg', cropped);
       return encodedBytes;
@@ -97,8 +99,9 @@ Uint8List _processGalleryImage(Map<String, dynamic> args) {
   }
 }
 
-
-Future<Map<String, dynamic>> _runPreviewIsolate(Map<String, dynamic> args) async {
+Future<Map<String, dynamic>> _runPreviewIsolate(
+  Map<String, dynamic> args,
+) async {
   final Uint8List bytes = args['bytes'];
   final double contrast = args['contrast'];
   final double brightness = args['brightness'];
@@ -137,7 +140,6 @@ Future<Map<String, dynamic>> _runPreviewIsolate(Map<String, dynamic> args) async
 }
 
 String _processEditedImage(Map<String, dynamic> args) {
-
   final Uint8List bytes = args['bytes'];
   final int? rectLeft = args['rectLeft'];
   final int? rectTop = args['rectTop'];
@@ -173,8 +175,12 @@ String _processEditedImage(Map<String, dynamic> args) {
       src = sharpened;
     }
 
-    final outPath = '$tempPath/edited_${DateTime.now().millisecondsSinceEpoch}.jpg';
-    if (rectLeft != null && rectTop != null && rectWidth != null && rectHeight != null) {
+    final outPath =
+        '$tempPath/edited_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    if (rectLeft != null &&
+        rectTop != null &&
+        rectWidth != null &&
+        rectHeight != null) {
       cropped = src.region(cv.Rect(rectLeft, rectTop, rectWidth, rectHeight));
       cv.imwrite(outPath, cropped);
     } else {
@@ -194,15 +200,19 @@ class ImageEditorScreen extends ConsumerStatefulWidget {
   final int pageIndex;
   final int documentIndex;
 
-  const ImageEditorScreen({super.key, required this.pageIndex, required this.documentIndex});
+  const ImageEditorScreen({
+    super.key,
+    required this.pageIndex,
+    required this.documentIndex,
+  });
 
   @override
   ConsumerState<ImageEditorScreen> createState() => _ImageEditorScreenState();
 }
 
-
 class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
-  final GlobalKey<ExtendedImageEditorState> editorKey = GlobalKey<ExtendedImageEditorState>();
+  final GlobalKey<ExtendedImageEditorState> editorKey =
+      GlobalKey<ExtendedImageEditorState>();
 
   double _brightness = 0;
   double _contrast = 1;
@@ -291,7 +301,6 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
     }
   }
 
-
   Future<void> _saveToGallery() async {
     final status = await Permission.storage.request();
     if (!status.isGranted && !await Permission.photos.request().isGranted) {
@@ -313,8 +322,12 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
       final rect = editorKey.currentState?.getCropRect();
       final rectLeft = rect != null ? (rect.left / _proxyScale).toInt() : null;
       final rectTop = rect != null ? (rect.top / _proxyScale).toInt() : null;
-      final rectWidth = rect != null ? (rect.width / _proxyScale).toInt() : null;
-      final rectHeight = rect != null ? (rect.height / _proxyScale).toInt() : null;
+      final rectWidth = rect != null
+          ? (rect.width / _proxyScale).toInt()
+          : null;
+      final rectHeight = rect != null
+          ? (rect.height / _proxyScale).toInt()
+          : null;
 
       final args = {
         'bytes': bytes,
@@ -331,19 +344,19 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
 
       await Gal.putImageBytes(
         processedBytes,
-        name: "scanned_${DateTime.now().millisecondsSinceEpoch}"
+        name: "scanned_${DateTime.now().millisecondsSinceEpoch}",
       );
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تم الحفظ في المعرض')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('تم الحفظ في المعرض')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('حدث خطأ أثناء الحفظ: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('حدث خطأ أثناء الحفظ: $e')));
       }
     } finally {
       if (mounted) setState(() => _isProcessing = false);
@@ -361,8 +374,12 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
       final rect = editorKey.currentState?.getCropRect();
       final rectLeft = rect != null ? (rect.left / _proxyScale).toInt() : null;
       final rectTop = rect != null ? (rect.top / _proxyScale).toInt() : null;
-      final rectWidth = rect != null ? (rect.width / _proxyScale).toInt() : null;
-      final rectHeight = rect != null ? (rect.height / _proxyScale).toInt() : null;
+      final rectWidth = rect != null
+          ? (rect.width / _proxyScale).toInt()
+          : null;
+      final rectHeight = rect != null
+          ? (rect.height / _proxyScale).toInt()
+          : null;
 
       final tempDir = await getTemporaryDirectory();
       final tempPath = tempDir.path;
@@ -388,7 +405,9 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
       final editedPath = await _runEditedIsolate(args);
 
       final newDoc = doc.copyWith(file: File(editedPath));
-      ref.read(scannedDocumentsProvider.notifier).updateDocumentAt(widget.pageIndex, widget.documentIndex, newDoc);
+      ref
+          .read(scannedDocumentsProvider.notifier)
+          .updateDocumentAt(widget.pageIndex, widget.documentIndex, newDoc);
 
       if (mounted) {
         Navigator.pop(context);
@@ -399,7 +418,6 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
       if (mounted) setState(() => _isProcessing = false);
     }
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -420,8 +438,12 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
               child: Padding(
                 padding: EdgeInsets.symmetric(horizontal: 16.0),
                 child: SizedBox(
-                  width: 20, height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
                 ),
               ),
             ),
@@ -438,93 +460,95 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
         ],
       ),
       body: _isProcessing
-        ? const Center(child: CircularProgressIndicator())
-        : Column(
-            children: [
-              Expanded(
-                child: ValueListenableBuilder<Uint8List?>(
-                  valueListenable: _previewImage,
-                  builder: (context, previewBytes, child) {
-                    return previewBytes != null
-                      ? ExtendedImage.memory(
-                          previewBytes,
-                          fit: BoxFit.contain,
-                          mode: ExtendedImageMode.editor,
-                          extendedImageEditorKey: editorKey,
-                          initEditorConfigHandler: (ExtendedImageState? state) {
-                            return EditorConfig(
-                              maxScale: 8.0,
-                              cropRectPadding: const EdgeInsets.all(20.0),
-                              hitTestSize: 20.0,
-                            );
-                          },
-                        )
-                      : const Center(child: CircularProgressIndicator());
-                  }
+          ? const Center(child: CircularProgressIndicator())
+          : Column(
+              children: [
+                Expanded(
+                  child: ValueListenableBuilder<Uint8List?>(
+                    valueListenable: _previewImage,
+                    builder: (context, previewBytes, child) {
+                      return previewBytes != null
+                          ? ExtendedImage.memory(
+                              previewBytes,
+                              fit: BoxFit.contain,
+                              mode: ExtendedImageMode.editor,
+                              extendedImageEditorKey: editorKey,
+                              initEditorConfigHandler:
+                                  (ExtendedImageState? state) {
+                                    return EditorConfig(
+                                      maxScale: 8.0,
+                                      cropRectPadding: const EdgeInsets.all(
+                                        20.0,
+                                      ),
+                                      hitTestSize: 20.0,
+                                    );
+                                  },
+                            )
+                          : const Center(child: CircularProgressIndicator());
+                    },
+                  ),
                 ),
-              ),
-              Container(
-                color: const Color(0xFF1E293B),
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.brightness_6, size: 20),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Slider(
-                            value: _brightness,
-                            min: -100,
-                            max: 100,
-                            onChanged: (v) {
-                              setState(() => _brightness = v);
-                              _onSliderChanged();
-                            }
+                Container(
+                  color: const Color(0xFF1E293B),
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.brightness_6, size: 20),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Slider(
+                              value: _brightness,
+                              min: -100,
+                              max: 100,
+                              onChanged: (v) {
+                                setState(() => _brightness = v);
+                                _onSliderChanged();
+                              },
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
-                    Row(
-                      children: [
-                        const Icon(Icons.contrast, size: 20),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Slider(
-                            value: _contrast,
-                            min: 0.5,
-                            max: 3.0,
-                            onChanged: (v) {
-                              setState(() => _contrast = v);
-                              _onSliderChanged();
-                            }
+                        ],
+                      ),
+                      Row(
+                        children: [
+                          const Icon(Icons.contrast, size: 20),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Slider(
+                              value: _contrast,
+                              min: 0.5,
+                              max: 3.0,
+                              onChanged: (v) {
+                                setState(() => _contrast = v);
+                                _onSliderChanged();
+                              },
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
-                    Row(
-                      children: [
-                        const Icon(Icons.lens_blur, size: 20),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Slider(
-                            value: _sharpness,
-                            min: 0.0,
-                            max: 10.0,
-                            onChanged: (v) {
-                              setState(() => _sharpness = v);
-                              _onSliderChanged();
-                            }
+                        ],
+                      ),
+                      Row(
+                        children: [
+                          const Icon(Icons.lens_blur, size: 20),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Slider(
+                              value: _sharpness,
+                              min: 0.0,
+                              max: 10.0,
+                              onChanged: (v) {
+                                setState(() => _sharpness = v);
+                                _onSliderChanged();
+                              },
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
-                  ],
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ],
-          ),
+              ],
+            ),
     );
   }
-
 }

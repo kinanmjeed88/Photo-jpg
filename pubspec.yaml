@@ -40,7 +40,6 @@ dependencies:
   path_provider: ^2.1.6
   shared_preferences: ^2.5.5
   image_picker: ^1.2.3
-  image_cropper: ^12.2.1
   image: ^4.8.0
   share_plus: ^13.3.0
   local_auth: ^2.3.0
@@ -53,6 +52,7 @@ dependencies:
   path: ^1.9.1
   permission_handler: ^13.0.0
   gal: ^2.3.3
+  image_editor: ^1.6.0
 
 dev_dependencies:
   flutter_test:
