@@ -20,10 +20,7 @@ class QualityMetrics {
   double sharpness;
   double contrast;
 
-  QualityMetrics({
-    this.sharpness = 0.0,
-    this.contrast = 0.0,
-  });
+  QualityMetrics({this.sharpness = 0.0, this.contrast = 0.0});
 }
 
 class ConsensusMetrics {
@@ -47,9 +44,9 @@ class Metrics {
     GeometryMetrics? geometry,
     QualityMetrics? quality,
     ConsensusMetrics? consensus,
-  })  : geometry = geometry ?? GeometryMetrics(),
-        quality = quality ?? QualityMetrics(),
-        consensus = consensus ?? ConsensusMetrics();
+  }) : geometry = geometry ?? GeometryMetrics(),
+       quality = quality ?? QualityMetrics(),
+       consensus = consensus ?? ConsensusMetrics();
 }
 
 class Candidate {

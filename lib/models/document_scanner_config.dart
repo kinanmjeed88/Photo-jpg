@@ -30,13 +30,15 @@ class DocumentScannerConfig {
       configVersion: json['configVersion'] as String? ?? "1.0",
       iouMergeThreshold: (json['iouMergeThreshold'] as num?)?.toDouble() ?? 0.6,
       minSolidity: (json['minSolidity'] as num?)?.toDouble() ?? 0.85,
-      aspectRatioRange: (json['aspectRatioRange'] as List<dynamic>?)
+      aspectRatioRange:
+          (json['aspectRatioRange'] as List<dynamic>?)
               ?.map((e) => (e as num).toDouble())
               .toList() ??
           [1.2, 1.9],
       minAreaRatio: (json['minAreaRatio'] as num?)?.toDouble() ?? 0.005,
       maxAreaRatio: (json['maxAreaRatio'] as num?)?.toDouble() ?? 0.85,
-      weights: (json['weights'] as Map<String, dynamic>?)?.map(
+      weights:
+          (json['weights'] as Map<String, dynamic>?)?.map(
             (k, e) => MapEntry(k, (e as num).toDouble()),
           ) ??
           {
@@ -64,5 +66,7 @@ class DocumentScannerConfig {
   String toJsonString() => json.encode(toJson());
 
   factory DocumentScannerConfig.fromJsonString(String source) =>
-      DocumentScannerConfig.fromJson(json.decode(source) as Map<String, dynamic>);
+      DocumentScannerConfig.fromJson(
+        json.decode(source) as Map<String, dynamic>,
+      );
 }

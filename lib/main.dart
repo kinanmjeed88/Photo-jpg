@@ -36,10 +36,7 @@ class _DocScannerAppState extends State<DocScannerApp> {
       });
       authenticated = await auth.authenticate(
         localizedReason: 'يرجى المصادقة للوصول إلى المستمسكات',
-        options: AuthenticationOptions(
-          stickyAuth: true,
-          biometricOnly: false,
-        ),
+        options: AuthenticationOptions(stickyAuth: true, biometricOnly: false),
       );
       setState(() {
         _isAuthenticating = false;
@@ -64,9 +61,7 @@ class _DocScannerAppState extends State<DocScannerApp> {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      supportedLocales: const [
-        Locale('ar'),
-      ],
+      supportedLocales: const [Locale('ar')],
       theme: ThemeData(
         brightness: Brightness.dark,
         scaffoldBackgroundColor: const Color(0xFF0F172A), // Navy/Dark Blue
@@ -91,25 +86,25 @@ class _DocScannerAppState extends State<DocScannerApp> {
       home: _isAuthenticating
           ? const Scaffold(body: Center(child: CircularProgressIndicator()))
           : _isAuthenticated
-              ? const SettingsScreen()
-              : Scaffold(
-                  body: Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Text(
-                          'المصادقة مطلوبة لحماية مستمسكاتك',
-                          style: TextStyle(fontSize: 18),
-                        ),
-                        const SizedBox(height: 20),
-                        ElevatedButton(
-                          onPressed: _authenticate,
-                          child: const Text('إعادة المحاولة'),
-                        ),
-                      ],
+          ? const SettingsScreen()
+          : Scaffold(
+              body: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Text(
+                      'المصادقة مطلوبة لحماية مستمسكاتك',
+                      style: TextStyle(fontSize: 18),
                     ),
-                  ),
+                    const SizedBox(height: 20),
+                    ElevatedButton(
+                      onPressed: _authenticate,
+                      child: const Text('إعادة المحاولة'),
+                    ),
+                  ],
                 ),
+              ),
+            ),
     );
   }
 }

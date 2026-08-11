@@ -10,8 +10,24 @@ class DraggableResizableDocument extends StatefulWidget {
   final bool isSelected;
   final bool addFrame;
   final VoidCallback onTap;
-  final void Function(int pageIndex, int docIndex, double dx, double dy, double width, double height, int rotationAngle) onLayoutUpdate;
-  final void Function(int sourcePageIndex, int docIndex, ScannedDocument doc, double dx, double dy) onCrossPageMove;
+  final void Function(
+    int pageIndex,
+    int docIndex,
+    double dx,
+    double dy,
+    double width,
+    double height,
+    int rotationAngle,
+  )
+  onLayoutUpdate;
+  final void Function(
+    int sourcePageIndex,
+    int docIndex,
+    ScannedDocument doc,
+    double dx,
+    double dy,
+  )
+  onCrossPageMove;
   final double canvasWidth;
   final double canvasHeight;
   final double canvasScale;
@@ -40,17 +56,19 @@ class DraggableResizableDocument extends StatefulWidget {
   });
 
   @override
-  State<DraggableResizableDocument> createState() => _DraggableResizableDocumentState();
+  State<DraggableResizableDocument> createState() =>
+      _DraggableResizableDocumentState();
 }
 
-class _DraggableResizableDocumentState extends State<DraggableResizableDocument> {
+class _DraggableResizableDocumentState
+    extends State<DraggableResizableDocument> {
   late double dx;
   late double dy;
   late double width;
   late double height;
   late int rotationAngle;
   bool isDragging = false;
-  double _baseScale = 1.0;      // Snapshot of scale at gesture start
+  double _baseScale = 1.0; // Snapshot of scale at gesture start
   bool _isResizing = false;
   double _handleBaseScale = 1.0;
   double _accumulatedDrag = 0.0;
@@ -82,7 +100,8 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
     bool isRotated = rotationAngle % 180 != 0;
 
     if (widget.document.originalHeight > 0) {
-      double baseRatio = widget.document.originalWidth / widget.document.originalHeight;
+      double baseRatio =
+          widget.document.originalWidth / widget.document.originalHeight;
       return isRotated ? (1 / baseRatio) : baseRatio;
     }
     return 1.0;
@@ -99,7 +118,9 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
             decoration: BoxDecoration(
               border: widget.isSelected
                   ? Border.all(color: Colors.blueAccent, width: 3)
-                  : (widget.addFrame ? Border.all(color: Colors.black, width: 1.0) : null),
+                  : (widget.addFrame
+                        ? Border.all(color: Colors.black, width: 1.0)
+                        : null),
             ),
             child: RotatedBox(
               quarterTurns: rotationAngle ~/ 90,
@@ -113,7 +134,8 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
 
   Widget _buildHandleUI() {
     return Container(
-      width: 60, height: 60,
+      width: 60,
+      height: 60,
       color: Colors.transparent,
       child: Center(
         child: AnimatedContainer(
@@ -122,7 +144,9 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
             color: _isResizing ? Colors.orange : Colors.blue,
             shape: BoxShape.circle,
             border: Border.all(color: Colors.white, width: 2),
-            boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4, spreadRadius: 1)],
+            boxShadow: const [
+              BoxShadow(color: Colors.black26, blurRadius: 4, spreadRadius: 1),
+            ],
           ),
           padding: const EdgeInsets.all(6),
           child: const Icon(Icons.open_in_full, size: 16, color: Colors.white),
@@ -196,7 +220,9 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
                         _accumulatedDrag += diagonalDrag;
 
                         // Convert drag pixels to scale (150px = 1.0 scale change)
-                        final double newScale = (_handleBaseScale + (_accumulatedDrag / 150.0)).clamp(0.3, 3.0);
+                        final double newScale =
+                            (_handleBaseScale + (_accumulatedDrag / 150.0))
+                                .clamp(0.3, 3.0);
 
                         if (widget.onHandleResize != null) {
                           widget.onHandleResize!(newScale);
@@ -209,7 +235,8 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
                           scale: 1.0 / widget.document.scale,
                           alignment: Alignment.center,
                           child: SizedBox(
-                            width: 80, height: 80,
+                            width: 80,
+                            height: 80,
                             child: Center(child: _buildHandleUI()),
                           ),
                         ),
@@ -229,12 +256,7 @@ class _DraggableResizableDocumentState extends State<DraggableResizableDocument>
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: widget.onTap,
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            documentWidget,
-          ],
-        ),
+        child: Stack(clipBehavior: Clip.none, children: [documentWidget]),
       ),
     );
   }

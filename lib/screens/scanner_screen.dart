@@ -11,6 +11,7 @@ import '../widgets/draggable_document.dart';
 import 'image_editor_screen.dart';
 import 'archive_screen.dart';
 import 'multi_crop_screen.dart';
+import 'single_crop_screen.dart';
 import '../constants/app_constants.dart';
 
 class ScannerScreen extends ConsumerStatefulWidget {
@@ -27,7 +28,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
   bool _isProcessing = false;
 
   // Use ValueNotifier for localized state updates to prevent full-screen rebuilds
-  final ValueNotifier<({int? pageIndex, int? docIndex})> _selectionNotifier = ValueNotifier((pageIndex: null, docIndex: null));
+  final ValueNotifier<({int? pageIndex, int? docIndex})> _selectionNotifier =
+      ValueNotifier((pageIndex: null, docIndex: null));
 
   double _lastKnownCanvasWidth = 380.0;
   double _lastKnownCanvasHeight = 537.32;
@@ -52,7 +54,10 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
               return PopScope(
                 canPop: false,
                 child: AlertDialog(
-                  title: const Text('جاري المعالجة', textAlign: TextAlign.right),
+                  title: const Text(
+                    'جاري المعالجة',
+                    textAlign: TextAlign.right,
+                  ),
                   content: ValueListenableBuilder<int>(
                     valueListenable: progressNotifier,
                     builder: (context, currentProgress, child) {
@@ -60,10 +65,14 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           LinearProgressIndicator(
-                            value: totalImages > 0 ? currentProgress / totalImages : null,
+                            value: totalImages > 0
+                                ? currentProgress / totalImages
+                                : null,
                           ),
                           const SizedBox(height: 16),
-                          Text('جاري معالجة الصورة $currentProgress من $totalImages'),
+                          Text(
+                            'جاري معالجة الصورة $currentProgress من $totalImages',
+                          ),
                         ],
                       );
                     },
@@ -73,22 +82,28 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
             },
           );
 
-          final Map<File, List<File>> mappedProcessedFiles = await _scannerService.processBatchSmartRecognition(
-            files,
-            onProgress: (current, total) {
-              progressNotifier.value = current;
-            }
-          );
+          final Map<File, List<File>> mappedProcessedFiles =
+              await _scannerService.processBatchSmartRecognition(
+                files,
+                onProgress: (current, total) {
+                  progressNotifier.value = current;
+                },
+              );
 
           if (!mounted) return;
           Navigator.pop(context); // Close dialog
           progressNotifier.dispose();
 
-          int totalProcessed = mappedProcessedFiles.values.fold(0, (sum, list) => sum + list.length);
+          int totalProcessed = mappedProcessedFiles.values.fold(
+            0,
+            (sum, list) => sum + list.length,
+          );
 
           if (totalProcessed == 0) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('تعذر القص الذكي، تم التحويل للقص اليدوي')),
+              const SnackBar(
+                content: Text('تعذر القص الذكي، تم التحويل للقص اليدوي'),
+              ),
             );
 
             // Push to MultiCropScreen with all original images
@@ -96,26 +111,38 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
               final result = await Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (context) => MultiCropScreen(imageFile: originalFile),
+                  builder: (context) =>
+                      MultiCropScreen(imageFile: originalFile),
                 ),
               );
               if (result != null && result is List<File>) {
-                await _processBatchFiles(result, originalImagePath: originalFile.path);
+                await _processBatchFiles(
+                  result,
+                  originalImagePath: originalFile.path,
+                );
               } else if (result != null && result is List<dynamic>) {
-                await _processBatchFiles(result.cast<String>().map((path) => File(path)).toList(), originalImagePath: originalFile.path);
+                await _processBatchFiles(
+                  result.cast<String>().map((path) => File(path)).toList(),
+                  originalImagePath: originalFile.path,
+                );
               }
             }
           } else {
             for (var entry in mappedProcessedFiles.entries) {
               if (entry.value.isNotEmpty) {
-                await _processBatchFiles(entry.value, originalImagePath: entry.key.path);
+                await _processBatchFiles(
+                  entry.value,
+                  originalImagePath: entry.key.path,
+                );
               }
             }
 
             // Partial Detection Banner
             ScaffoldMessenger.of(context).showMaterialBanner(
               MaterialBanner(
-                content: Text('تم استخراج $totalProcessed مستمسك. هل هناك مستمسكات ناقصة؟'),
+                content: Text(
+                  'تم استخراج $totalProcessed مستمسك. هل هناك مستمسكات ناقصة؟',
+                ),
                 actions: [
                   TextButton(
                     onPressed: () async {
@@ -124,13 +151,23 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                         final result = await Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (context) => MultiCropScreen(imageFile: originalFile),
+                            builder: (context) =>
+                                MultiCropScreen(imageFile: originalFile),
                           ),
                         );
                         if (result != null && result is List<File>) {
-                          await _processBatchFiles(result, originalImagePath: originalFile.path);
+                          await _processBatchFiles(
+                            result,
+                            originalImagePath: originalFile.path,
+                          );
                         } else if (result != null && result is List<dynamic>) {
-                          await _processBatchFiles(result.cast<String>().map((path) => File(path)).toList(), originalImagePath: originalFile.path);
+                          await _processBatchFiles(
+                            result
+                                .cast<String>()
+                                .map((path) => File(path))
+                                .toList(),
+                            originalImagePath: originalFile.path,
+                          );
                         }
                       }
                     },
@@ -156,19 +193,45 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
               ),
             );
             if (result != null && result is List<File>) {
-              await _processBatchFiles(result, originalImagePath: originalFile.path);
+              await _processBatchFiles(
+                result,
+                originalImagePath: originalFile.path,
+              );
             } else if (result != null && result is List<dynamic>) {
-              await _processBatchFiles(result.cast<String>().map((path) => File(path)).toList(), originalImagePath: originalFile.path);
+              await _processBatchFiles(
+                result.cast<String>().map((path) => File(path)).toList(),
+                originalImagePath: originalFile.path,
+              );
             } else {
               // Fallback if null
-              await _processBatchFiles([originalFile], originalImagePath: originalFile.path);
+              await _processBatchFiles([
+                originalFile,
+              ], originalImagePath: originalFile.path);
             }
           }
           return;
         }
       } else {
-        final File? file = await _scannerService.scanDocument(source: source);
-        if (file == null) return;
+        final File? rawFile = await _scannerService.scanDocument(
+          source: source,
+        );
+        if (rawFile == null) return;
+
+        File? file = rawFile;
+        // Apply manual crop first as replacing `image_cropper` functionality
+        final cropped = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => SingleCropScreen(imageFile: rawFile),
+          ),
+        );
+
+        if (cropped != null && cropped is File) {
+          file = cropped;
+        } else {
+          // User cancelled cropping
+          return;
+        }
 
         setState(() {
           _isProcessing = true;
@@ -185,41 +248,63 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
             finalFiles = await _scannerService.processSmartRecognition(file);
             if (finalFiles.isEmpty) {
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('تعذر القص الذكي، تم التحويل للقص اليدوي')),
+                const SnackBar(
+                  content: Text('تعذر القص الذكي، تم التحويل للقص اليدوي'),
+                ),
               );
               final result = await Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (context) => MultiCropScreen(imageFile: file),
+                  builder: (context) => MultiCropScreen(imageFile: file!),
                 ),
               );
               if (result != null && result is List<File>) {
                 finalFiles = result;
               } else if (result != null && result is List<dynamic>) {
-                finalFiles = result.cast<String>().map((path) => File(path)).toList();
+                finalFiles = result
+                    .cast<String>()
+                    .map((path) => File(path))
+                    .toList();
               } else {
-                finalFiles = [file];
+                finalFiles = [file!];
               }
-              await _processBatchFiles(finalFiles, originalImagePath: file.path);
+              await _processBatchFiles(
+                finalFiles,
+                originalImagePath: file!.path,
+              );
               return;
             } else {
               ScaffoldMessenger.of(context).showMaterialBanner(
                 MaterialBanner(
-                  content: Text('تم استخراج ${finalFiles.length} مستمسك. هل هناك مستمسكات ناقصة؟'),
+                  content: Text(
+                    'تم استخراج ${finalFiles.length} مستمسك. هل هناك مستمسكات ناقصة؟',
+                  ),
                   actions: [
                     TextButton(
                       onPressed: () async {
-                        ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+                        ScaffoldMessenger.of(
+                          context,
+                        ).hideCurrentMaterialBanner();
                         final result = await Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (context) => MultiCropScreen(imageFile: file),
+                            builder: (context) =>
+                                MultiCropScreen(imageFile: file!),
                           ),
                         );
                         if (result != null && result is List<File>) {
-                          await _processBatchFiles(result, originalImagePath: file.path);
+                          await _processBatchFiles(
+                            result,
+                            originalImagePath: file!.path,
+                          );
                         } else if (result != null && result is List<dynamic>) {
-                          await _processBatchFiles(result.cast<String>().map((path) => File(path)).toList(), originalImagePath: file.path);
+                          await _processBatchFiles(
+                            result
+                                .cast<String>()
+                                .map((path) => File(path))
+                                .toList(),
+                            originalImagePath: file!.path,
+                          );
                         }
                       },
                       child: const Text('إضافة يدوياً'),
@@ -238,13 +323,16 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
             final result = await Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (context) => MultiCropScreen(imageFile: file),
+                builder: (context) => MultiCropScreen(imageFile: file!),
               ),
             );
             if (result != null && result is List<File>) {
               finalFiles = result;
             } else if (result != null && result is List<dynamic>) {
-              finalFiles = result.cast<String>().map((path) => File(path)).toList();
+              finalFiles = result
+                  .cast<String>()
+                  .map((path) => File(path))
+                  .toList();
             }
             await _processBatchFiles(finalFiles, originalImagePath: file.path);
             return;
@@ -252,15 +340,18 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
           allBatchFiles.addAll(finalFiles);
 
           if (allBatchFiles.isNotEmpty) {
-            await _processBatchFiles(allBatchFiles, originalImagePath: file.path);
+            await _processBatchFiles(
+              allBatchFiles,
+              originalImagePath: file.path,
+            );
           }
         }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('حدث خطأ: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('حدث خطأ: $e')));
       }
     } finally {
       if (mounted) {
@@ -271,8 +362,10 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     }
   }
 
-
-  Future<void> _processBatchFiles(List<File> files, {String? originalImagePath}) async {
+  Future<void> _processBatchFiles(
+    List<File> files, {
+    String? originalImagePath,
+  }) async {
     if (!mounted) return;
     showDialog(
       context: context,
@@ -282,7 +375,13 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
     try {
       final appState = ref.read(appStateProvider);
-      final result = await ref.read(scannedDocumentsProvider.notifier).batchAddDocuments(files, appState, originalImagePath: originalImagePath);
+      final result = await ref
+          .read(scannedDocumentsProvider.notifier)
+          .batchAddDocuments(
+            files,
+            appState,
+            originalImagePath: originalImagePath,
+          );
       if (!mounted) return;
       Navigator.pop(context); // pop loading dialog
 
@@ -292,7 +391,11 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
       if (result.failedFiles.isNotEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('فشل تحميل ${result.failedFiles.length} مستندات. قد تكون تالفة.')),
+          SnackBar(
+            content: Text(
+              'فشل تحميل ${result.failedFiles.length} مستندات. قد تكون تالفة.',
+            ),
+          ),
         );
       }
 
@@ -303,7 +406,9 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
             textDirection: TextDirection.rtl,
             child: AlertDialog(
               title: const Text('الصفحة ممتلئة'),
-              content: Text('لم يتبق مساحة كافية. هل تريد إنشاء صفحة جديدة لـ ${result.overflowFiles.length} مستندات متبقية؟'),
+              content: Text(
+                'لم يتبق مساحة كافية. هل تريد إنشاء صفحة جديدة لـ ${result.overflowFiles.length} مستندات متبقية؟',
+              ),
               actions: [
                 TextButton(
                   onPressed: () => Navigator.pop(context),
@@ -385,9 +490,9 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('حدث خطأ: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('حدث خطأ: $e')));
       }
     } finally {
       if (mounted) {
@@ -398,8 +503,9 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     }
   }
 
-
-  Future<void> _handleDelete(({int? pageIndex, int? docIndex}) selection) async {
+  Future<void> _handleDelete(
+    ({int? pageIndex, int? docIndex}) selection,
+  ) async {
     final pageIndex = selection.pageIndex;
     final docIndex = selection.docIndex;
     if (pageIndex == null || docIndex == null) return;
@@ -423,17 +529,28 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
             onPressed: () {
               final currentAllDocs = ref.read(scannedDocumentsProvider);
               final currentDocs = currentAllDocs[pageIndex] ?? [];
-              int actualIndex = currentDocs.indexWhere((d) => d.file.path == doc.file.path);
+              int actualIndex = currentDocs.indexWhere(
+                (d) => d.file.path == doc.file.path,
+              );
               if (actualIndex == -1) actualIndex = docIndex;
-              ref.read(scannedDocumentsProvider.notifier).removeDocumentAt(pageIndex, actualIndex);
+              ref
+                  .read(scannedDocumentsProvider.notifier)
+                  .removeDocumentAt(pageIndex, actualIndex);
 
-              if (_selectionNotifier.value.pageIndex == pageIndex && _selectionNotifier.value.docIndex == docIndex) {
+              if (_selectionNotifier.value.pageIndex == pageIndex &&
+                  _selectionNotifier.value.docIndex == docIndex) {
                 _selectionNotifier.value = (pageIndex: null, docIndex: null);
-              } else if (_selectionNotifier.value.pageIndex == pageIndex && _selectionNotifier.value.docIndex != null && _selectionNotifier.value.docIndex! > docIndex) {
-                _selectionNotifier.value = (pageIndex: _selectionNotifier.value.pageIndex, docIndex: _selectionNotifier.value.docIndex! - 1);
+              } else if (_selectionNotifier.value.pageIndex == pageIndex &&
+                  _selectionNotifier.value.docIndex != null &&
+                  _selectionNotifier.value.docIndex! > docIndex) {
+                _selectionNotifier.value = (
+                  pageIndex: _selectionNotifier.value.pageIndex,
+                  docIndex: _selectionNotifier.value.docIndex! - 1,
+                );
               }
 
-              if (doc.file.existsSync() && doc.file.path != doc.originalImagePath) {
+              if (doc.file.existsSync() &&
+                  doc.file.path != doc.originalImagePath) {
                 try {
                   doc.file.deleteSync();
                 } catch (e) {
@@ -445,7 +562,9 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                 bool isShared = false;
                 final currentState = ref.read(scannedDocumentsProvider);
                 for (var pDocs in currentState.values) {
-                  if (pDocs.any((d) => d.originalImagePath == doc.originalImagePath)) {
+                  if (pDocs.any(
+                    (d) => d.originalImagePath == doc.originalImagePath,
+                  )) {
                     isShared = true;
                     break;
                   }
@@ -480,10 +599,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => ImageEditorScreen(
-          pageIndex: pageIndex,
-          documentIndex: docIndex
-        ),
+        builder: (context) =>
+            ImageEditorScreen(pageIndex: pageIndex, documentIndex: docIndex),
       ),
     );
   }
@@ -500,8 +617,15 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
     if (doc.originalImagePath == null) return;
 
-    final cropped = await _scannerService.manualCrop(doc.originalImagePath!);
-    if (cropped != null) {
+    final cropped = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) =>
+            SingleCropScreen(imageFile: File(doc.originalImagePath!)),
+      ),
+    );
+
+    if (cropped != null && cropped is File) {
       final bytes = await cropped.readAsBytes();
       final decoded = await decodeImageFromList(bytes);
       final double newOrigWidth = decoded.width.toDouble();
@@ -514,7 +638,9 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
         originalHeight: newOrigHeight,
       );
 
-      ref.read(scannedDocumentsProvider.notifier).updateDocumentAt(pageIndex, docIndex, updatedDoc);
+      ref
+          .read(scannedDocumentsProvider.notifier)
+          .updateDocumentAt(pageIndex, docIndex, updatedDoc);
 
       if (doc.file.existsSync() && doc.file.path != doc.originalImagePath) {
         try {
@@ -539,12 +665,16 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     try {
       await Gal.putImage(doc.file.path);
       if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم الحفظ في المعرض')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('تم الحفظ في المعرض')));
       }
     } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطأ في الحفظ: $e')));
-        }
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('خطأ في الحفظ: $e')));
+      }
     }
   }
 
@@ -570,20 +700,24 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
     if (newDx < 0) newDx = 0;
     if (newDy < 0) newDy = 0;
-    if (newDx + newWidth > AppConstants.kVirtualCanvasWidth) newDx = AppConstants.kVirtualCanvasWidth - newWidth;
-    if (newDy + newHeight > AppConstants.kVirtualCanvasHeight) newDy = AppConstants.kVirtualCanvasHeight - newHeight;
+    if (newDx + newWidth > AppConstants.kVirtualCanvasWidth)
+      newDx = AppConstants.kVirtualCanvasWidth - newWidth;
+    if (newDy + newHeight > AppConstants.kVirtualCanvasHeight)
+      newDy = AppConstants.kVirtualCanvasHeight - newHeight;
 
     int newRotation = (doc.rotationAngle + 90) % 360;
 
-    ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
-      pageIndex,
-      docIndex,
-      dx: newDx,
-      dy: newDy,
-      width: newWidth,
-      height: newHeight,
-      rotationAngle: newRotation
-    );
+    ref
+        .read(scannedDocumentsProvider.notifier)
+        .updateDocumentLayout(
+          pageIndex,
+          docIndex,
+          dx: newDx,
+          dy: newDy,
+          width: newWidth,
+          height: newHeight,
+          rotationAngle: newRotation,
+        );
   }
 
   void _handleScale(({int? pageIndex, int? docIndex}) selection) {
@@ -607,16 +741,17 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
       newWidth = newHeight * aspectRatio;
     }
 
-    ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
-      pageIndex,
-      docIndex,
-      dx: 0.0,
-      dy: 0.0,
-      width: newWidth,
-      height: newHeight,
-    );
+    ref
+        .read(scannedDocumentsProvider.notifier)
+        .updateDocumentLayout(
+          pageIndex,
+          docIndex,
+          dx: 0.0,
+          dy: 0.0,
+          width: newWidth,
+          height: newHeight,
+        );
   }
-
 
   Widget _buildDivider() {
     return Container(
@@ -627,22 +762,33 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     );
   }
 
-  Widget _globalToolbarButton(IconData icon, Color color, VoidCallback? onTap, String tooltip) {
+  Widget _globalToolbarButton(
+    IconData icon,
+    Color color,
+    VoidCallback? onTap,
+    String tooltip,
+  ) {
     return Tooltip(
       message: tooltip,
       child: Material(
         color: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(24),
-          onTap: onTap != null ? () {
-            HapticFeedback.lightImpact();
-            onTap();
-          } : null,
+          onTap: onTap != null
+              ? () {
+                  HapticFeedback.lightImpact();
+                  onTap();
+                }
+              : null,
           child: SizedBox(
             width: 48,
             height: 48,
             child: Center(
-              child: Icon(icon, size: 20, color: onTap != null ? color : Colors.grey),
+              child: Icon(
+                icon,
+                size: 20,
+                color: onTap != null ? color : Colors.grey,
+              ),
             ),
           ),
         ),
@@ -657,9 +803,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     final appState = ref.watch(appStateProvider);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('مسح المستمسكات'),
-      ),
+      appBar: AppBar(title: const Text('مسح المستمسكات')),
       backgroundColor: const Color(0xFFF1F5F9),
       body: _isProcessing
           ? const Center(child: CircularProgressIndicator())
@@ -671,11 +815,27 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              const Icon(Icons.document_scanner_outlined, size: 64, color: Colors.grey),
+                              const Icon(
+                                Icons.document_scanner_outlined,
+                                size: 64,
+                                color: Colors.grey,
+                              ),
                               const SizedBox(height: 16),
-                              const Text('لم يتم مسح أي مستمسكات بعد', style: TextStyle(fontSize: 18, color: Colors.grey)),
+                              const Text(
+                                'لم يتم مسح أي مستمسكات بعد',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  color: Colors.grey,
+                                ),
+                              ),
                               const SizedBox(height: 8),
-                              Text('اضغط على \'إضافة صورة\' بالأسفل للبدء', style: TextStyle(fontSize: 14, color: Colors.grey[600])),
+                              Text(
+                                'اضغط على \'إضافة صورة\' بالأسفل للبدء',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.grey[600],
+                                ),
+                              ),
                             ],
                           ),
                         )
@@ -683,11 +843,15 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                           padding: const EdgeInsets.all(16),
                           clipBehavior: Clip.none,
                           itemCount: pageKeys.length,
-                          separatorBuilder: (context, index) => const SizedBox(height: 20),
+                          separatorBuilder: (context, index) =>
+                              const SizedBox(height: 20),
                           itemBuilder: (context, pageIndex) {
                             final pageKey = pageKeys[pageIndex];
                             final pageDocs = pages[pageKey]!;
-                            final docsOnPage = pageDocs.asMap().entries.toList();
+                            final docsOnPage = pageDocs
+                                .asMap()
+                                .entries
+                                .toList();
 
                             return Center(
                               child: Container(
@@ -696,10 +860,12 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                   color: Colors.white,
                                   boxShadow: [
                                     BoxShadow(
-                                      color: Colors.black.withValues(alpha: 0.1),
+                                      color: Colors.black.withValues(
+                                        alpha: 0.1,
+                                      ),
                                       blurRadius: 10,
                                       spreadRadius: 2,
-                                    )
+                                    ),
                                   ],
                                 ),
                                 child: AspectRatio(
@@ -707,150 +873,413 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                   child: LayoutBuilder(
                                     builder: (context, constraints) {
                                       final canvasWidth = constraints.maxWidth;
-                                      final canvasHeight = constraints.maxHeight;
+                                      final canvasHeight =
+                                          constraints.maxHeight;
 
-                                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                                        if (mounted && (_lastKnownCanvasWidth != canvasWidth || _lastKnownCanvasHeight != canvasHeight)) {
-                                          _lastKnownCanvasWidth = canvasWidth;
-                                          _lastKnownCanvasHeight = canvasHeight;
-                                        }
-                                      });
+                                      WidgetsBinding.instance
+                                          .addPostFrameCallback((_) {
+                                            if (mounted &&
+                                                (_lastKnownCanvasWidth !=
+                                                        canvasWidth ||
+                                                    _lastKnownCanvasHeight !=
+                                                        canvasHeight)) {
+                                              _lastKnownCanvasWidth =
+                                                  canvasWidth;
+                                              _lastKnownCanvasHeight =
+                                                  canvasHeight;
+                                            }
+                                          });
 
-                                      return ValueListenableBuilder<({int? pageIndex, int? docIndex})>(
+                                      return ValueListenableBuilder<
+                                        ({int? pageIndex, int? docIndex})
+                                      >(
                                         valueListenable: _selectionNotifier,
                                         builder: (context, selection, child) {
                                           // Direct array rendering since Riverpod array reordering guarantees Z-Index
-                                          final sortedDocs = List.of(docsOnPage);
+                                          final sortedDocs = List.of(
+                                            docsOnPage,
+                                          );
 
                                           return FittedBox(
                                             fit: BoxFit.contain,
                                             clipBehavior: Clip.none,
                                             child: SizedBox(
-                                              width: AppConstants.kVirtualCanvasWidth,
-                                              height: AppConstants.kVirtualCanvasHeight,
+                                              width: AppConstants
+                                                  .kVirtualCanvasWidth,
+                                              height: AppConstants
+                                                  .kVirtualCanvasHeight,
                                               child: GestureDetector(
-                                                behavior: HitTestBehavior.translucent,
+                                                behavior:
+                                                    HitTestBehavior.translucent,
                                                 onTap: () {
-                                                  _selectionNotifier.value = (pageIndex: null, docIndex: null);
+                                                  _selectionNotifier.value = (
+                                                    pageIndex: null,
+                                                    docIndex: null,
+                                                  );
                                                 },
                                                 child: Stack(
                                                   clipBehavior: Clip.none,
                                                   children: [
                                                     ...sortedDocs.map((entry) {
-                                                      final docIndex = entry.key;
+                                                      final docIndex =
+                                                          entry.key;
                                                       final doc = entry.value;
 
                                                       return DraggableResizableDocument(
-                                                        key: ValueKey('${pageKey}_${doc.file.path}'),
+                                                        key: ValueKey(
+                                                          '${pageKey}_${doc.file.path}',
+                                                        ),
                                                         document: doc,
                                                         pageIndex: pageKey,
                                                         docIndex: docIndex,
-                                                        isSelected: selection.pageIndex == pageKey && selection.docIndex == docIndex,
-                                                        addFrame: appState.addFrame,
-                                                        canvasWidth: AppConstants.kVirtualCanvasWidth,
-                                                        canvasHeight: AppConstants.kVirtualCanvasHeight,
-                                                        canvasScale: constraints.maxWidth / AppConstants.kVirtualCanvasWidth,
+                                                        isSelected:
+                                                            selection
+                                                                    .pageIndex ==
+                                                                pageKey &&
+                                                            selection
+                                                                    .docIndex ==
+                                                                docIndex,
+                                                        addFrame:
+                                                            appState.addFrame,
+                                                        canvasWidth: AppConstants
+                                                            .kVirtualCanvasWidth,
+                                                        canvasHeight: AppConstants
+                                                            .kVirtualCanvasHeight,
+                                                        canvasScale:
+                                                            constraints
+                                                                .maxWidth /
+                                                            AppConstants
+                                                                .kVirtualCanvasWidth,
                                                         onTransformUpdate: (newScale, delta) {
-                                                            doc.scale = newScale;
-                                                            doc.position += delta / (constraints.maxWidth / AppConstants.kVirtualCanvasWidth);
-                                                            ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
-                                                              pageKey, docIndex, dx: doc.position.dx, dy: doc.position.dy, scale: newScale, width: doc.width, height: doc.height, rotationAngle: doc.rotationAngle, originalDoc: doc
-                                                            );
+                                                          doc.scale = newScale;
+                                                          doc.position +=
+                                                              delta /
+                                                              (constraints
+                                                                      .maxWidth /
+                                                                  AppConstants
+                                                                      .kVirtualCanvasWidth);
+                                                          ref
+                                                              .read(
+                                                                scannedDocumentsProvider
+                                                                    .notifier,
+                                                              )
+                                                              .updateDocumentLayout(
+                                                                pageKey,
+                                                                docIndex,
+                                                                dx: doc
+                                                                    .position
+                                                                    .dx,
+                                                                dy: doc
+                                                                    .position
+                                                                    .dy,
+                                                                scale: newScale,
+                                                                width:
+                                                                    doc.width,
+                                                                height:
+                                                                    doc.height,
+                                                                rotationAngle: doc
+                                                                    .rotationAngle,
+                                                                originalDoc:
+                                                                    doc,
+                                                              );
                                                         },
                                                         onHandleResize: (newScale) {
-                                                            ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
-                                                              pageKey, docIndex, scale: newScale, dx: doc.dx, dy: doc.dy, width: doc.width, height: doc.height, rotationAngle: doc.rotationAngle, originalDoc: doc
-                                                            );
+                                                          ref
+                                                              .read(
+                                                                scannedDocumentsProvider
+                                                                    .notifier,
+                                                              )
+                                                              .updateDocumentLayout(
+                                                                pageKey,
+                                                                docIndex,
+                                                                scale: newScale,
+                                                                dx: doc.dx,
+                                                                dy: doc.dy,
+                                                                width:
+                                                                    doc.width,
+                                                                height:
+                                                                    doc.height,
+                                                                rotationAngle: doc
+                                                                    .rotationAngle,
+                                                                originalDoc:
+                                                                    doc,
+                                                              );
                                                         },
                                                         onGestureStart: () {
-                                                          int actualIndex = docIndex;
-                                                          final currentDocs = ref.read(scannedDocumentsProvider)[pageKey] ?? [];
-                                                          actualIndex = currentDocs.indexWhere((d) => d.file.path == doc.file.path);
-                                                          if (actualIndex == -1) actualIndex = docIndex;
+                                                          int actualIndex =
+                                                              docIndex;
+                                                          final currentDocs =
+                                                              ref.read(
+                                                                scannedDocumentsProvider,
+                                                              )[pageKey] ??
+                                                              [];
+                                                          actualIndex = currentDocs
+                                                              .indexWhere(
+                                                                (d) =>
+                                                                    d
+                                                                        .file
+                                                                        .path ==
+                                                                    doc
+                                                                        .file
+                                                                        .path,
+                                                              );
+                                                          if (actualIndex == -1)
+                                                            actualIndex =
+                                                                docIndex;
 
-                                                          ref.read(scannedDocumentsProvider.notifier).moveDocumentToTop(pageKey, actualIndex);
-                                                          final currentDocsCount = ref.read(scannedDocumentsProvider)[pageKey]?.length ?? 0;
-                                                          _selectionNotifier.value = (pageIndex: pageKey, docIndex: currentDocsCount > 0 ? currentDocsCount - 1 : actualIndex);
-                                                        },
-                                                        onTap: () {
-                                                          int actualIndex = docIndex;
-                                                          final currentDocs = ref.read(scannedDocumentsProvider)[pageKey] ?? [];
-                                                          actualIndex = currentDocs.indexWhere((d) => d.file.path == doc.file.path);
-                                                          if (actualIndex == -1) actualIndex = docIndex;
-
-                                                          if (selection.pageIndex != pageKey || selection.docIndex != actualIndex) {
-                                                            ref.read(scannedDocumentsProvider.notifier).moveDocumentToTop(pageKey, actualIndex);
-                                                            final currentDocsCount = ref.read(scannedDocumentsProvider)[pageKey]?.length ?? 0;
-                                                            _selectionNotifier.value = (pageIndex: pageKey, docIndex: currentDocsCount > 0 ? currentDocsCount - 1 : actualIndex);
-                                                          }
-                                                        },
-                                                        onLayoutUpdate: (pIndex, dIndex, dx, dy, width, height, rotationAngle) {
-                                                          ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
-                                                            pIndex,
-                                                            dIndex,
-                                                            dx: dx,
-                                                            dy: dy,
-                                                            width: width,
-                                                            height: height,
-                                                            rotationAngle: rotationAngle,
-                                                            originalDoc: doc,
+                                                          ref
+                                                              .read(
+                                                                scannedDocumentsProvider
+                                                                    .notifier,
+                                                              )
+                                                              .moveDocumentToTop(
+                                                                pageKey,
+                                                                actualIndex,
+                                                              );
+                                                          final currentDocsCount =
+                                                              ref
+                                                                  .read(
+                                                                    scannedDocumentsProvider,
+                                                                  )[pageKey]
+                                                                  ?.length ??
+                                                              0;
+                                                          _selectionNotifier
+                                                              .value = (
+                                                            pageIndex: pageKey,
+                                                            docIndex:
+                                                                currentDocsCount >
+                                                                    0
+                                                                ? currentDocsCount -
+                                                                      1
+                                                                : actualIndex,
                                                           );
                                                         },
-                                                        onCrossPageMove: (sourcePageIndex, dIndex, movedDoc, dx, dy) {
-                                                          final currentState = ref.read(scannedDocumentsProvider);
+                                                        onTap: () {
+                                                          int actualIndex =
+                                                              docIndex;
+                                                          final currentDocs =
+                                                              ref.read(
+                                                                scannedDocumentsProvider,
+                                                              )[pageKey] ??
+                                                              [];
+                                                          actualIndex = currentDocs
+                                                              .indexWhere(
+                                                                (d) =>
+                                                                    d
+                                                                        .file
+                                                                        .path ==
+                                                                    doc
+                                                                        .file
+                                                                        .path,
+                                                              );
+                                                          if (actualIndex == -1)
+                                                            actualIndex =
+                                                                docIndex;
 
-                                                          int targetPageKey = sourcePageIndex;
-                                                          double newDy = dy;
-
-                                                          if (dy < 0) {
-                                                            // Find previous page
-                                                            final pages = currentState.keys.toList()..sort();
-                                                            final idx = pages.indexOf(sourcePageIndex);
-                                                            if (idx > 0) {
-                                                              targetPageKey = pages[idx - 1];
-                                                              newDy = AppConstants.kVirtualCanvasHeight - movedDoc.height - 20.0;
-                                                            } else {
-                                                              newDy = 0.0;
-                                                            }
-                                                          } else if (dy > AppConstants.kVirtualCanvasHeight) {
-                                                            // Find next page
-                                                            final pages = currentState.keys.toList()..sort();
-                                                            final idx = pages.indexOf(sourcePageIndex);
-                                                            if (idx < pages.length - 1) {
-                                                              targetPageKey = pages[idx + 1];
-                                                              newDy = 20.0;
-                                                            } else {
-                                                              newDy = AppConstants.kVirtualCanvasHeight - movedDoc.height;
-                                                            }
-                                                          }
-
-                                                          if (targetPageKey != sourcePageIndex) {
-                                                            // Remove from source
-                                                            ref.read(scannedDocumentsProvider.notifier).removeDocumentAt(sourcePageIndex, dIndex);
-
-                                                            // Add to target
-                                                            final updatedState = ref.read(scannedDocumentsProvider);
-                                                            final targetPageDocs = updatedState[targetPageKey] ?? [];
-
-                                                            ScannedDocument newDoc = movedDoc.copyWith(dx: dx, dy: newDy);
-
-                                                            ref.read(scannedDocumentsProvider.notifier).setRawState( {
-                                                              ...updatedState,
-                                                              targetPageKey: [...targetPageDocs, newDoc],
-                                                            });
-
-                                                            _selectionNotifier.value = (pageIndex: targetPageKey, docIndex: targetPageDocs.length);
-                                                          } else {
-                                                            ref.read(scannedDocumentsProvider.notifier).updateDocumentLayout(
-                                                              sourcePageIndex,
-                                                              dIndex,
-                                                              dx: dx,
-                                                              dy: newDy,
-                                                              width: movedDoc.width,
-                                                              height: movedDoc.height,
+                                                          if (selection
+                                                                      .pageIndex !=
+                                                                  pageKey ||
+                                                              selection
+                                                                      .docIndex !=
+                                                                  actualIndex) {
+                                                            ref
+                                                                .read(
+                                                                  scannedDocumentsProvider
+                                                                      .notifier,
+                                                                )
+                                                                .moveDocumentToTop(
+                                                                  pageKey,
+                                                                  actualIndex,
+                                                                );
+                                                            final currentDocsCount =
+                                                                ref
+                                                                    .read(
+                                                                      scannedDocumentsProvider,
+                                                                    )[pageKey]
+                                                                    ?.length ??
+                                                                0;
+                                                            _selectionNotifier
+                                                                .value = (
+                                                              pageIndex:
+                                                                  pageKey,
+                                                              docIndex:
+                                                                  currentDocsCount >
+                                                                      0
+                                                                  ? currentDocsCount -
+                                                                        1
+                                                                  : actualIndex,
                                                             );
                                                           }
-                                                        }
+                                                        },
+                                                        onLayoutUpdate:
+                                                            (
+                                                              pIndex,
+                                                              dIndex,
+                                                              dx,
+                                                              dy,
+                                                              width,
+                                                              height,
+                                                              rotationAngle,
+                                                            ) {
+                                                              ref
+                                                                  .read(
+                                                                    scannedDocumentsProvider
+                                                                        .notifier,
+                                                                  )
+                                                                  .updateDocumentLayout(
+                                                                    pIndex,
+                                                                    dIndex,
+                                                                    dx: dx,
+                                                                    dy: dy,
+                                                                    width:
+                                                                        width,
+                                                                    height:
+                                                                        height,
+                                                                    rotationAngle:
+                                                                        rotationAngle,
+                                                                    originalDoc:
+                                                                        doc,
+                                                                  );
+                                                            },
+                                                        onCrossPageMove:
+                                                            (
+                                                              sourcePageIndex,
+                                                              dIndex,
+                                                              movedDoc,
+                                                              dx,
+                                                              dy,
+                                                            ) {
+                                                              final currentState =
+                                                                  ref.read(
+                                                                    scannedDocumentsProvider,
+                                                                  );
+
+                                                              int
+                                                              targetPageKey =
+                                                                  sourcePageIndex;
+                                                              double newDy = dy;
+
+                                                              if (dy < 0) {
+                                                                // Find previous page
+                                                                final pages =
+                                                                    currentState
+                                                                        .keys
+                                                                        .toList()
+                                                                      ..sort();
+                                                                final idx = pages
+                                                                    .indexOf(
+                                                                      sourcePageIndex,
+                                                                    );
+                                                                if (idx > 0) {
+                                                                  targetPageKey =
+                                                                      pages[idx -
+                                                                          1];
+                                                                  newDy =
+                                                                      AppConstants
+                                                                          .kVirtualCanvasHeight -
+                                                                      movedDoc
+                                                                          .height -
+                                                                      20.0;
+                                                                } else {
+                                                                  newDy = 0.0;
+                                                                }
+                                                              } else if (dy >
+                                                                  AppConstants
+                                                                      .kVirtualCanvasHeight) {
+                                                                // Find next page
+                                                                final pages =
+                                                                    currentState
+                                                                        .keys
+                                                                        .toList()
+                                                                      ..sort();
+                                                                final idx = pages
+                                                                    .indexOf(
+                                                                      sourcePageIndex,
+                                                                    );
+                                                                if (idx <
+                                                                    pages.length -
+                                                                        1) {
+                                                                  targetPageKey =
+                                                                      pages[idx +
+                                                                          1];
+                                                                  newDy = 20.0;
+                                                                } else {
+                                                                  newDy =
+                                                                      AppConstants
+                                                                          .kVirtualCanvasHeight -
+                                                                      movedDoc
+                                                                          .height;
+                                                                }
+                                                              }
+
+                                                              if (targetPageKey !=
+                                                                  sourcePageIndex) {
+                                                                // Remove from source
+                                                                ref
+                                                                    .read(
+                                                                      scannedDocumentsProvider
+                                                                          .notifier,
+                                                                    )
+                                                                    .removeDocumentAt(
+                                                                      sourcePageIndex,
+                                                                      dIndex,
+                                                                    );
+
+                                                                // Add to target
+                                                                final updatedState =
+                                                                    ref.read(
+                                                                      scannedDocumentsProvider,
+                                                                    );
+                                                                final targetPageDocs =
+                                                                    updatedState[targetPageKey] ??
+                                                                    [];
+
+                                                                ScannedDocument
+                                                                newDoc = movedDoc
+                                                                    .copyWith(
+                                                                      dx: dx,
+                                                                      dy: newDy,
+                                                                    );
+
+                                                                ref
+                                                                    .read(
+                                                                      scannedDocumentsProvider
+                                                                          .notifier,
+                                                                    )
+                                                                    .setRawState({
+                                                                      ...updatedState,
+                                                                      targetPageKey: [
+                                                                        ...targetPageDocs,
+                                                                        newDoc,
+                                                                      ],
+                                                                    });
+
+                                                                _selectionNotifier
+                                                                    .value = (
+                                                                  pageIndex:
+                                                                      targetPageKey,
+                                                                  docIndex:
+                                                                      targetPageDocs
+                                                                          .length,
+                                                                );
+                                                              } else {
+                                                                ref
+                                                                    .read(
+                                                                      scannedDocumentsProvider
+                                                                          .notifier,
+                                                                    )
+                                                                    .updateDocumentLayout(
+                                                                      sourcePageIndex,
+                                                                      dIndex,
+                                                                      dx: dx,
+                                                                      dy: newDy,
+                                                                      width: movedDoc
+                                                                          .width,
+                                                                      height: movedDoc
+                                                                          .height,
+                                                                    );
+                                                              }
+                                                            },
                                                       );
                                                     }).toList(),
 
@@ -859,41 +1288,151 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                       left: 16,
                                                       right: 16,
                                                       child: IgnorePointer(
-                                                        ignoring: selection.pageIndex == null,
+                                                        ignoring:
+                                                            selection
+                                                                .pageIndex ==
+                                                            null,
                                                         child: AnimatedSlide(
-                                                          duration: const Duration(milliseconds: 250),
-                                                          curve: Curves.easeOutBack,
-                                                          offset: selection.pageIndex != null ? Offset.zero : const Offset(0, 1.5),
+                                                          duration:
+                                                              const Duration(
+                                                                milliseconds:
+                                                                    250,
+                                                              ),
+                                                          curve: Curves
+                                                              .easeOutBack,
+                                                          offset:
+                                                              selection
+                                                                      .pageIndex !=
+                                                                  null
+                                                              ? Offset.zero
+                                                              : const Offset(
+                                                                  0,
+                                                                  1.5,
+                                                                ),
                                                           child: AnimatedOpacity(
-                                                            duration: const Duration(milliseconds: 200),
-                                                            opacity: selection.pageIndex != null ? 1.0 : 0.0,
+                                                            duration:
+                                                                const Duration(
+                                                                  milliseconds:
+                                                                      200,
+                                                                ),
+                                                            opacity:
+                                                                selection
+                                                                        .pageIndex !=
+                                                                    null
+                                                                ? 1.0
+                                                                : 0.0,
                                                             child: Center(
                                                               child: Material(
-                                                                color: Colors.transparent,
+                                                                color: Colors
+                                                                    .transparent,
                                                                 child: Container(
-                                                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                                                                  padding:
+                                                                      const EdgeInsets.symmetric(
+                                                                        horizontal:
+                                                                            8,
+                                                                        vertical:
+                                                                            8,
+                                                                      ),
                                                                   decoration: BoxDecoration(
-                                                                    color: Theme.of(context).cardColor,
-                                                                    borderRadius: BorderRadius.circular(30),
+                                                                    color: Theme.of(
+                                                                      context,
+                                                                    ).cardColor,
+                                                                    borderRadius:
+                                                                        BorderRadius.circular(
+                                                                          30,
+                                                                        ),
                                                                     boxShadow: [
                                                                       BoxShadow(
-                                                                        color: Colors.black.withValues(alpha: 0.15),
-                                                                        blurRadius: 15, offset: const Offset(0, 5),
+                                                                        color: Colors
+                                                                            .black
+                                                                            .withValues(
+                                                                              alpha: 0.15,
+                                                                            ),
+                                                                        blurRadius:
+                                                                            15,
+                                                                        offset:
+                                                                            const Offset(
+                                                                              0,
+                                                                              5,
+                                                                            ),
                                                                       ),
                                                                     ],
                                                                   ),
                                                                   child: SingleChildScrollView(
-                                                                    scrollDirection: Axis.horizontal,
+                                                                    scrollDirection:
+                                                                        Axis.horizontal,
                                                                     child: Row(
-                                                                      mainAxisSize: MainAxisSize.min,
+                                                                      mainAxisSize:
+                                                                          MainAxisSize
+                                                                              .min,
                                                                       children: [
-                                                                        _globalToolbarButton(Icons.close, Colors.red, selection.pageIndex != null ? () => _handleDelete(selection) : null, 'حذف'),
-                                                                        _globalToolbarButton(Icons.download, Colors.green, selection.pageIndex != null ? () => _handleSave(selection) : null, 'حفظ'),
+                                                                        _globalToolbarButton(
+                                                                          Icons
+                                                                              .close,
+                                                                          Colors
+                                                                              .red,
+                                                                          selection.pageIndex !=
+                                                                                  null
+                                                                              ? () => _handleDelete(
+                                                                                  selection,
+                                                                                )
+                                                                              : null,
+                                                                          'حذف',
+                                                                        ),
+                                                                        _globalToolbarButton(
+                                                                          Icons
+                                                                              .download,
+                                                                          Colors
+                                                                              .green,
+                                                                          selection.pageIndex !=
+                                                                                  null
+                                                                              ? () => _handleSave(
+                                                                                  selection,
+                                                                                )
+                                                                              : null,
+                                                                          'حفظ',
+                                                                        ),
                                                                         _buildDivider(),
-                                                                        _globalToolbarButton(Icons.edit, Colors.blue, selection.pageIndex != null ? () => _handleEdit(selection) : null, 'تعديل'),
-                                                                        _globalToolbarButton(Icons.crop, Colors.blue, selection.pageIndex != null ? () => _handleCrop(selection) : null, 'قص'),
+                                                                        _globalToolbarButton(
+                                                                          Icons
+                                                                              .edit,
+                                                                          Colors
+                                                                              .blue,
+                                                                          selection.pageIndex !=
+                                                                                  null
+                                                                              ? () => _handleEdit(
+                                                                                  selection,
+                                                                                )
+                                                                              : null,
+                                                                          'تعديل',
+                                                                        ),
+                                                                        _globalToolbarButton(
+                                                                          Icons
+                                                                              .crop,
+                                                                          Colors
+                                                                              .blue,
+                                                                          selection.pageIndex !=
+                                                                                  null
+                                                                              ? () => _handleCrop(
+                                                                                  selection,
+                                                                                )
+                                                                              : null,
+                                                                          'قص',
+                                                                        ),
                                                                         _buildDivider(),
-                                                                        _globalToolbarButton(Icons.rotate_right, Colors.blue, selection.pageIndex != null ? () => _handleRotate(selection) : null, 'تدوير'),
+                                                                        _globalToolbarButton(
+                                                                          Icons
+                                                                              .rotate_right,
+                                                                          Colors
+                                                                              .blue,
+                                                                          selection.pageIndex !=
+                                                                                  null
+                                                                              ? () => _handleRotate(
+                                                                                  selection,
+                                                                                )
+                                                                              : null,
+                                                                          'تدوير',
+                                                                        ),
                                                                       ],
                                                                     ),
                                                                   ),
@@ -904,7 +1443,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                                                         ),
                                                       ),
                                                     ),
-],
+                                                  ],
                                                 ),
                                               ),
                                             ),
@@ -922,13 +1461,19 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                 // Add New Page Button
                 if (pages.isNotEmpty)
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16.0,
+                      vertical: 8.0,
+                    ),
                     child: ElevatedButton(
-                      onPressed: (pages.isNotEmpty && pages[pageKeys.last]!.isEmpty)
+                      onPressed:
+                          (pages.isNotEmpty && pages[pageKeys.last]!.isEmpty)
                           ? null
                           : () {
                               HapticFeedback.lightImpact();
-                              ref.read(scannedDocumentsProvider.notifier).forceNewPage();
+                              ref
+                                  .read(scannedDocumentsProvider.notifier)
+                                  .forceNewPage();
                             },
                       style: ElevatedButton.styleFrom(
                         minimumSize: const Size(double.infinity, 50),
@@ -941,7 +1486,10 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                         children: [
                           Icon(Icons.add),
                           SizedBox(width: 8),
-                          Text('أضف صفحة جديدة', style: TextStyle(fontSize: 16)),
+                          Text(
+                            'أضف صفحة جديدة',
+                            style: TextStyle(fontSize: 16),
+                          ),
                         ],
                       ),
                     ),
@@ -971,13 +1519,17 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                           message: 'إنشاء وحفظ ملف PDF',
                           child: _ScalingButton(
                             child: ElevatedButton.icon(
-                              onPressed: pages.isEmpty ? null : () {
-                                HapticFeedback.mediumImpact();
-                                _generatePdf();
-                              },
+                              onPressed: pages.isEmpty
+                                  ? null
+                                  : () {
+                                      HapticFeedback.mediumImpact();
+                                      _generatePdf();
+                                    },
                               icon: const Icon(Icons.picture_as_pdf),
                               label: const Text('إنشاء PDF'),
-                              style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.green,
+                              ),
                             ),
                           ),
                         ),

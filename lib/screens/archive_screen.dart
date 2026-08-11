@@ -107,9 +107,7 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('أرشيف المستمسكات'),
-      ),
+      appBar: AppBar(title: const Text('أرشيف المستمسكات')),
       body: _files.isEmpty
           ? const Center(
               child: Column(
@@ -117,7 +115,10 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
                 children: [
                   Icon(Icons.folder_open, size: 64, color: Colors.grey),
                   SizedBox(height: 16),
-                  Text('لا توجد ملفات محفوظة', style: TextStyle(fontSize: 18, color: Colors.grey)),
+                  Text(
+                    'لا توجد ملفات محفوظة',
+                    style: TextStyle(fontSize: 18, color: Colors.grey),
+                  ),
                 ],
               ),
             )
@@ -128,7 +129,10 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
                 final fileName = file.uri.pathSegments.last;
 
                 return ListTile(
-                  leading: const Icon(Icons.picture_as_pdf, color: Colors.redAccent),
+                  leading: const Icon(
+                    Icons.picture_as_pdf,
+                    color: Colors.redAccent,
+                  ),
                   title: Text(fileName),
                   onTap: () => _openFile(file.path),
                   trailing: Row(
