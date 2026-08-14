@@ -59,6 +59,22 @@ class TemporaryImageStore {
     }
   }
 
+  static Future<void> deleteManagedWithMarker(String marker) async {
+    if (marker.isEmpty) return;
+    final directory = await getTemporaryDirectory();
+    try {
+      await for (final entity in directory.list(followLinks: false)) {
+        if (entity is File &&
+            isManaged(entity) &&
+            path.basename(entity.path).contains(marker)) {
+          await deleteIfManaged(entity);
+        }
+      }
+    } on FileSystemException {
+      // Cancellation cleanup is best effort and must not block the UI.
+    }
+  }
+
   /// Removes stale internal work files while preserving recent edits referenced
   /// by the active layout. This is called on entry to image-producing flows.
   static Future<void> cleanupStale({

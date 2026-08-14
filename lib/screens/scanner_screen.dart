@@ -82,6 +82,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
       final cancellation = ScanCancellationToken();
       final progress = ValueNotifier<int>(0);
+      var progressDialogOpen = true;
       unawaited(
         showDialog<void>(
           context: context,
@@ -107,7 +108,12 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
               ),
               actions: <Widget>[
                 TextButton(
-                  onPressed: cancellation.cancel,
+                  onPressed: () {
+                    cancellation.cancel();
+                    if (!progressDialogOpen) return;
+                    progressDialogOpen = false;
+                    Navigator.of(dialogContext).pop();
+                  },
                   child: const Text('إلغاء'),
                 ),
               ],
@@ -127,7 +133,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
         );
       } finally {
         progress.dispose();
-        if (mounted) {
+        if (progressDialogOpen && mounted) {
+          progressDialogOpen = false;
           await Navigator.of(context, rootNavigator: true).maybePop();
         }
       }
@@ -138,7 +145,9 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
       for (final sourceFile in sourceFiles) {
         final result = smartResult.results[sourceFile];
         if (result == null || result.files.isEmpty) {
-          manualFallbackSources.add(sourceFile);
+          if (!smartResult.wasCancelled) {
+            manualFallbackSources.add(sourceFile);
+          }
           continue;
         }
         requiresClassificationReview |=

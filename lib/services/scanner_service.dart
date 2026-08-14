@@ -16,10 +16,32 @@ enum SmartScanStatus { succeeded, manualReviewRequired, failed, cancelled }
 
 class ScanCancellationToken {
   bool _isCancelled = false;
+  final Set<void Function()> _listeners = <void Function()>{};
+  final Completer<void> _cancelled = Completer<void>.sync();
 
   bool get isCancelled => _isCancelled;
+  Future<void> get whenCancelled => _cancelled.future;
 
-  void cancel() => _isCancelled = true;
+  void addListener(void Function() listener) {
+    if (_isCancelled) {
+      listener();
+      return;
+    }
+    _listeners.add(listener);
+  }
+
+  void removeListener(void Function() listener) => _listeners.remove(listener);
+
+  void cancel() {
+    if (_isCancelled) return;
+    _isCancelled = true;
+    if (!_cancelled.isCompleted) _cancelled.complete();
+    final listeners = List<void Function()>.of(_listeners);
+    _listeners.clear();
+    for (final listener in listeners) {
+      listener();
+    }
+  }
 }
 
 class DocumentClassification {
@@ -103,9 +125,13 @@ cv.VecPoint _orderPoints(cv.VecPoint points) {
 int _clampInt(int value, int lower, int upper) =>
     value.clamp(lower, upper).toInt();
 
-List<String> _detectAndCropInIsolate(Map<String, String> args) {
-  final imagePath = args['imagePath']!;
-  final tempPath = args['tempPath']!;
+Future<List<String>> _detectAndCropInIsolate(
+  Map<String, dynamic> args, {
+  bool Function()? isCancelled,
+}) async {
+  final imagePath = args['imagePath'] as String;
+  final tempPath = args['tempPath'] as String;
+  final jobId = args['jobId'] as String? ?? 'legacy';
   cv.Mat? source;
   cv.Mat? gray;
   cv.Mat? blurred;
@@ -151,6 +177,10 @@ List<String> _detectAndCropInIsolate(Map<String, String> args) {
 
     var inspectedContours = 0;
     for (final contour in contours) {
+      if (isCancelled?.call() ?? false) return results;
+      // Yield between contours so the control port can deliver cancellation.
+      await Future<void>.delayed(Duration.zero);
+      if (isCancelled?.call() ?? false) return results;
       // The largest useful document outlines occur early in this contour list.
       // A hard upper bound preserves interactive response for noisy photos.
       if (inspectedContours++ >= 120 || results.length >= 4) break;
@@ -239,7 +269,7 @@ List<String> _detectAndCropInIsolate(Map<String, String> args) {
         ));
 
         final outputPath =
-            '$tempPath/${TemporaryImageStore.uniqueJpegName('smart_cropped_', suffix: '-${results.length}')}';
+            '$tempPath/${TemporaryImageStore.uniqueJpegName('smart_cropped_', suffix: '-$jobId-${results.length}')}';
         if (cv.imwrite(outputPath, warped)) {
           results.add(outputPath);
           acceptedCenters.add((centerX, centerY));
@@ -268,9 +298,10 @@ List<String> _detectAndCropInIsolate(Map<String, String> args) {
   return results;
 }
 
-String _preprocessForOcrInIsolate(Map<String, String> args) {
-  final imagePath = args['imagePath']!;
-  final tempPath = args['tempPath']!;
+String _preprocessForOcrInIsolate(Map<String, dynamic> args) {
+  final imagePath = args['imagePath'] as String;
+  final tempPath = args['tempPath'] as String;
+  final jobId = args['jobId'] as String? ?? 'legacy';
   cv.Mat? source;
   cv.Mat? gray;
   cv.Mat? processed;
@@ -282,7 +313,7 @@ String _preprocessForOcrInIsolate(Map<String, String> args) {
     processed = clahe.apply(gray);
     clahe.dispose();
     final outputPath =
-        '$tempPath/${TemporaryImageStore.uniqueJpegName('ocr_preprocessed_')}';
+        '$tempPath/${TemporaryImageStore.uniqueJpegName('ocr_preprocessed_', suffix: '-$jobId')}';
     return cv.imwrite(outputPath, processed) ? outputPath : imagePath;
   } catch (_) {
     return imagePath;
@@ -290,6 +321,79 @@ String _preprocessForOcrInIsolate(Map<String, String> args) {
     source?.dispose();
     gray?.dispose();
     processed?.dispose();
+  }
+}
+
+void _ocrPreprocessWorkerEntry(Map<String, dynamic> args) {
+  final resultPort = args['resultPort'] as SendPort;
+  final controlPort = ReceivePort();
+  var isCancelled = false;
+  final controlSubscription = controlPort.listen((message) {
+    if (message == 'cancel') isCancelled = true;
+  });
+
+  resultPort.send(<String, Object?>{
+    'type': 'ready',
+    'controlPort': controlPort.sendPort,
+  });
+  try {
+    if (isCancelled) {
+      resultPort.send(<String, Object?>{'type': 'cancelled'});
+      return;
+    }
+    final outputPath = _preprocessForOcrInIsolate(<String, dynamic>{
+      'imagePath': args['imagePath'] as String,
+      'tempPath': args['tempPath'] as String,
+      'jobId': args['jobId'] as String,
+    });
+    resultPort.send(<String, Object?>{
+      'type': isCancelled ? 'cancelled' : 'completed',
+      'outputPath': outputPath,
+    });
+  } catch (error) {
+    resultPort.send(<String, Object?>{
+      'type': 'error',
+      'message': error.toString(),
+    });
+  } finally {
+    unawaited(controlSubscription.cancel());
+    controlPort.close();
+  }
+}
+
+class _ScanWorkerCancelled implements Exception {
+  const _ScanWorkerCancelled();
+}
+
+void _smartCropWorkerEntry(Map<String, dynamic> args) async {
+  final resultPort = args['resultPort'] as SendPort;
+  final controlPort = ReceivePort();
+  var isCancelled = false;
+  final controlSubscription = controlPort.listen((message) {
+    if (message == 'cancel') isCancelled = true;
+  });
+
+  resultPort.send(<String, Object?>{
+    'type': 'ready',
+    'controlPort': controlPort.sendPort,
+  });
+  try {
+    final outputPaths = await _detectAndCropInIsolate(
+      args,
+      isCancelled: () => isCancelled,
+    );
+    resultPort.send(<String, Object?>{
+      'type': isCancelled ? 'cancelled' : 'completed',
+      'outputPaths': outputPaths,
+    });
+  } catch (error) {
+    resultPort.send(<String, Object?>{
+      'type': 'error',
+      'message': error.toString(),
+    });
+  } finally {
+    await controlSubscription.cancel();
+    controlPort.close();
   }
 }
 
@@ -329,6 +433,165 @@ class ScannerService {
         : TemporaryImageStore.writeJpeg(processedBytes, prefix: 'edited_');
   }
 
+  Future<String> _runOcrPreprocessWorker({
+    required File imageFile,
+    required String tempPath,
+    required String jobId,
+    required ScanCancellationToken token,
+  }) async {
+    if (token.isCancelled) throw const _ScanWorkerCancelled();
+
+    final resultPort = ReceivePort();
+    final completed = Completer<String>();
+    Isolate? worker;
+    SendPort? controlPort;
+    late final StreamSubscription<dynamic> subscription;
+    Timer? forcedTermination;
+    var cancelRequested = false;
+
+    void requestCancellation() {
+      if (cancelRequested) return;
+      cancelRequested = true;
+      controlPort?.send('cancel');
+      if (!completed.isCompleted) {
+        completed.completeError(const _ScanWorkerCancelled());
+      }
+      forcedTermination ??= Timer(const Duration(milliseconds: 250), () {
+        worker?.kill(priority: Isolate.immediate);
+      });
+    }
+
+    token.addListener(requestCancellation);
+    subscription = resultPort.listen((message) {
+      if (message is! Map) return;
+      switch (message['type']) {
+        case 'ready':
+          controlPort = message['controlPort'] as SendPort?;
+          if (cancelRequested) controlPort?.send('cancel');
+        case 'completed':
+          final outputPath = message['outputPath'] as String?;
+          if (outputPath != null && !completed.isCompleted) {
+            completed.complete(outputPath);
+          }
+        case 'cancelled':
+          if (!completed.isCompleted) {
+            completed.completeError(const _ScanWorkerCancelled());
+          }
+        case 'error':
+          if (!completed.isCompleted) {
+            completed.completeError(
+              StateError(
+                message['message'] as String? ?? 'OCR preprocessing failed.',
+              ),
+            );
+          }
+      }
+    });
+
+    try {
+      worker = await Isolate.spawn<Map<String, dynamic>>(
+        _ocrPreprocessWorkerEntry,
+        <String, dynamic>{
+          'imagePath': imageFile.path,
+          'tempPath': tempPath,
+          'jobId': jobId,
+          'resultPort': resultPort.sendPort,
+        },
+        errorsAreFatal: false,
+      );
+      return await completed.future.timeout(_classificationTimeout);
+    } on TimeoutException {
+      requestCancellation();
+      throw TimeoutException('OCR preprocessing timed out.');
+    } finally {
+      token.removeListener(requestCancellation);
+      forcedTermination?.cancel();
+      worker?.kill(priority: Isolate.immediate);
+      await subscription.cancel();
+      resultPort.close();
+      if (cancelRequested) {
+        await TemporaryImageStore.deleteManagedWithMarker(jobId);
+      }
+    }
+  }
+
+  Future<List<String>> _runSmartCropWorker({
+    required File imageFile,
+    required String tempPath,
+    required String jobId,
+    required ScanCancellationToken token,
+  }) async {
+    if (token.isCancelled) throw const _ScanWorkerCancelled();
+
+    final resultPort = ReceivePort();
+    final completed = Completer<List<String>>();
+    Isolate? worker;
+    SendPort? controlPort;
+    StreamSubscription<dynamic>? subscription;
+    Timer? forcedTermination;
+    var cancelRequested = false;
+
+    void requestCancellation() {
+      if (cancelRequested) return;
+      cancelRequested = true;
+      controlPort?.send('cancel');
+      if (!completed.isCompleted) {
+        completed.completeError(const _ScanWorkerCancelled());
+      }
+      forcedTermination ??= Timer(const Duration(milliseconds: 250), () {
+        worker?.kill(priority: Isolate.immediate);
+      });
+    }
+
+    token.addListener(requestCancellation);
+    subscription = resultPort.listen((message) {
+      if (message is! Map) return;
+      switch (message['type']) {
+        case 'ready':
+          controlPort = message['controlPort'] as SendPort?;
+          if (cancelRequested) controlPort?.send('cancel');
+        case 'completed':
+          final paths = List<String>.from(
+            (message['outputPaths'] as List<Object?>?) ?? const <Object?>[],
+          );
+          if (!completed.isCompleted) completed.complete(paths);
+        case 'cancelled':
+          if (!completed.isCompleted) {
+            completed.completeError(const _ScanWorkerCancelled());
+          }
+        case 'error':
+          if (!completed.isCompleted) {
+            completed.completeError(
+              StateError(message['message'] as String? ?? 'Smart scan failed.'),
+            );
+          }
+      }
+    });
+
+    try {
+      worker = await Isolate.spawn<Map<String, dynamic>>(
+        _smartCropWorkerEntry,
+        <String, dynamic>{
+          'imagePath': imageFile.path,
+          'tempPath': tempPath,
+          'jobId': jobId,
+          'resultPort': resultPort.sendPort,
+        },
+        errorsAreFatal: false,
+      );
+      return await completed.future.timeout(_smartCropTimeout);
+    } on TimeoutException {
+      requestCancellation();
+      throw TimeoutException('Smart crop timed out.');
+    } finally {
+      token.removeListener(requestCancellation);
+      forcedTermination?.cancel();
+      worker?.kill(priority: Isolate.immediate);
+      await subscription.cancel();
+      resultPort.close();
+    }
+  }
+
   Future<SmartScanResult> processSmartRecognition(
     File imageFile, {
     ScanCancellationToken? cancellationToken,
@@ -345,15 +608,26 @@ class ScannerService {
 
     await TemporaryImageStore.cleanupStale();
     final tempDirectory = await getTemporaryDirectory();
+    final jobId = DateTime.now().microsecondsSinceEpoch.toString();
     List<String> outputPaths;
     try {
-      outputPaths = await Isolate.run(
-        () => _detectAndCropInIsolate(<String, String>{
-          'imagePath': imageFile.path,
-          'tempPath': tempDirectory.path,
-        }),
-      ).timeout(_smartCropTimeout);
+      outputPaths = await _runSmartCropWorker(
+        imageFile: imageFile,
+        tempPath: tempDirectory.path,
+        jobId: jobId,
+        token: cancellationToken ?? ScanCancellationToken(),
+      );
+    } on _ScanWorkerCancelled {
+      await TemporaryImageStore.deleteManagedWithMarker(jobId);
+      return SmartScanResult(
+        source: imageFile,
+        files: const <File>[],
+        classification: DocumentClassification.unknown,
+        status: SmartScanStatus.cancelled,
+        message: 'ألغيت المعالجة.',
+      );
     } on TimeoutException {
+      await TemporaryImageStore.deleteManagedWithMarker(jobId);
       return SmartScanResult(
         source: imageFile,
         files: const <File>[],
@@ -362,6 +636,7 @@ class ScannerService {
         message: 'انتهت مهلة القص الذكي؛ يُرجى تحديد المستند يدوياً.',
       );
     } catch (_) {
+      await TemporaryImageStore.deleteManagedWithMarker(jobId);
       return SmartScanResult(
         source: imageFile,
         files: const <File>[],
@@ -395,16 +670,47 @@ class ScannerService {
     }
 
     final files = List<File>.unmodifiable(outputPaths.map(File.new));
-    final classification = await classifyDocument(files.first).timeout(
-      _classificationTimeout,
-      onTimeout: () => const DocumentClassification(
-        type: DocumentType.unknown,
-        normalizedText: '',
-        confidence: 0,
-        reason: 'تجاوز التعرف النصي المهلة؛ راجع نوع المستند يدوياً.',
-        requiresManualReview: true,
-      ),
-    );
+    if (cancellationToken?.isCancelled ?? false) {
+      for (final file in files) {
+        await TemporaryImageStore.deleteIfManaged(file);
+      }
+      return SmartScanResult(
+        source: imageFile,
+        files: const <File>[],
+        classification: DocumentClassification.unknown,
+        status: SmartScanStatus.cancelled,
+        message: 'ألغيت المعالجة.',
+      );
+    }
+
+    DocumentClassification classification;
+    try {
+      classification =
+          await classifyDocument(
+            files.first,
+            cancellationToken: cancellationToken,
+          ).timeout(
+            _classificationTimeout,
+            onTimeout: () => const DocumentClassification(
+              type: DocumentType.unknown,
+              normalizedText: '',
+              confidence: 0,
+              reason: 'تجاوز التعرف النصي المهلة؛ راجع نوع المستند يدوياً.',
+              requiresManualReview: true,
+            ),
+          );
+    } on _ScanWorkerCancelled {
+      for (final file in files) {
+        await TemporaryImageStore.deleteIfManaged(file);
+      }
+      return SmartScanResult(
+        source: imageFile,
+        files: const <File>[],
+        classification: DocumentClassification.unknown,
+        status: SmartScanStatus.cancelled,
+        message: 'ألغيت المعالجة.',
+      );
+    }
     final status = classification.requiresManualReview
         ? SmartScanStatus.manualReviewRequired
         : SmartScanStatus.succeeded;
@@ -424,9 +730,10 @@ class ScannerService {
     void Function(int current, int total)? onProgress,
     ScanCancellationToken? cancellationToken,
   }) async {
+    final activeToken = cancellationToken ?? ScanCancellationToken();
     final results = <File, SmartScanResult>{};
     for (var index = 0; index < imageFiles.length; index++) {
-      if (cancellationToken?.isCancelled ?? false) {
+      if (activeToken.isCancelled) {
         return SmartScanBatchResult(
           results: Map.unmodifiable(results),
           wasCancelled: true,
@@ -434,11 +741,25 @@ class ScannerService {
       }
       final source = imageFiles[index];
       try {
-        results[source] = await processSmartRecognition(
+        final result = await processSmartRecognition(
           source,
-          cancellationToken: cancellationToken,
+          cancellationToken: activeToken,
         );
+        results[source] = result;
+        if (result.status == SmartScanStatus.cancelled ||
+            activeToken.isCancelled) {
+          return SmartScanBatchResult(
+            results: Map.unmodifiable(results),
+            wasCancelled: true,
+          );
+        }
       } catch (_) {
+        if (activeToken.isCancelled) {
+          return SmartScanBatchResult(
+            results: Map.unmodifiable(results),
+            wasCancelled: true,
+          );
+        }
         results[source] = SmartScanResult(
           source: source,
           files: const <File>[],
@@ -447,7 +768,9 @@ class ScannerService {
           message: 'تعذرت معالجة هذه الصورة؛ يُرجى قصها يدوياً.',
         );
       }
-      onProgress?.call(index + 1, imageFiles.length);
+      if (!activeToken.isCancelled) {
+        onProgress?.call(index + 1, imageFiles.length);
+      }
     }
     return SmartScanBatchResult(
       results: Map.unmodifiable(results),
@@ -455,21 +778,49 @@ class ScannerService {
     );
   }
 
-  Future<DocumentClassification> classifyDocument(File imageFile) async {
+  Future<DocumentClassification> classifyDocument(
+    File imageFile, {
+    ScanCancellationToken? cancellationToken,
+  }) async {
+    if (cancellationToken?.isCancelled ?? false) {
+      throw const _ScanWorkerCancelled();
+    }
+    final activeToken = cancellationToken ?? ScanCancellationToken();
     final tempDirectory = await getTemporaryDirectory();
-    final preprocessedPath = await Isolate.run(
-      () => _preprocessForOcrInIsolate(<String, String>{
-        'imagePath': imageFile.path,
-        'tempPath': tempDirectory.path,
-      }),
+    final jobId = DateTime.now().microsecondsSinceEpoch.toString();
+    final preprocessedPath = await _runOcrPreprocessWorker(
+      imageFile: imageFile,
+      tempPath: tempDirectory.path,
+      jobId: jobId,
+      token: activeToken,
     );
     final preprocessedFile = File(preprocessedPath);
     final recognizer = TextRecognizer(script: TextRecognitionScript.latin);
+    var recognizerClosedByCancellation = false;
+    void closeRecognizerOnCancellation() {
+      if (recognizerClosedByCancellation) return;
+      recognizerClosedByCancellation = true;
+      unawaited(recognizer.close());
+    }
+
+    activeToken.addListener(closeRecognizerOnCancellation);
+    final recognizerTimeout = Timer(
+      _classificationTimeout,
+      closeRecognizerOnCancellation,
+    );
     try {
+      if (activeToken.isCancelled) {
+        throw const _ScanWorkerCancelled();
+      }
       final recognized = await recognizer.processImage(
         InputImage.fromFilePath(preprocessedPath),
       );
+      if (activeToken.isCancelled) {
+        throw const _ScanWorkerCancelled();
+      }
       return _classifyRecognizedText(recognized.text);
+    } on _ScanWorkerCancelled {
+      rethrow;
     } catch (_) {
       return const DocumentClassification(
         type: DocumentType.unknown,
@@ -479,7 +830,9 @@ class ScannerService {
         requiresManualReview: true,
       );
     } finally {
-      await recognizer.close();
+      recognizerTimeout.cancel();
+      activeToken.removeListener(closeRecognizerOnCancellation);
+      if (!recognizerClosedByCancellation) await recognizer.close();
       if (preprocessedPath != imageFile.path) {
         await TemporaryImageStore.deleteIfManaged(preprocessedFile);
       }
