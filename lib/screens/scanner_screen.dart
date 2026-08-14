@@ -82,45 +82,56 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
       final cancellation = ScanCancellationToken();
       final progress = ValueNotifier<int>(0);
+      final dialogNavigator = Navigator.of(context, rootNavigator: true);
       var progressDialogOpen = true;
-      unawaited(
-        showDialog<void>(
-          context: context,
-          barrierDismissible: false,
-          builder: (dialogContext) => PopScope(
-            canPop: false,
-            child: AlertDialog(
-              title: const Text('جاري المسح الذكي'),
-              content: ValueListenableBuilder<int>(
-                valueListenable: progress,
-                builder: (context, completed, child) => Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    LinearProgressIndicator(
-                      value: sourceFiles.isEmpty
-                          ? null
-                          : completed / sourceFiles.length,
-                    ),
-                    const SizedBox(height: 16),
-                    Text('معالجة $completed من ${sourceFiles.length}'),
-                  ],
-                ),
+      late final DialogRoute<void> progressDialogRoute;
+      late final Future<void> progressDialogFuture;
+
+      Future<void> closeProgressDialog() async {
+        if (progressDialogOpen) {
+          progressDialogOpen = false;
+          if (progressDialogRoute.isActive) {
+            dialogNavigator.removeRoute(progressDialogRoute);
+          }
+        }
+        await progressDialogFuture;
+      }
+
+      progressDialogRoute = DialogRoute<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => PopScope(
+          canPop: false,
+          child: AlertDialog(
+            title: const Text('جاري المسح الذكي'),
+            content: ValueListenableBuilder<int>(
+              valueListenable: progress,
+              builder: (context, completed, child) => Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  LinearProgressIndicator(
+                    value: sourceFiles.isEmpty
+                        ? null
+                        : completed / sourceFiles.length,
+                  ),
+                  const SizedBox(height: 16),
+                  Text('معالجة $completed من ${sourceFiles.length}'),
+                ],
               ),
-              actions: <Widget>[
-                TextButton(
-                  onPressed: () {
-                    cancellation.cancel();
-                    if (!progressDialogOpen) return;
-                    progressDialogOpen = false;
-                    Navigator.of(dialogContext).pop();
-                  },
-                  child: const Text('إلغاء'),
-                ),
-              ],
             ),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () {
+                  cancellation.cancel();
+                  unawaited(closeProgressDialog());
+                },
+                child: const Text('إلغاء'),
+              ),
+            ],
           ),
         ),
       );
+      progressDialogFuture = dialogNavigator.push<void>(progressDialogRoute);
       SmartScanBatchResult smartResult;
       try {
         await Future<void>.delayed(Duration.zero);
@@ -133,9 +144,10 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
         );
       } finally {
         progress.dispose();
-        if (progressDialogOpen && mounted) {
-          progressDialogOpen = false;
-          await Navigator.of(context, rootNavigator: true).maybePop();
+        try {
+          await closeProgressDialog();
+        } catch (_) {
+          // Dialog teardown must not mask the scan result.
         }
       }
 
