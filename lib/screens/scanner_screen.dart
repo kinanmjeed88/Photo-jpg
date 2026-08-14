@@ -652,67 +652,80 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                     BoxShadow(color: Colors.black12, blurRadius: 6),
                   ],
                 ),
-                child: CustomPaint(
-                  foregroundPainter: _A4GuidePainter(
-                    guide: Rect.fromLTWH(
-                      AppConstants.kA4GuideLeft * canvasScale,
-                      AppConstants.kA4GuideTop * canvasScale,
-                      AppConstants.kA4GuideWidth * canvasScale,
-                      AppConstants.kA4GuideHeight * canvasScale,
-                    ),
-                  ),
-                  child: Transform.scale(
-                    scale: canvasScale,
-                    alignment: Alignment.topLeft,
-                    child: SizedBox(
-                      width: AppConstants.kVirtualCanvasWidth,
-                      height: AppConstants.kVirtualCanvasHeight,
-                      child: Stack(
-                        clipBehavior: Clip.hardEdge,
-                        children: <Widget>[
-                          ...documents.map(
-                            (document) => DraggableResizableDocument(
-                              key: ValueKey(document.id),
-                              document: document,
-                              isSelected: document.id == _selectedDocumentId,
-                              addFrame: appState.addFrame,
-                              canvasWidth: AppConstants.kVirtualCanvasWidth,
-                              canvasHeight: AppConstants.kVirtualCanvasHeight,
-                              canvasGuide: const Rect.fromLTWH(
-                                AppConstants.kA4GuideLeft,
-                                AppConstants.kA4GuideTop,
-                                AppConstants.kA4GuideWidth,
-                                AppConstants.kA4GuideHeight,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: <Widget>[
+                    // Keep the virtual canvas unconstrained while it is laid
+                    // out. A Transform under tight display constraints would
+                    // shrink the 400 x 565.6 canvas before scaling it, causing
+                    // the Stack to clip the right and bottom documents.
+                    FittedBox(
+                      fit: BoxFit.fill,
+                      alignment: Alignment.topLeft,
+                      child: SizedBox(
+                        width: AppConstants.kVirtualCanvasWidth,
+                        height: AppConstants.kVirtualCanvasHeight,
+                        child: Stack(
+                          clipBehavior: Clip.hardEdge,
+                          children: <Widget>[
+                            ...documents.map(
+                              (document) => DraggableResizableDocument(
+                                key: ValueKey(document.id),
+                                document: document,
+                                isSelected: document.id == _selectedDocumentId,
+                                addFrame: appState.addFrame,
+                                canvasWidth: AppConstants.kVirtualCanvasWidth,
+                                canvasHeight: AppConstants.kVirtualCanvasHeight,
+                                canvasGuide: const Rect.fromLTWH(
+                                  AppConstants.kA4GuideLeft,
+                                  AppConstants.kA4GuideTop,
+                                  AppConstants.kA4GuideWidth,
+                                  AppConstants.kA4GuideHeight,
+                                ),
+                                canvasScale: canvasScale,
+                                onTap: _selectDocument,
+                                onLayoutUpdate: (id, dx, dy, scale) {
+                                  final current = ref
+                                      .read(scannedDocumentsProvider.notifier)
+                                      .findDocument(id);
+                                  if (current == null) return;
+                                  ref
+                                      .read(scannedDocumentsProvider.notifier)
+                                      .updateDocumentLayout(
+                                        id,
+                                        dx: dx,
+                                        dy: dy,
+                                        width: current.document.width,
+                                        height: current.document.height,
+                                        rotationAngle:
+                                            current.document.rotationAngle,
+                                        scale: scale,
+                                      );
+                                },
+                                onCrossPageMove: _moveCrossPage,
+                                onGestureStart: () =>
+                                    _selectDocument(document.id),
                               ),
-                              canvasScale: canvasScale,
-                              onTap: _selectDocument,
-                              onLayoutUpdate: (id, dx, dy, scale) {
-                                final current = ref
-                                    .read(scannedDocumentsProvider.notifier)
-                                    .findDocument(id);
-                                if (current == null) return;
-                                ref
-                                    .read(scannedDocumentsProvider.notifier)
-                                    .updateDocumentLayout(
-                                      id,
-                                      dx: dx,
-                                      dy: dy,
-                                      width: current.document.width,
-                                      height: current.document.height,
-                                      rotationAngle:
-                                          current.document.rotationAngle,
-                                      scale: scale,
-                                    );
-                              },
-                              onCrossPageMove: _moveCrossPage,
-                              onGestureStart: () =>
-                                  _selectDocument(document.id),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
-                  ),
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: CustomPaint(
+                          painter: _A4GuidePainter(
+                            guide: Rect.fromLTWH(
+                              AppConstants.kA4GuideLeft * canvasScale,
+                              AppConstants.kA4GuideTop * canvasScale,
+                              AppConstants.kA4GuideWidth * canvasScale,
+                              AppConstants.kA4GuideHeight * canvasScale,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
