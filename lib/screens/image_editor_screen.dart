@@ -17,6 +17,9 @@ Future<Map<String, dynamic>> _runProxyIsolate(Map<String, dynamic> args) {
   return Isolate.run(() => _generateProxy(args));
 }
 
+Uint8List _encodeJpeg(cv.Mat image) =>
+    Uint8List.fromList(cv.imencode('.jpg', image).$2);
+
 Map<String, dynamic> _generateProxy(Map<String, dynamic> args) {
   final bytes = args['bytes'] as Uint8List;
   cv.Mat? source;
@@ -30,8 +33,7 @@ Map<String, dynamic> _generateProxy(Map<String, dynamic> args) {
     }
     final scale = 1080 / maxDimension;
     scaled = cv.resize(source, (0, 0), fx: scale, fy: scale);
-    final encoded = cv.imencode('.jpg', scaled).$2;
-    return <String, dynamic>{'bytes': encoded, 'scale': scale};
+    return <String, dynamic>{'bytes': _encodeJpeg(scaled), 'scale': scale};
   } catch (_) {
     return <String, dynamic>{'bytes': bytes, 'scale': 1.0};
   } finally {
@@ -142,7 +144,7 @@ Uint8List _processForGallery(Map<String, dynamic> args) {
         ),
       );
     }
-    return cv.imencode('.jpg', cropped ?? processed).$2;
+    return _encodeJpeg(cropped ?? processed);
   } catch (_) {
     return bytes;
   } finally {
@@ -169,7 +171,7 @@ Map<String, dynamic> _processForPreview(Map<String, dynamic> args) {
       sharpness: args['sharpness'] as double,
     );
     return <String, dynamic>{
-      'bytes': cv.imencode('.jpg', processed).$2,
+      'bytes': _encodeJpeg(processed),
       'version': version,
     };
   } catch (_) {
@@ -279,7 +281,14 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
       await TemporaryImageStore.cleanupStale(protectedPaths: protectedPaths);
       await _generatePreview();
     } catch (_) {
-      if (mounted) _showError('تعذر تحميل الصورة للتعديل.');
+      // The editor remains usable even if proxy construction fails. Rendering
+      // the original bytes is safer than leaving the user on a blank spinner.
+      _proxyBytes ??= _originalBytes;
+      if (_proxyBytes != null) _previewBytes.value = _proxyBytes!;
+      if (mounted) {
+        setState(() => _isLoadingPreview = false);
+        _showError('تعذر تحضير معاينة محسّنة؛ عُرضت الصورة الأصلية.');
+      }
     }
   }
 
@@ -290,7 +299,10 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
   }
 
   Future<void> _generatePreview() async {
-    if (_proxyBytes == null) return;
+    if (_proxyBytes == null) {
+      if (mounted) setState(() => _isLoadingPreview = false);
+      return;
+    }
     final version = _previewVersion;
     if (mounted) setState(() => _isLoadingPreview = true);
     try {
@@ -306,7 +318,12 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
       if (!mounted || result['version'] != _previewVersion) return;
       _previewBytes.value = result['bytes'] as Uint8List;
     } catch (_) {
-      if (mounted) _showError('تعذر إنشاء معاينة التعديلات.');
+      // Keep editing available if an individual effect cannot be rendered.
+      // The original image remains visible and applying changes still works.
+      if (mounted && version == _previewVersion) {
+        _previewBytes.value = _proxyBytes!;
+        _showError('تعذر إنشاء معاينة التعديلات؛ عُرضت الصورة الأصلية.');
+      }
     } finally {
       if (mounted && version == _previewVersion) {
         setState(() => _isLoadingPreview = false);

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:doc_scanner_app/providers/app_state.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 
 ScannedDocument _document({
   required String id,
@@ -89,6 +90,39 @@ void main() {
       expect(notifier.findDocument('remove'), isNull);
       expect(notifier.findDocument('keep'), isNotNull);
     });
+
+    test(
+      'places cropped cards side by side within a one-page layout',
+      () async {
+        final directory = await Directory.systemTemp.createTemp('layout_test_');
+        addTearDown(() => directory.delete(recursive: true));
+        final first = File('${directory.path}/first.jpg');
+        final second = File('${directory.path}/second.jpg');
+        final bytes = img.encodeJpg(img.Image(width: 900, height: 560));
+        await first.writeAsBytes(bytes);
+        await second.writeAsBytes(bytes);
+
+        final result = await notifier.placeDocuments(<DocumentInput>[
+          DocumentInput(file: first, type: DocumentType.nationalId),
+          DocumentInput(file: second, type: DocumentType.nationalId),
+        ], const AppState(displayMethod: DisplayMethod.onePage));
+
+        final documents = container.read(scannedDocumentsProvider)[0]!;
+        expect(result.addedDocuments, hasLength(2));
+        expect(documents, hasLength(2));
+        expect(
+          documents[0].dx + documents[0].width,
+          lessThanOrEqualTo(documents[1].dx),
+        );
+        expect(documents[0].dy, closeTo(documents[1].dy, 0.001));
+        for (final document in documents) {
+          expect(document.dx, greaterThanOrEqualTo(0));
+          expect(document.dy, greaterThanOrEqualTo(0));
+          expect(document.dx + document.width, lessThanOrEqualTo(400));
+          expect(document.dy + document.height, lessThanOrEqualTo(565.6));
+        }
+      },
+    );
   });
 
   test('display method is selected through an immutable AppState copy', () {

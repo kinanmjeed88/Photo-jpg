@@ -115,14 +115,22 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
           ),
         ),
       );
-      await Future<void>.delayed(Duration.zero);
-      final smartResult = await _scannerService.processBatchSmartRecognition(
-        sourceFiles,
-        cancellationToken: cancellation,
-        onProgress: (current, total) => progress.value = current,
-      );
-      progress.dispose();
-      if (mounted) Navigator.of(context, rootNavigator: true).maybePop();
+      SmartScanBatchResult smartResult;
+      try {
+        await Future<void>.delayed(Duration.zero);
+        smartResult = await _scannerService.processBatchSmartRecognition(
+          sourceFiles,
+          cancellationToken: cancellation,
+          onProgress: (current, total) {
+            if (!cancellation.isCancelled) progress.value = current;
+          },
+        );
+      } finally {
+        progress.dispose();
+        if (mounted) {
+          await Navigator.of(context, rootNavigator: true).maybePop();
+        }
+      }
 
       final inputs = <DocumentInput>[];
       final manualFallbackSources = <File>[];

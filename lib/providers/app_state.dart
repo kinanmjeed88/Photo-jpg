@@ -211,6 +211,7 @@ class ScannedDocumentsNotifier
         final document = _newDocument(
           input: input,
           type: requestedType,
+          displayMethod: appState.displayMethod,
           originalWidth: dimensions.$1,
           originalHeight: dimensions.$2,
         );
@@ -390,23 +391,19 @@ class ScannedDocumentsNotifier
 
     if (displayMethod == DisplayMethod.frontOnly) {
       if (_hasAnyDocument(pages)) return _PlacementOutcome.overflow;
-      pages[0] = <ScannedDocument>[document.copyWith(dx: _margin, dy: _margin)];
+      pages[0] = <ScannedDocument>[_centerOnPage(document)];
       return _PlacementOutcome.added;
     }
 
     if (document.type == DocumentType.a4Document) {
-      if (currentPage.isNotEmpty) {
-        pageIndex = _nextPageIndex(pages);
-      }
-      pages[pageIndex] = <ScannedDocument>[document.copyWith(dx: 0, dy: 0)];
+      if (currentPage.isNotEmpty) pageIndex = _nextPageIndex(pages);
+      pages[pageIndex] = <ScannedDocument>[_centerOnPage(document)];
       return _PlacementOutcome.added;
     }
 
     if (displayMethod == DisplayMethod.twoPages && currentPage.isNotEmpty) {
       pageIndex = _nextPageIndex(pages);
-      pages[pageIndex] = <ScannedDocument>[
-        document.copyWith(dx: _margin, dy: _margin),
-      ];
+      pages[pageIndex] = <ScannedDocument>[_centerOnPage(document)];
       return _PlacementOutcome.added;
     }
 
@@ -414,8 +411,7 @@ class ScannedDocumentsNotifier
       return _PlacementOutcome.overflow;
     }
 
-    final positioned = _positionDocument(document, currentPage);
-    if (positioned == null) return _PlacementOutcome.overflow;
+    final positioned = _positionInOnePageGrid(document, currentPage.length);
     currentPage.add(positioned);
     return _PlacementOutcome.added;
   }
@@ -423,79 +419,80 @@ class ScannedDocumentsNotifier
   ScannedDocument _newDocument({
     required DocumentInput input,
     required DocumentType type,
+    required DisplayMethod displayMethod,
     required double originalWidth,
     required double originalHeight,
   }) {
     final aspectRatio = originalHeight > 0
         ? originalWidth / originalHeight
         : 1.0;
-    final width = _preferredWidth(type);
-    final height = width / aspectRatio;
+    final isGridLayout =
+        displayMethod == DisplayMethod.onePage &&
+        type != DocumentType.a4Document;
+    final size = isGridLayout
+        ? _fitSize(
+            aspectRatio: aspectRatio,
+            maxWidth: _gridCellWidth,
+            maxHeight: _gridCellHeight,
+          )
+        : _fitSize(
+            aspectRatio: aspectRatio,
+            maxWidth: AppConstants.kVirtualCanvasWidth - (_margin * 2),
+            maxHeight: AppConstants.kVirtualCanvasHeight - (_margin * 2),
+          );
     return ScannedDocument(
       file: input.file,
       type: type,
-      width: width,
-      height: height,
+      width: size.$1,
+      height: size.$2,
       originalWidth: originalWidth,
       originalHeight: originalHeight,
       originalImagePath: input.originalImagePath ?? input.file.path,
     );
   }
 
-  ScannedDocument? _positionDocument(
+  double get _gridCellWidth =>
+      (AppConstants.kVirtualCanvasWidth - (_margin * 2) - _margin) / 2;
+
+  double get _gridCellHeight =>
+      (AppConstants.kVirtualCanvasHeight - (_margin * 3)) / 2;
+
+  (double, double) _fitSize({
+    required double aspectRatio,
+    required double maxWidth,
+    required double maxHeight,
+  }) {
+    final safeAspectRatio = aspectRatio.isFinite && aspectRatio > 0
+        ? aspectRatio
+        : 1.0;
+    var width = maxWidth;
+    var height = width / safeAspectRatio;
+    if (height > maxHeight) {
+      height = maxHeight;
+      width = height * safeAspectRatio;
+    }
+    return (width, height);
+  }
+
+  ScannedDocument _centerOnPage(ScannedDocument document) {
+    return document.copyWith(
+      dx: (AppConstants.kVirtualCanvasWidth - document.width) / 2,
+      dy: (AppConstants.kVirtualCanvasHeight - document.height) / 2,
+    );
+  }
+
+  ScannedDocument _positionInOnePageGrid(
     ScannedDocument document,
-    List<ScannedDocument> existing,
+    int slotIndex,
   ) {
-    final maxWidth = AppConstants.kVirtualCanvasWidth;
-    final maxHeight = AppConstants.kVirtualCanvasHeight;
-    final candidates = <Offset>[
-      const Offset(20, 20),
-      Offset(maxWidth * 0.45 + 40, 20),
-      Offset(20, maxHeight * 0.5 + 12),
-      Offset(maxWidth * 0.45 + 40, maxHeight * 0.5 + 12),
-    ];
-
-    for (final candidate in candidates) {
-      final positioned = document.copyWith(dx: candidate.dx, dy: candidate.dy);
-      if (_fitsOnCanvas(positioned) && !_overlaps(positioned, existing)) {
-        return positioned;
-      }
-    }
-    return null;
-  }
-
-  bool _fitsOnCanvas(ScannedDocument document) {
-    return document.dx >= 0 &&
-        document.dy >= 0 &&
-        document.dx + document.width <= AppConstants.kVirtualCanvasWidth &&
-        document.dy + document.height <= AppConstants.kVirtualCanvasHeight;
-  }
-
-  bool _overlaps(ScannedDocument candidate, List<ScannedDocument> documents) {
-    for (final document in documents) {
-      final separated =
-          candidate.dx + candidate.width + _margin <= document.dx ||
-          document.dx + document.width + _margin <= candidate.dx ||
-          candidate.dy + candidate.height + _margin <= document.dy ||
-          document.dy + document.height + _margin <= candidate.dy;
-      if (!separated) return true;
-    }
-    return false;
-  }
-
-  double _preferredWidth(DocumentType type) {
-    switch (type) {
-      case DocumentType.a4Document:
-        return AppConstants.kVirtualCanvasWidth;
-      case DocumentType.rationCard:
-        return AppConstants.kVirtualCanvasWidth * 0.9;
-      case DocumentType.passport:
-        return AppConstants.kVirtualCanvasWidth * 0.85;
-      case DocumentType.nationalId:
-      case DocumentType.housingCard:
-      case DocumentType.unknown:
-        return AppConstants.kVirtualCanvasWidth * 0.45;
-    }
+    final column = slotIndex % 2;
+    final row = slotIndex ~/ 2;
+    final cellLeft = _margin + (column * (_gridCellWidth + _margin));
+    final cellTop = _margin + (row * (_gridCellHeight + _margin));
+    return document.copyWith(
+      dx: cellLeft + ((_gridCellWidth - document.width) / 2),
+      dy: cellTop + ((_gridCellHeight - document.height) / 2),
+    );
   }
 
   DocumentType _guessDocumentType(AppState appState) {

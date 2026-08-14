@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -47,6 +48,7 @@ class _DraggableResizableDocumentState
   double _startDx = 0;
   double _startDy = 0;
   double _startScale = 1;
+  Offset _startFocalPoint = Offset.zero;
   double _resizeBaseScale = 1;
   double _resizeDrag = 0;
   bool _isInteracting = false;
@@ -76,26 +78,30 @@ class _DraggableResizableDocumentState
     widget.onLayoutUpdate(widget.document.id, _dx, _dy, _scale);
   }
 
-  void _beginTransform() {
+  void _beginTransform(ScaleStartDetails details) {
     _isInteracting = true;
     _startDx = _dx;
     _startDy = _dy;
     _startScale = _scale;
+    _startFocalPoint = details.focalPoint;
     widget.onGestureStart?.call();
   }
 
   void _updateTransform(ScaleUpdateDetails details) {
-    final proposedScale = (_startScale * details.scale).clamp(0.3, 3.0);
+    final proposedScale = (_startScale * details.scale)
+        .clamp(0.3, 3.0)
+        .toDouble();
     final scaledWidth = widget.document.width * proposedScale;
     final scaledHeight = widget.document.height * proposedScale;
     final maxX = math.max(0, widget.canvasWidth - scaledWidth);
     final maxY = math.max(0, widget.canvasHeight - scaledHeight);
+    final dragOffset = details.focalPoint - _startFocalPoint;
     setState(() {
       _scale = proposedScale;
-      _dx = (_startDx + details.focalPointDelta.dx / widget.canvasScale)
+      _dx = (_startDx + dragOffset.dx / widget.canvasScale)
           .clamp(0, maxX)
           .toDouble();
-      _dy = (_startDy + details.focalPointDelta.dy / widget.canvasScale)
+      _dy = (_startDy + dragOffset.dy / widget.canvasScale)
           .clamp(-scaledHeight * 0.2, maxY + scaledHeight * 0.2)
           .toDouble();
     });
@@ -158,8 +164,9 @@ class _DraggableResizableDocumentState
       top: _dy,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
+        dragStartBehavior: DragStartBehavior.down,
         onTap: () => widget.onTap(widget.document.id),
-        onScaleStart: (_) => _beginTransform(),
+        onScaleStart: _beginTransform,
         onScaleUpdate: _updateTransform,
         onScaleEnd: (_) => _endTransform(),
         child: SizedBox(

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 import 'dart:isolate';
 import 'dart:typed_data';
 
@@ -120,6 +121,20 @@ List<String> _detectAndCropInIsolate(Map<String, String> args) {
     source = cv.imdecode(File(imagePath).readAsBytesSync(), cv.IMREAD_COLOR);
     if (source.isEmpty) return results;
 
+    // Keep the vision workload bounded. A preview-sized working image is
+    // sufficient for document boundaries and prevents one large camera image
+    // from monopolising the smart-scan isolate.
+    const maximumAnalysisDimension = 1600;
+    final largestDimension = source.cols > source.rows
+        ? source.cols
+        : source.rows;
+    if (largestDimension > maximumAnalysisDimension) {
+      final scale = maximumAnalysisDimension / largestDimension;
+      final resized = cv.resize(source, (0, 0), fx: scale, fy: scale);
+      source.dispose();
+      source = resized;
+    }
+
     gray = cv.cvtColor(source, cv.COLOR_BGR2GRAY);
     blurred = cv.gaussianBlur(gray, (5, 5), 0);
     edges = cv.canny(blurred, 40, 120);
@@ -134,7 +149,11 @@ List<String> _detectAndCropInIsolate(Map<String, String> args) {
     hierarchy = contourResult.$2;
     final imageArea = (source.rows * source.cols).toDouble();
 
+    var inspectedContours = 0;
     for (final contour in contours) {
+      // The largest useful document outlines occur early in this contour list.
+      // A hard upper bound preserves interactive response for noisy photos.
+      if (inspectedContours++ >= 120 || results.length >= 4) break;
       cv.VecPoint? approximation;
       cv.VecPoint? ordered;
       cv.VecPoint? sourcePoints;
@@ -275,6 +294,9 @@ String _preprocessForOcrInIsolate(Map<String, String> args) {
 }
 
 class ScannerService {
+  static const _smartCropTimeout = Duration(seconds: 15);
+  static const _classificationTimeout = Duration(seconds: 6);
+
   ScannerService({ImagePicker? picker}) : _picker = picker ?? ImagePicker();
 
   final ImagePicker _picker;
@@ -323,12 +345,31 @@ class ScannerService {
 
     await TemporaryImageStore.cleanupStale();
     final tempDirectory = await getTemporaryDirectory();
-    final outputPaths = await Isolate.run(
-      () => _detectAndCropInIsolate(<String, String>{
-        'imagePath': imageFile.path,
-        'tempPath': tempDirectory.path,
-      }),
-    );
+    List<String> outputPaths;
+    try {
+      outputPaths = await Isolate.run(
+        () => _detectAndCropInIsolate(<String, String>{
+          'imagePath': imageFile.path,
+          'tempPath': tempDirectory.path,
+        }),
+      ).timeout(_smartCropTimeout);
+    } on TimeoutException {
+      return SmartScanResult(
+        source: imageFile,
+        files: const <File>[],
+        classification: DocumentClassification.unknown,
+        status: SmartScanStatus.manualReviewRequired,
+        message: 'انتهت مهلة القص الذكي؛ يُرجى تحديد المستند يدوياً.',
+      );
+    } catch (_) {
+      return SmartScanResult(
+        source: imageFile,
+        files: const <File>[],
+        classification: DocumentClassification.unknown,
+        status: SmartScanStatus.manualReviewRequired,
+        message: 'تعذر تحليل حدود المستند؛ يُرجى تحديده يدوياً.',
+      );
+    }
 
     if (cancellationToken?.isCancelled ?? false) {
       for (final outputPath in outputPaths) {
@@ -354,7 +395,16 @@ class ScannerService {
     }
 
     final files = List<File>.unmodifiable(outputPaths.map(File.new));
-    final classification = await classifyDocument(files.first);
+    final classification = await classifyDocument(files.first).timeout(
+      _classificationTimeout,
+      onTimeout: () => const DocumentClassification(
+        type: DocumentType.unknown,
+        normalizedText: '',
+        confidence: 0,
+        reason: 'تجاوز التعرف النصي المهلة؛ راجع نوع المستند يدوياً.',
+        requiresManualReview: true,
+      ),
+    );
     final status = classification.requiresManualReview
         ? SmartScanStatus.manualReviewRequired
         : SmartScanStatus.succeeded;
