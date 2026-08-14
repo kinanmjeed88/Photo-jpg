@@ -29,6 +29,29 @@ void main() {
     ]);
   });
 
+  test('prefers an outer document over a contained internal region', () {
+    const regions = <DocumentRegion>[
+      DocumentRegion(left: 40, top: 30, right: 440, bottom: 280, area: 100_000),
+      // A portrait/text panel detected inside the first credential.
+      DocumentRegion(left: 70, top: 65, right: 205, bottom: 245, area: 24_300),
+      DocumentRegion(
+        left: 500,
+        top: 30,
+        right: 900,
+        bottom: 280,
+        area: 100_000,
+      ),
+    ];
+
+    final selected = selectDistinctDocumentRegions(regions);
+
+    expect(selected, hasLength(2));
+    expect(selected.map((region) => '${region.left}:${region.top}'), <String>[
+      '40:30',
+      '500:30',
+    ]);
+  });
+
   test('removes overlapping outlines but keeps adjacent documents', () {
     const regions = <DocumentRegion>[
       DocumentRegion(left: 10, top: 10, right: 210, bottom: 290, area: 56_000),

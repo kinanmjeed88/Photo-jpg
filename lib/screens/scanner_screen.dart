@@ -652,98 +652,65 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                     BoxShadow(color: Colors.black12, blurRadius: 6),
                   ],
                 ),
-                child: Transform.scale(
-                  scale: canvasScale,
-                  alignment: Alignment.topLeft,
-                  child: SizedBox(
-                    width: AppConstants.kVirtualCanvasWidth,
-                    height: AppConstants.kVirtualCanvasHeight,
-                    child: Stack(
-                      clipBehavior: Clip.hardEdge,
-                      children: <Widget>[
-                        ...documents.map(
-                          (document) => DraggableResizableDocument(
-                            key: ValueKey(document.id),
-                            document: document,
-                            isSelected: document.id == _selectedDocumentId,
-                            addFrame: appState.addFrame,
-                            canvasWidth: AppConstants.kVirtualCanvasWidth,
-                            canvasHeight: AppConstants.kVirtualCanvasHeight,
-                            canvasGuide: const Rect.fromLTWH(
-                              AppConstants.kA4GuideLeft,
-                              AppConstants.kA4GuideTop,
-                              AppConstants.kA4GuideWidth,
-                              AppConstants.kA4GuideHeight,
-                            ),
-                            canvasScale: canvasScale,
-                            onTap: _selectDocument,
-                            onLayoutUpdate: (id, dx, dy, scale) {
-                              final current = ref
-                                  .read(scannedDocumentsProvider.notifier)
-                                  .findDocument(id);
-                              if (current == null) return;
-                              ref
-                                  .read(scannedDocumentsProvider.notifier)
-                                  .updateDocumentLayout(
-                                    id,
-                                    dx: dx,
-                                    dy: dy,
-                                    width: current.document.width,
-                                    height: current.document.height,
-                                    rotationAngle:
-                                        current.document.rotationAngle,
-                                    scale: scale,
-                                  );
-                            },
-                            onCrossPageMove: _moveCrossPage,
-                            onGestureStart: () => _selectDocument(document.id),
-                          ),
-                        ),
-                        Positioned(
-                          top: AppConstants.kA4GuideTop,
-                          left: AppConstants.kA4GuideLeft,
-                          width: AppConstants.kA4GuideWidth,
-                          height: AppConstants.kA4GuideHeight,
-                          child: IgnorePointer(
-                            child: DecoratedBox(
-                              decoration: BoxDecoration(
-                                border: Border.all(
-                                  color: Colors.indigo.withValues(alpha: 0.72),
-                                  width: 1.5,
-                                ),
-                                borderRadius: BorderRadius.circular(2),
+                child: CustomPaint(
+                  foregroundPainter: _A4GuidePainter(
+                    guide: Rect.fromLTWH(
+                      AppConstants.kA4GuideLeft * canvasScale,
+                      AppConstants.kA4GuideTop * canvasScale,
+                      AppConstants.kA4GuideWidth * canvasScale,
+                      AppConstants.kA4GuideHeight * canvasScale,
+                    ),
+                  ),
+                  child: Transform.scale(
+                    scale: canvasScale,
+                    alignment: Alignment.topLeft,
+                    child: SizedBox(
+                      width: AppConstants.kVirtualCanvasWidth,
+                      height: AppConstants.kVirtualCanvasHeight,
+                      child: Stack(
+                        clipBehavior: Clip.hardEdge,
+                        children: <Widget>[
+                          ...documents.map(
+                            (document) => DraggableResizableDocument(
+                              key: ValueKey(document.id),
+                              document: document,
+                              isSelected: document.id == _selectedDocumentId,
+                              addFrame: appState.addFrame,
+                              canvasWidth: AppConstants.kVirtualCanvasWidth,
+                              canvasHeight: AppConstants.kVirtualCanvasHeight,
+                              canvasGuide: const Rect.fromLTWH(
+                                AppConstants.kA4GuideLeft,
+                                AppConstants.kA4GuideTop,
+                                AppConstants.kA4GuideWidth,
+                                AppConstants.kA4GuideHeight,
                               ),
-                              child: const SizedBox.expand(),
+                              canvasScale: canvasScale,
+                              onTap: _selectDocument,
+                              onLayoutUpdate: (id, dx, dy, scale) {
+                                final current = ref
+                                    .read(scannedDocumentsProvider.notifier)
+                                    .findDocument(id);
+                                if (current == null) return;
+                                ref
+                                    .read(scannedDocumentsProvider.notifier)
+                                    .updateDocumentLayout(
+                                      id,
+                                      dx: dx,
+                                      dy: dy,
+                                      width: current.document.width,
+                                      height: current.document.height,
+                                      rotationAngle:
+                                          current.document.rotationAngle,
+                                      scale: scale,
+                                    );
+                              },
+                              onCrossPageMove: _moveCrossPage,
+                              onGestureStart: () =>
+                                  _selectDocument(document.id),
                             ),
                           ),
-                        ),
-                        Positioned(
-                          top: AppConstants.kA4GuideTop + 4,
-                          left: AppConstants.kA4GuideLeft + 4,
-                          child: IgnorePointer(
-                            child: DecoratedBox(
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.86),
-                                borderRadius: BorderRadius.circular(2),
-                              ),
-                              child: const Padding(
-                                padding: EdgeInsets.symmetric(
-                                  horizontal: 5,
-                                  vertical: 2,
-                                ),
-                                child: Text(
-                                  'A4',
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    color: Colors.indigo,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -837,4 +804,51 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
       ),
     );
   }
+}
+
+class _A4GuidePainter extends CustomPainter {
+  const _A4GuidePainter({required this.guide});
+
+  final Rect guide;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final outline = Paint()
+      ..color = Colors.indigo.withValues(alpha: 0.82)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+    // The rectangle is painted in the display coordinate space rather than
+    // inside Transform.scale, so no edge is lost to the scaled Stack clip.
+    canvas.drawRect(guide, outline);
+
+    final labelPainter = TextPainter(
+      text: TextSpan(
+        text: 'A4',
+        style: TextStyle(
+          color: Colors.indigo.withValues(alpha: 0.9),
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final labelBackground = RRect.fromRectAndRadius(
+      Rect.fromLTWH(
+        guide.left + 4,
+        guide.top + 4,
+        labelPainter.width + 10,
+        labelPainter.height + 4,
+      ),
+      const Radius.circular(2),
+    );
+    canvas.drawRRect(
+      labelBackground,
+      Paint()..color = Colors.white.withValues(alpha: 0.9),
+    );
+    labelPainter.paint(canvas, Offset(guide.left + 9, guide.top + 6));
+  }
+
+  @override
+  bool shouldRepaint(covariant _A4GuidePainter oldDelegate) =>
+      oldDelegate.guide != guide;
 }

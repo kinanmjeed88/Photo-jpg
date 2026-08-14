@@ -222,9 +222,10 @@ double _polygonArea(List<cv.Point> points) {
 _DocumentCandidate? _candidateFromContour(
   cv.VecPoint contour, {
   required double imageArea,
+  bool allowAxisAlignedFallback = false,
 }) {
   final contourArea = cv.contourArea(contour);
-  if (contourArea < imageArea * 0.0125 || contourArea > imageArea * 0.9) {
+  if (contourArea < imageArea * 0.03 || contourArea > imageArea * 0.9) {
     return null;
   }
 
@@ -233,30 +234,27 @@ _DocumentCandidate? _candidateFromContour(
     final perimeter = cv.arcLength(contour, true);
     if (perimeter <= 0) return null;
     approximation = cv.approxPolyDP(contour, 0.018 * perimeter, true);
-    List<cv.Point> points;
-    if (approximation.length == 4) {
-      points = _orderPoints(
-        List<cv.Point>.generate(4, (index) => approximation![index]),
+
+    // A document crop must originate from an observed, convex quadrilateral.
+    // minAreaRect turns arbitrary nested contours (for example a portrait,
+    // text panel, or seal inside a credential) into synthetic rectangles and
+    // was the direct cause of partial smart-crops.
+    if (approximation.length != 4 || !cv.isContourConvex(approximation)) {
+      if (!allowAxisAlignedFallback) return null;
+      return _axisAlignedCandidateFromContour(
+        contour,
+        contourArea: contourArea,
+        imageArea: imageArea,
       );
-    } else {
-      final rectangle = cv.minAreaRect(contour);
-      final box = cv.boxPoints(rectangle);
-      try {
-        points = _orderPoints(<cv.Point>[
-          cv.Point(box[0].x.round(), box[0].y.round()),
-          cv.Point(box[1].x.round(), box[1].y.round()),
-          cv.Point(box[2].x.round(), box[2].y.round()),
-          cv.Point(box[3].x.round(), box[3].y.round()),
-        ]);
-      } finally {
-        box.dispose();
-      }
     }
+    final points = _orderPoints(
+      List<cv.Point>.generate(4, (index) => approximation![index]),
+    );
 
     final quadrilateralArea = _polygonArea(points);
-    if (quadrilateralArea <= 0 || contourArea / quadrilateralArea < 0.5) {
-      return null;
-    }
+    if (quadrilateralArea <= 0) return null;
+    final rectangularity = contourArea / quadrilateralArea;
+    if (rectangularity < 0.72 || rectangularity > 1.25) return null;
     final width = math.max(
       _distance(points[0], points[1]),
       _distance(points[2], points[3]),
@@ -286,6 +284,52 @@ _DocumentCandidate? _candidateFromContour(
   }
 }
 
+_DocumentCandidate? _axisAlignedCandidateFromContour(
+  cv.VecPoint contour, {
+  required double contourArea,
+  required double imageArea,
+}) {
+  final bounds = cv.boundingRect(contour);
+  try {
+    final boundingArea = (bounds.width * bounds.height).toDouble();
+    if (bounds.width < 96 ||
+        bounds.height < 96 ||
+        boundingArea < imageArea * 0.045 ||
+        boundingArea > imageArea * 0.4) {
+      return null;
+    }
+
+    final fillRatio = contourArea / boundingArea;
+    if (fillRatio < 0.55 || fillRatio > 1.15) return null;
+    final aspectRatio = bounds.width > bounds.height
+        ? bounds.width / bounds.height
+        : bounds.height / bounds.width;
+    if (aspectRatio > 2.75) return null;
+
+    final left = bounds.x;
+    final top = bounds.y;
+    final right = bounds.right;
+    final bottom = bounds.bottom;
+    return _DocumentCandidate(
+      points: <cv.Point>[
+        cv.Point(left, top),
+        cv.Point(right, top),
+        cv.Point(right, bottom),
+        cv.Point(left, bottom),
+      ],
+      area: boundingArea,
+      width: bounds.width.toDouble(),
+      height: bounds.height.toDouble(),
+      left: left,
+      top: top,
+      right: right,
+      bottom: bottom,
+    );
+  } finally {
+    bounds.dispose();
+  }
+}
+
 bool _isDuplicateRegion(DocumentRegion candidate, DocumentRegion accepted) {
   final intersectionWidth = math.max(
     0,
@@ -300,6 +344,13 @@ bool _isDuplicateRegion(DocumentRegion candidate, DocumentRegion accepted) {
   final intersectionArea = intersectionWidth * intersectionHeight;
   final unionArea = candidate.area + accepted.area - intersectionArea;
   if (unionArea > 0 && intersectionArea / unionArea >= 0.7) return true;
+
+  // A small portrait or text panel inside an accepted document must never be
+  // emitted as another document. The candidates are ordered by area, so this
+  // containment rule keeps the outer credential and rejects its inner region.
+  final candidateCoverage = intersectionArea / math.max(candidate.area, 1);
+  final acceptedCoverage = intersectionArea / math.max(accepted.area, 1);
+  if (candidateCoverage >= 0.82 || acceptedCoverage >= 0.82) return true;
 
   final centerDistance = math.sqrt(
     math.pow(candidate.centerX - accepted.centerX, 2) +
@@ -332,16 +383,29 @@ Future<List<String>> _detectAndCropInIsolate(
   cv.Mat? blurred;
   cv.Mat? edges;
   cv.Mat? edgeClosed;
+  cv.Mat? sensitiveEdges;
+  cv.Mat? sensitiveEdgeClosed;
   cv.Mat? threshold;
   cv.Mat? thresholdClosed;
+  cv.Mat? sensitiveThreshold;
+  cv.Mat? sensitiveThresholdClosed;
+  cv.Mat? foreground;
+  cv.Mat? foregroundClosed;
   cv.Mat? kernel;
+  cv.Mat? broadKernel;
+  cv.Mat? foregroundKernel;
   var candidates = <_DocumentCandidate>[];
   final results = <String>[];
 
-  Future<bool> collectCandidates(cv.Mat image, double imageArea) async {
+  Future<bool> collectCandidates(
+    cv.Mat image,
+    double imageArea, {
+    int retrievalMode = cv.RETR_LIST,
+    bool allowAxisAlignedFallback = false,
+  }) async {
     final contourResult = cv.findContours(
       image,
-      cv.RETR_LIST,
+      retrievalMode,
       cv.CHAIN_APPROX_SIMPLE,
     );
     final contours = contourResult.$1;
@@ -353,7 +417,11 @@ Future<List<String>> _detectAndCropInIsolate(
         // Let the worker control port process a cancellation while scanning a
         // noisy camera frame without sacrificing all candidate contours.
         if (inspected++ % 24 == 0) await Future<void>.delayed(Duration.zero);
-        final candidate = _candidateFromContour(contour, imageArea: imageArea);
+        final candidate = _candidateFromContour(
+          contour,
+          imageArea: imageArea,
+          allowAxisAlignedFallback: allowAxisAlignedFallback,
+        );
         if (candidate == null ||
             candidates.any(
               (accepted) => _isDuplicateCandidate(candidate, accepted),
@@ -388,8 +456,21 @@ Future<List<String>> _detectAndCropInIsolate(
     gray = cv.cvtColor(source, cv.COLOR_BGR2GRAY);
     blurred = cv.gaussianBlur(gray, (5, 5), 0);
     kernel = cv.getStructuringElement(cv.MORPH_RECT, (7, 7));
+    broadKernel = cv.getStructuringElement(cv.MORPH_RECT, (11, 11));
+    foregroundKernel = cv.getStructuringElement(cv.MORPH_RECT, (15, 15));
+
+    // Multiple complementary proposal masks are required for a sheet that
+    // contains several cards: some card borders are sharp while others have
+    // low contrast against the sheet. Every proposal still has to pass the
+    // strict quadrilateral validation in _candidateFromContour.
     edges = cv.canny(blurred, 35, 110);
     edgeClosed = cv.morphologyEx(edges, cv.MORPH_CLOSE, kernel);
+    sensitiveEdges = cv.canny(blurred, 15, 60);
+    sensitiveEdgeClosed = cv.morphologyEx(
+      sensitiveEdges,
+      cv.MORPH_CLOSE,
+      broadKernel,
+    );
     threshold = cv.adaptiveThreshold(
       gray,
       255,
@@ -399,10 +480,42 @@ Future<List<String>> _detectAndCropInIsolate(
       8,
     );
     thresholdClosed = cv.morphologyEx(threshold, cv.MORPH_CLOSE, kernel);
+    sensitiveThreshold = cv.adaptiveThreshold(
+      gray,
+      255,
+      cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+      cv.THRESH_BINARY_INV,
+      15,
+      3,
+    );
+    sensitiveThresholdClosed = cv.morphologyEx(
+      sensitiveThreshold,
+      cv.MORPH_CLOSE,
+      broadKernel,
+    );
+
+    // This mask separates darker/coloured documents from a light sheet.
+    // It is deliberately evaluated with RETR_EXTERNAL so that a credential's
+    // visible outer extent can be proposed without treating its portrait or
+    // text blocks as separate documents.
+    foreground = cv.threshold(gray, 160, 255, cv.THRESH_BINARY_INV).$2;
+    foregroundClosed = cv.morphologyEx(
+      foreground,
+      cv.MORPH_CLOSE,
+      foregroundKernel,
+    );
     final imageArea = (source.rows * source.cols).toDouble();
 
     if (!await collectCandidates(edgeClosed, imageArea) ||
-        !await collectCandidates(thresholdClosed, imageArea)) {
+        !await collectCandidates(sensitiveEdgeClosed, imageArea) ||
+        !await collectCandidates(thresholdClosed, imageArea) ||
+        !await collectCandidates(sensitiveThresholdClosed, imageArea) ||
+        !await collectCandidates(
+          foregroundClosed,
+          imageArea,
+          retrievalMode: cv.RETR_EXTERNAL,
+          allowAxisAlignedFallback: true,
+        )) {
       return results;
     }
 
@@ -481,9 +594,17 @@ Future<List<String>> _detectAndCropInIsolate(
     blurred?.dispose();
     edges?.dispose();
     edgeClosed?.dispose();
+    sensitiveEdges?.dispose();
+    sensitiveEdgeClosed?.dispose();
     threshold?.dispose();
     thresholdClosed?.dispose();
+    sensitiveThreshold?.dispose();
+    sensitiveThresholdClosed?.dispose();
+    foreground?.dispose();
+    foregroundClosed?.dispose();
     kernel?.dispose();
+    broadKernel?.dispose();
+    foregroundKernel?.dispose();
   }
   return results;
 }
