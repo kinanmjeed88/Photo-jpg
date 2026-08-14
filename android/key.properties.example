@@ -1,0 +1,9 @@
+# Copy this file to android/key.properties and replace every placeholder.
+# The actual key.properties file is ignored by Git.
+storeFile=app/signing/photo_jpg_release.jks
+storePassword=REPLACE_WITH_PRIVATE_STORE_PASSWORD
+keyAlias=photo-jpg-release
+keyPassword=REPLACE_WITH_PRIVATE_KEY_PASSWORD
+
+# Keep the matching keystore at android/app/signing/photo_jpg_release.jks.
+# Do not publish either the keystore or these passwords.
