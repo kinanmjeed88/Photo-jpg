@@ -7,7 +7,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gal/gal.dart';
 import 'package:image/image.dart' as img;
-import 'package:opencv_dart/opencv_dart.dart' as cv;
 import 'package:permission_handler/permission_handler.dart';
 
 import '../providers/app_state.dart';
@@ -17,29 +16,32 @@ Future<Map<String, dynamic>> _runProxyIsolate(Map<String, dynamic> args) {
   return Isolate.run(() => _generateProxy(args));
 }
 
-Uint8List _encodeJpeg(cv.Mat image) =>
-    Uint8List.fromList(cv.imencode('.jpg', image).$2);
+Uint8List _encodeJpeg(img.Image image, {int quality = 90}) {
+  final encoded = img.encodeJpg(image, quality: quality);
+  if (encoded.isEmpty) throw StateError('تعذر ترميز معاينة JPEG.');
+  return Uint8List.fromList(encoded);
+}
 
 Map<String, dynamic> _generateProxy(Map<String, dynamic> args) {
   final bytes = args['bytes'] as Uint8List;
-  cv.Mat? source;
-  cv.Mat? scaled;
-  try {
-    source = cv.imdecode(bytes, cv.IMREAD_COLOR);
-    if (source.isEmpty) return <String, dynamic>{'bytes': bytes, 'scale': 1.0};
-    final maxDimension = source.cols > source.rows ? source.cols : source.rows;
-    if (maxDimension <= 1080) {
-      return <String, dynamic>{'bytes': bytes, 'scale': 1.0};
-    }
-    final scale = 1080 / maxDimension;
-    scaled = cv.resize(source, (0, 0), fx: scale, fy: scale);
-    return <String, dynamic>{'bytes': _encodeJpeg(scaled), 'scale': scale};
-  } catch (_) {
-    return <String, dynamic>{'bytes': bytes, 'scale': 1.0};
-  } finally {
-    source?.dispose();
-    scaled?.dispose();
+  final source = img.decodeImage(bytes);
+  if (source == null) {
+    throw StateError('ملف الصورة غير صالح للمعاينة.');
   }
+  final maximumDimension = source.width > source.height
+      ? source.width
+      : source.height;
+  if (maximumDimension <= 1080) {
+    return <String, dynamic>{'bytes': bytes, 'scale': 1.0};
+  }
+  final scale = 1080 / maximumDimension;
+  final proxy = img.copyResize(
+    source,
+    width: (source.width * scale).round(),
+    height: (source.height * scale).round(),
+    interpolation: img.Interpolation.average,
+  );
+  return <String, dynamic>{'bytes': _encodeJpeg(proxy), 'scale': scale};
 }
 
 class _CropBounds {
@@ -93,129 +95,106 @@ class _CropBounds {
   }
 }
 
-cv.Mat _applyAdjustments(
-  cv.Mat source, {
+img.Image _applyAdjustments(
+  img.Image source, {
   required double contrast,
   required double brightness,
   required double sharpness,
 }) {
-  var current = source;
+  final adjusted = img.Image.from(source);
   if (contrast != 1 || brightness != 0) {
-    final adjusted = cv.convertScaleAbs(
-      current,
-      alpha: contrast,
-      beta: brightness,
+    img.adjustColor(
+      adjusted,
+      contrast: contrast,
+      brightness: 1 + (brightness / 100),
     );
-    if (!identical(current, source)) current.dispose();
-    current = adjusted;
   }
-  if (sharpness > 0) {
-    final blurred = cv.gaussianBlur(current, (0, 0), sharpness);
-    final sharpened = cv.addWeighted(current, 1.5, blurred, -0.5, 0);
-    blurred.dispose();
-    if (!identical(current, source)) current.dispose();
-    current = sharpened;
+  if (sharpness > 0) _applyUnsharpMask(adjusted, sharpness);
+  return adjusted;
+}
+
+void _applyUnsharpMask(img.Image image, double sharpness) {
+  final amount = (sharpness / 5).clamp(0.0, 1.0).toDouble();
+  if (amount == 0) return;
+  final blurred = img.gaussianBlur(
+    img.Image.from(image),
+    radius: (sharpness / 2).round().clamp(1, 3),
+  );
+  for (var y = 0; y < image.height; y++) {
+    for (var x = 0; x < image.width; x++) {
+      final original = image.getPixel(x, y);
+      final softened = blurred.getPixel(x, y);
+      num channel(num base, num blur) =>
+          (base + ((base - blur) * amount)).clamp(0, 255);
+      image.setPixelRgba(
+        x,
+        y,
+        channel(original.r, softened.r),
+        channel(original.g, softened.g),
+        channel(original.b, softened.b),
+        original.a,
+      );
+    }
   }
-  return current;
+}
+
+img.Image _cropIfRequested(img.Image image, Map<String, int>? bounds) {
+  if (bounds == null) return image;
+  return img.copyCrop(
+    image,
+    x: bounds['left']!,
+    y: bounds['top']!,
+    width: bounds['width']!,
+    height: bounds['height']!,
+  );
 }
 
 Uint8List _processForGallery(Map<String, dynamic> args) {
   final bytes = args['bytes'] as Uint8List;
-  final bounds = args['bounds'] as Map<String, int>?;
-  cv.Mat? source;
-  cv.Mat? processed;
-  cv.Mat? cropped;
-  try {
-    source = cv.imdecode(bytes, cv.IMREAD_COLOR);
-    if (source.isEmpty) return bytes;
-    processed = _applyAdjustments(
-      source,
-      contrast: args['contrast'] as double,
-      brightness: args['brightness'] as double,
-      sharpness: args['sharpness'] as double,
-    );
-    if (bounds != null) {
-      cropped = processed.region(
-        cv.Rect(
-          bounds['left']!,
-          bounds['top']!,
-          bounds['width']!,
-          bounds['height']!,
-        ),
-      );
-    }
-    return _encodeJpeg(cropped ?? processed);
-  } catch (_) {
-    return bytes;
-  } finally {
-    if (processed != null && !identical(processed, source)) processed.dispose();
-    source?.dispose();
-    cropped?.dispose();
-  }
+  final source = img.decodeImage(bytes);
+  if (source == null) throw StateError('ملف الصورة غير صالح.');
+  final processed = _applyAdjustments(
+    source,
+    contrast: args['contrast'] as double,
+    brightness: args['brightness'] as double,
+    sharpness: args['sharpness'] as double,
+  );
+  return _encodeJpeg(
+    _cropIfRequested(processed, args['bounds'] as Map<String, int>?),
+  );
 }
 
 Map<String, dynamic> _processForPreview(Map<String, dynamic> args) {
   final bytes = args['bytes'] as Uint8List;
   final version = args['version'] as int;
-  cv.Mat? source;
-  cv.Mat? processed;
-  try {
-    source = cv.imdecode(bytes, cv.IMREAD_COLOR);
-    if (source.isEmpty) {
-      return <String, dynamic>{'bytes': bytes, 'version': version};
-    }
-    processed = _applyAdjustments(
-      source,
-      contrast: args['contrast'] as double,
-      brightness: args['brightness'] as double,
-      sharpness: args['sharpness'] as double,
-    );
-    return <String, dynamic>{
-      'bytes': _encodeJpeg(processed),
-      'version': version,
-    };
-  } catch (_) {
-    return <String, dynamic>{'bytes': bytes, 'version': version};
-  } finally {
-    if (processed != null && !identical(processed, source)) processed.dispose();
-    source?.dispose();
-  }
+  final source = img.decodeImage(bytes);
+  if (source == null) throw StateError('ملف معاينة غير صالح.');
+  final processed = _applyAdjustments(
+    source,
+    contrast: args['contrast'] as double,
+    brightness: args['brightness'] as double,
+    sharpness: args['sharpness'] as double,
+  );
+  return <String, dynamic>{'bytes': _encodeJpeg(processed), 'version': version};
 }
 
 bool _processEditedFile(Map<String, dynamic> args) {
   final bytes = args['bytes'] as Uint8List;
-  final outputPath = args['outputPath'] as String;
-  final bounds = args['bounds'] as Map<String, int>?;
-  cv.Mat? source;
-  cv.Mat? processed;
-  cv.Mat? cropped;
-  try {
-    source = cv.imdecode(bytes, cv.IMREAD_COLOR);
-    if (source.isEmpty) return false;
-    processed = _applyAdjustments(
-      source,
-      contrast: args['contrast'] as double,
-      brightness: args['brightness'] as double,
-      sharpness: args['sharpness'] as double,
-    );
-    if (bounds != null) {
-      cropped = processed.region(
-        cv.Rect(
-          bounds['left']!,
-          bounds['top']!,
-          bounds['width']!,
-          bounds['height']!,
-        ),
-      );
-    }
-    return cv.imwrite(outputPath, cropped ?? processed);
-  } catch (_) {
-    return false;
-  } finally {
-    if (processed != null && !identical(processed, source)) processed.dispose();
-    source?.dispose();
-    cropped?.dispose();
-  }
+  final source = img.decodeImage(bytes);
+  if (source == null) return false;
+  final processed = _applyAdjustments(
+    source,
+    contrast: args['contrast'] as double,
+    brightness: args['brightness'] as double,
+    sharpness: args['sharpness'] as double,
+  );
+  final output = _cropIfRequested(
+    processed,
+    args['bounds'] as Map<String, int>?,
+  );
+  final encoded = _encodeJpeg(output);
+  File(args['outputPath'] as String).writeAsBytesSync(encoded, flush: true);
+  return true;
 }
 
 class ImageEditorScreen extends ConsumerStatefulWidget {
@@ -242,6 +221,7 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
   double _contrast = 1;
   double _sharpness = 0;
   int _previewVersion = 0;
+  bool _isPreviewTaskRunning = false;
   bool _isLoadingPreview = true;
   bool _isProcessing = false;
 
@@ -281,21 +261,18 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
       await TemporaryImageStore.cleanupStale(protectedPaths: protectedPaths);
       await _generatePreview();
     } catch (_) {
-      // The editor remains usable even if proxy construction fails. Rendering
-      // the original bytes is safer than leaving the user on a blank spinner.
+      // A valid source still remains editable even if its downscaled proxy could
+      // not be generated. The UI deliberately keeps this fallback silent.
       _proxyBytes ??= _originalBytes;
       if (_proxyBytes != null) _previewBytes.value = _proxyBytes!;
-      if (mounted) {
-        setState(() => _isLoadingPreview = false);
-        _showError('تعذر تحضير معاينة محسّنة؛ عُرضت الصورة الأصلية.');
-      }
+      if (mounted) setState(() => _isLoadingPreview = false);
     }
   }
 
   void _schedulePreview() {
     _debounce?.cancel();
     _previewVersion++;
-    _debounce = Timer(const Duration(milliseconds: 120), _generatePreview);
+    _debounce = Timer(const Duration(milliseconds: 80), _generatePreview);
   }
 
   Future<void> _generatePreview() async {
@@ -303,31 +280,42 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
       if (mounted) setState(() => _isLoadingPreview = false);
       return;
     }
-    final version = _previewVersion;
-    if (mounted) setState(() => _isLoadingPreview = true);
+    // Slider changes may be more frequent than image processing. Run at most
+    // one isolate at a time and immediately process only the newest values.
+    if (_isPreviewTaskRunning) return;
+    _isPreviewTaskRunning = true;
     try {
-      final result = await Isolate.run(
-        () => _processForPreview(<String, dynamic>{
-          'bytes': _proxyBytes!,
-          'contrast': _contrast,
-          'brightness': _brightness,
-          'sharpness': _sharpness,
-          'version': version,
-        }),
-      );
-      if (!mounted || result['version'] != _previewVersion) return;
-      _previewBytes.value = result['bytes'] as Uint8List;
+      var processedVersion = -1;
+      do {
+        final version = _previewVersion;
+        processedVersion = version;
+        final bytes = _proxyBytes!;
+        final contrast = _contrast;
+        final brightness = _brightness;
+        final sharpness = _sharpness;
+        final result = await Isolate.run(
+          () => _processForPreview(<String, dynamic>{
+            'bytes': bytes,
+            'contrast': contrast,
+            'brightness': brightness,
+            'sharpness': sharpness,
+            'version': version,
+          }),
+        );
+        if (!mounted) return;
+        if (result['version'] == _previewVersion) {
+          _previewBytes.value = result['bytes'] as Uint8List;
+        }
+      } while (mounted && processedVersion != _previewVersion);
     } catch (_) {
-      // Keep editing available if an individual effect cannot be rendered.
-      // The original image remains visible and applying changes still works.
-      if (mounted && version == _previewVersion) {
-        _previewBytes.value = _proxyBytes!;
-        _showError('تعذر إنشاء معاينة التعديلات؛ عُرضت الصورة الأصلية.');
+      // Never interrupt an editing gesture with an error banner. The previous
+      // valid preview remains on screen; the next slider change retries.
+      if (mounted && _previewBytes.value == null) {
+        _previewBytes.value = _proxyBytes;
       }
     } finally {
-      if (mounted && version == _previewVersion) {
-        setState(() => _isLoadingPreview = false);
-      }
+      _isPreviewTaskRunning = false;
+      if (mounted) setState(() => _isLoadingPreview = false);
     }
   }
 

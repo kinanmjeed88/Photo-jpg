@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:async';
 import 'dart:isolate';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
@@ -99,31 +100,225 @@ class SmartScanBatchResult {
   final bool wasCancelled;
 }
 
-cv.VecPoint _orderPoints(cv.VecPoint points) {
-  final source = List<cv.Point>.generate(4, (index) => points[index]);
-  final sums = source.map((point) => point.x + point.y).toList();
-  final diffs = source.map((point) => point.y - point.x).toList();
+/// A rectangular region proposed by the document detector.
+///
+/// This small value object keeps candidate de-duplication deterministic and
+/// makes the multi-document selection rule testable without camera plugins.
+class DocumentRegion {
+  const DocumentRegion({
+    required this.left,
+    required this.top,
+    required this.right,
+    required this.bottom,
+    required this.area,
+  });
 
-  int indexOfMin(List<int> values) =>
-      values.indexOf(values.reduce((a, b) => a < b ? a : b));
-  int indexOfMax(List<int> values) =>
-      values.indexOf(values.reduce((a, b) => a > b ? a : b));
+  final int left;
+  final int top;
+  final int right;
+  final int bottom;
+  final double area;
 
-  final topLeft = indexOfMin(sums);
-  final bottomRight = indexOfMax(sums);
-  final topRight = indexOfMin(diffs);
-  final bottomLeft = indexOfMax(diffs);
+  double get width => math.max(0, right - left).toDouble();
+  double get height => math.max(0, bottom - top).toDouble();
+  double get centerX => (left + right) / 2;
+  double get centerY => (top + bottom) / 2;
 
-  return cv.VecPoint.fromList(<cv.Point>[
-    source[topLeft],
-    source[topRight],
-    source[bottomRight],
-    source[bottomLeft],
-  ]);
+  @override
+  bool operator ==(Object other) =>
+      other is DocumentRegion &&
+      other.left == left &&
+      other.top == top &&
+      other.right == right &&
+      other.bottom == bottom &&
+      other.area == area;
+
+  @override
+  int get hashCode => Object.hash(left, top, right, bottom, area);
+}
+
+List<DocumentRegion> selectDistinctDocumentRegions(
+  Iterable<DocumentRegion> candidates,
+) {
+  final ordered = List<DocumentRegion>.of(candidates)
+    ..sort((first, second) => second.area.compareTo(first.area));
+  final selected = <DocumentRegion>[];
+  for (final candidate in ordered) {
+    if (selected.every(
+      (accepted) => !_isDuplicateRegion(candidate, accepted),
+    )) {
+      selected.add(candidate);
+    }
+  }
+  selected.sort((first, second) {
+    final vertical = first.top.compareTo(second.top);
+    return vertical != 0 ? vertical : first.left.compareTo(second.left);
+  });
+  return selected;
+}
+
+class _DocumentCandidate {
+  const _DocumentCandidate({
+    required this.points,
+    required this.area,
+    required this.width,
+    required this.height,
+    required this.left,
+    required this.top,
+    required this.right,
+    required this.bottom,
+  });
+
+  final List<cv.Point> points;
+  final double area;
+  final double width;
+  final double height;
+  final int left;
+  final int top;
+  final int right;
+  final int bottom;
+
+  double get centerX => (left + right) / 2;
+  double get centerY => (top + bottom) / 2;
+
+  DocumentRegion get region => DocumentRegion(
+    left: left,
+    top: top,
+    right: right,
+    bottom: bottom,
+    area: area,
+  );
+}
+
+List<cv.Point> _orderPoints(Iterable<cv.Point> points) {
+  final byVerticalPosition = List<cv.Point>.from(points)
+    ..sort((left, right) => left.y.compareTo(right.y));
+  final top = byVerticalPosition.take(2).toList()
+    ..sort((left, right) => left.x.compareTo(right.x));
+  final bottom = byVerticalPosition.skip(2).take(2).toList()
+    ..sort((left, right) => left.x.compareTo(right.x));
+  return <cv.Point>[top[0], top[1], bottom[1], bottom[0]];
 }
 
 int _clampInt(int value, int lower, int upper) =>
     value.clamp(lower, upper).toInt();
+
+double _distance(cv.Point first, cv.Point second) {
+  final deltaX = first.x - second.x;
+  final deltaY = first.y - second.y;
+  return math.sqrt((deltaX * deltaX) + (deltaY * deltaY));
+}
+
+double _polygonArea(List<cv.Point> points) {
+  var total = 0.0;
+  for (var index = 0; index < points.length; index++) {
+    final current = points[index];
+    final next = points[(index + 1) % points.length];
+    total += (current.x * next.y) - (next.x * current.y);
+  }
+  return total.abs() / 2;
+}
+
+_DocumentCandidate? _candidateFromContour(
+  cv.VecPoint contour, {
+  required double imageArea,
+}) {
+  final contourArea = cv.contourArea(contour);
+  if (contourArea < imageArea * 0.0125 || contourArea > imageArea * 0.9) {
+    return null;
+  }
+
+  cv.VecPoint? approximation;
+  try {
+    final perimeter = cv.arcLength(contour, true);
+    if (perimeter <= 0) return null;
+    approximation = cv.approxPolyDP(contour, 0.018 * perimeter, true);
+    List<cv.Point> points;
+    if (approximation.length == 4) {
+      points = _orderPoints(
+        List<cv.Point>.generate(4, (index) => approximation![index]),
+      );
+    } else {
+      final rectangle = cv.minAreaRect(contour);
+      final box = cv.boxPoints(rectangle);
+      try {
+        points = _orderPoints(<cv.Point>[
+          cv.Point(box[0].x.round(), box[0].y.round()),
+          cv.Point(box[1].x.round(), box[1].y.round()),
+          cv.Point(box[2].x.round(), box[2].y.round()),
+          cv.Point(box[3].x.round(), box[3].y.round()),
+        ]);
+      } finally {
+        box.dispose();
+      }
+    }
+
+    final quadrilateralArea = _polygonArea(points);
+    if (quadrilateralArea <= 0 || contourArea / quadrilateralArea < 0.5) {
+      return null;
+    }
+    final width = math.max(
+      _distance(points[0], points[1]),
+      _distance(points[2], points[3]),
+    );
+    final height = math.max(
+      _distance(points[1], points[2]),
+      _distance(points[3], points[0]),
+    );
+    if (width < 48 || height < 48) return null;
+    final aspectRatio = width > height ? width / height : height / width;
+    if (aspectRatio > 3.5) return null;
+
+    final horizontal = points.map((point) => point.x).toList();
+    final vertical = points.map((point) => point.y).toList();
+    return _DocumentCandidate(
+      points: points,
+      area: quadrilateralArea,
+      width: width,
+      height: height,
+      left: horizontal.reduce(math.min),
+      top: vertical.reduce(math.min),
+      right: horizontal.reduce(math.max),
+      bottom: vertical.reduce(math.max),
+    );
+  } finally {
+    approximation?.dispose();
+  }
+}
+
+bool _isDuplicateRegion(DocumentRegion candidate, DocumentRegion accepted) {
+  final intersectionWidth = math.max(
+    0,
+    math.min(candidate.right, accepted.right) -
+        math.max(candidate.left, accepted.left),
+  );
+  final intersectionHeight = math.max(
+    0,
+    math.min(candidate.bottom, accepted.bottom) -
+        math.max(candidate.top, accepted.top),
+  );
+  final intersectionArea = intersectionWidth * intersectionHeight;
+  final unionArea = candidate.area + accepted.area - intersectionArea;
+  if (unionArea > 0 && intersectionArea / unionArea >= 0.7) return true;
+
+  final centerDistance = math.sqrt(
+    math.pow(candidate.centerX - accepted.centerX, 2) +
+        math.pow(candidate.centerY - accepted.centerY, 2),
+  );
+  final shorterSide = math.min(
+    math.min(candidate.width, candidate.height),
+    math.min(accepted.width, accepted.height),
+  );
+  final areaRatio = candidate.area > accepted.area
+      ? candidate.area / accepted.area
+      : accepted.area / candidate.area;
+  return centerDistance < shorterSide * 0.15 && areaRatio < 1.35;
+}
+
+bool _isDuplicateCandidate(
+  _DocumentCandidate candidate,
+  _DocumentCandidate accepted,
+) => _isDuplicateRegion(candidate.region, accepted.region);
 
 Future<List<String>> _detectAndCropInIsolate(
   Map<String, dynamic> args, {
@@ -136,24 +331,53 @@ Future<List<String>> _detectAndCropInIsolate(
   cv.Mat? gray;
   cv.Mat? blurred;
   cv.Mat? edges;
+  cv.Mat? edgeClosed;
+  cv.Mat? threshold;
+  cv.Mat? thresholdClosed;
   cv.Mat? kernel;
-  cv.Mat? closed;
-  cv.Contours? contours;
-  cv.VecVec4i? hierarchy;
+  var candidates = <_DocumentCandidate>[];
   final results = <String>[];
-  final acceptedCenters = <(int, int)>[];
+
+  Future<bool> collectCandidates(cv.Mat image, double imageArea) async {
+    final contourResult = cv.findContours(
+      image,
+      cv.RETR_LIST,
+      cv.CHAIN_APPROX_SIMPLE,
+    );
+    final contours = contourResult.$1;
+    final hierarchy = contourResult.$2;
+    try {
+      var inspected = 0;
+      for (final contour in contours) {
+        if (isCancelled?.call() ?? false) return false;
+        // Let the worker control port process a cancellation while scanning a
+        // noisy camera frame without sacrificing all candidate contours.
+        if (inspected++ % 24 == 0) await Future<void>.delayed(Duration.zero);
+        final candidate = _candidateFromContour(contour, imageArea: imageArea);
+        if (candidate == null ||
+            candidates.any(
+              (accepted) => _isDuplicateCandidate(candidate, accepted),
+            )) {
+          continue;
+        }
+        candidates.add(candidate);
+      }
+      return !(isCancelled?.call() ?? false);
+    } finally {
+      contours.dispose();
+      hierarchy.dispose();
+    }
+  }
 
   try {
     source = cv.imdecode(File(imagePath).readAsBytesSync(), cv.IMREAD_COLOR);
     if (source.isEmpty) return results;
 
-    // Keep the vision workload bounded. A preview-sized working image is
-    // sufficient for document boundaries and prevents one large camera image
-    // from monopolising the smart-scan isolate.
+    // The isolated vision pass works on a bounded image for predictable
+    // latency. Candidate points remain in the same coordinate space used for
+    // the perspective crop below.
     const maximumAnalysisDimension = 1600;
-    final largestDimension = source.cols > source.rows
-        ? source.cols
-        : source.rows;
+    final largestDimension = math.max(source.cols, source.rows);
     if (largestDimension > maximumAnalysisDimension) {
       final scale = maximumAnalysisDimension / largestDimension;
       final resized = cv.resize(source, (0, 0), fx: scale, fy: scale);
@@ -163,98 +387,70 @@ Future<List<String>> _detectAndCropInIsolate(
 
     gray = cv.cvtColor(source, cv.COLOR_BGR2GRAY);
     blurred = cv.gaussianBlur(gray, (5, 5), 0);
-    edges = cv.canny(blurred, 40, 120);
-    kernel = cv.getStructuringElement(cv.MORPH_RECT, (9, 9));
-    closed = cv.morphologyEx(edges, cv.MORPH_CLOSE, kernel);
-    final contourResult = cv.findContours(
-      closed,
-      cv.RETR_LIST,
-      cv.CHAIN_APPROX_SIMPLE,
+    kernel = cv.getStructuringElement(cv.MORPH_RECT, (7, 7));
+    edges = cv.canny(blurred, 35, 110);
+    edgeClosed = cv.morphologyEx(edges, cv.MORPH_CLOSE, kernel);
+    threshold = cv.adaptiveThreshold(
+      gray,
+      255,
+      cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+      cv.THRESH_BINARY_INV,
+      31,
+      8,
     );
-    contours = contourResult.$1;
-    hierarchy = contourResult.$2;
+    thresholdClosed = cv.morphologyEx(threshold, cv.MORPH_CLOSE, kernel);
     final imageArea = (source.rows * source.cols).toDouble();
 
-    var inspectedContours = 0;
-    for (final contour in contours) {
+    if (!await collectCandidates(edgeClosed, imageArea) ||
+        !await collectCandidates(thresholdClosed, imageArea)) {
+      return results;
+    }
+
+    final regions = selectDistinctDocumentRegions(
+      candidates.map((candidate) => candidate.region),
+    );
+    final candidatesByRegion = <DocumentRegion, _DocumentCandidate>{
+      for (final candidate in candidates) candidate.region: candidate,
+    };
+    candidates = regions
+        .map((region) => candidatesByRegion[region])
+        .whereType<_DocumentCandidate>()
+        .toList(growable: false);
+
+    for (final candidate in candidates) {
       if (isCancelled?.call() ?? false) return results;
-      // Yield between contours so the control port can deliver cancellation.
-      await Future<void>.delayed(Duration.zero);
-      if (isCancelled?.call() ?? false) return results;
-      // The largest useful document outlines occur early in this contour list.
-      // A hard upper bound preserves interactive response for noisy photos.
-      if (inspectedContours++ >= 120 || results.length >= 4) break;
-      cv.VecPoint? approximation;
-      cv.VecPoint? ordered;
       cv.VecPoint? sourcePoints;
       cv.VecPoint? destinationPoints;
       cv.Mat? transform;
       cv.Mat? warped;
       try {
-        final area = cv.contourArea(contour);
-        if (area < imageArea * 0.035 || area > imageArea * 0.92) continue;
-
-        final perimeter = cv.arcLength(contour, true);
-        approximation = cv.approxPolyDP(contour, 0.02 * perimeter, true);
-        if (approximation.length == 4) {
-          ordered = _orderPoints(approximation);
-        } else {
-          final rectangle = cv.minAreaRect(contour);
-          final box = cv.boxPoints(rectangle);
-          final boxPoints = cv.VecPoint.fromList(<cv.Point>[
-            cv.Point(box[0].x.round(), box[0].y.round()),
-            cv.Point(box[1].x.round(), box[1].y.round()),
-            cv.Point(box[2].x.round(), box[2].y.round()),
-            cv.Point(box[3].x.round(), box[3].y.round()),
-          ]);
-          ordered = _orderPoints(boxPoints);
-          boxPoints.dispose();
-        }
-
-        final points = List<cv.Point>.generate(4, (index) => ordered![index]);
-        final centerX = (points.fold<int>(0, (sum, point) => sum + point.x) / 4)
-            .round();
-        final centerY = (points.fold<int>(0, (sum, point) => sum + point.y) / 4)
-            .round();
-        final duplicate = acceptedCenters.any((center) {
-          final deltaX = center.$1 - centerX;
-          final deltaY = center.$2 - centerY;
-          return deltaX * deltaX + deltaY * deltaY < 2500;
-        });
-        if (duplicate) continue;
-
-        final widthTop = (points[1].x - points[0].x).abs();
-        final widthBottom = (points[2].x - points[3].x).abs();
-        final heightRight = (points[2].y - points[1].y).abs();
-        final heightLeft = (points[3].y - points[0].y).abs();
-        final width = widthTop > widthBottom ? widthTop : widthBottom;
-        final height = heightRight > heightLeft ? heightRight : heightLeft;
-        if (width < 32 || height < 32) continue;
-
-        final ratio = width > height ? width / height : height / width;
-        if (ratio > 3.5) continue;
-
-        const padding = 10;
+        const padding = 8;
         final padded = <cv.Point>[
           cv.Point(
-            _clampInt(points[0].x - padding, 0, source.cols - 1),
-            _clampInt(points[0].y - padding, 0, source.rows - 1),
+            _clampInt(candidate.points[0].x - padding, 0, source.cols - 1),
+            _clampInt(candidate.points[0].y - padding, 0, source.rows - 1),
           ),
           cv.Point(
-            _clampInt(points[1].x + padding, 0, source.cols - 1),
-            _clampInt(points[1].y - padding, 0, source.rows - 1),
+            _clampInt(candidate.points[1].x + padding, 0, source.cols - 1),
+            _clampInt(candidate.points[1].y - padding, 0, source.rows - 1),
           ),
           cv.Point(
-            _clampInt(points[2].x + padding, 0, source.cols - 1),
-            _clampInt(points[2].y + padding, 0, source.rows - 1),
+            _clampInt(candidate.points[2].x + padding, 0, source.cols - 1),
+            _clampInt(candidate.points[2].y + padding, 0, source.rows - 1),
           ),
           cv.Point(
-            _clampInt(points[3].x - padding, 0, source.cols - 1),
-            _clampInt(points[3].y + padding, 0, source.rows - 1),
+            _clampInt(candidate.points[3].x - padding, 0, source.cols - 1),
+            _clampInt(candidate.points[3].y + padding, 0, source.rows - 1),
           ),
         ];
-        final outputWidth = width + padding * 2;
-        final outputHeight = height + padding * 2;
+        final outputWidth = math.max(
+          48,
+          (candidate.width + padding * 2).round(),
+        );
+        final outputHeight = math.max(
+          48,
+          (candidate.height + padding * 2).round(),
+        );
         sourcePoints = cv.VecPoint.fromList(padded);
         destinationPoints = cv.VecPoint.fromList(<cv.Point>[
           cv.Point(0, 0),
@@ -267,16 +463,10 @@ Future<List<String>> _detectAndCropInIsolate(
           outputWidth,
           outputHeight,
         ));
-
         final outputPath =
             '$tempPath/${TemporaryImageStore.uniqueJpegName('smart_cropped_', suffix: '-$jobId-${results.length}')}';
-        if (cv.imwrite(outputPath, warped)) {
-          results.add(outputPath);
-          acceptedCenters.add((centerX, centerY));
-        }
+        if (cv.imwrite(outputPath, warped)) results.add(outputPath);
       } finally {
-        approximation?.dispose();
-        ordered?.dispose();
         sourcePoints?.dispose();
         destinationPoints?.dispose();
         transform?.dispose();
@@ -290,10 +480,10 @@ Future<List<String>> _detectAndCropInIsolate(
     gray?.dispose();
     blurred?.dispose();
     edges?.dispose();
+    edgeClosed?.dispose();
+    threshold?.dispose();
+    thresholdClosed?.dispose();
     kernel?.dispose();
-    closed?.dispose();
-    contours?.dispose();
-    hierarchy?.dispose();
   }
   return results;
 }

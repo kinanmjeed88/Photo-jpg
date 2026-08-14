@@ -437,8 +437,8 @@ class ScannedDocumentsNotifier
           )
         : _fitSize(
             aspectRatio: aspectRatio,
-            maxWidth: AppConstants.kVirtualCanvasWidth - (_margin * 2),
-            maxHeight: AppConstants.kVirtualCanvasHeight - (_margin * 2),
+            maxWidth: AppConstants.kA4GuideWidth,
+            maxHeight: AppConstants.kA4GuideHeight,
           );
     return ScannedDocument(
       file: input.file,
@@ -451,11 +451,9 @@ class ScannedDocumentsNotifier
     );
   }
 
-  double get _gridCellWidth =>
-      (AppConstants.kVirtualCanvasWidth - (_margin * 2) - _margin) / 2;
+  double get _gridCellWidth => (AppConstants.kA4GuideWidth - _margin) / 2;
 
-  double get _gridCellHeight =>
-      (AppConstants.kVirtualCanvasHeight - (_margin * 3)) / 2;
+  double get _gridCellHeight => (AppConstants.kA4GuideHeight - _margin) / 2;
 
   (double, double) _fitSize({
     required double aspectRatio,
@@ -476,8 +474,12 @@ class ScannedDocumentsNotifier
 
   ScannedDocument _centerOnPage(ScannedDocument document) {
     return document.copyWith(
-      dx: (AppConstants.kVirtualCanvasWidth - document.width) / 2,
-      dy: (AppConstants.kVirtualCanvasHeight - document.height) / 2,
+      dx:
+          AppConstants.kA4GuideLeft +
+          ((AppConstants.kA4GuideWidth - document.width) / 2),
+      dy:
+          AppConstants.kA4GuideTop +
+          ((AppConstants.kA4GuideHeight - document.height) / 2),
     );
   }
 
@@ -487,8 +489,10 @@ class ScannedDocumentsNotifier
   ) {
     final column = slotIndex % 2;
     final row = slotIndex ~/ 2;
-    final cellLeft = _margin + (column * (_gridCellWidth + _margin));
-    final cellTop = _margin + (row * (_gridCellHeight + _margin));
+    final cellLeft =
+        AppConstants.kA4GuideLeft + (column * (_gridCellWidth + _margin));
+    final cellTop =
+        AppConstants.kA4GuideTop + (row * (_gridCellHeight + _margin));
     return document.copyWith(
       dx: cellLeft + ((_gridCellWidth - document.width) / 2),
       dy: cellTop + ((_gridCellHeight - document.height) / 2),

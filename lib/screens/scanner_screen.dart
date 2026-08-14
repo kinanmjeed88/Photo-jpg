@@ -407,11 +407,12 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     final centerY = document.dy + document.height / 2;
     final width = document.height;
     final height = document.width;
+    final inset = AppConstants.kA4PreviewInset;
     final dx = (centerX - width / 2)
-        .clamp(0, AppConstants.kVirtualCanvasWidth - width)
+        .clamp(inset, AppConstants.kVirtualCanvasWidth - inset - width)
         .toDouble();
     final dy = (centerY - height / 2)
-        .clamp(0, AppConstants.kVirtualCanvasHeight - height)
+        .clamp(inset, AppConstants.kVirtualCanvasHeight - inset - height)
         .toDouble();
     ref
         .read(scannedDocumentsProvider.notifier)
@@ -437,18 +438,21 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     final ratio = document.originalHeight == 0
         ? 1.0
         : document.originalWidth / document.originalHeight;
-    var width = AppConstants.kVirtualCanvasWidth;
+    final inset = AppConstants.kA4PreviewInset;
+    final availableWidth = AppConstants.kVirtualCanvasWidth - (inset * 2);
+    final availableHeight = AppConstants.kVirtualCanvasHeight - (inset * 2);
+    var width = availableWidth;
     var height = width / ratio;
-    if (height > AppConstants.kVirtualCanvasHeight) {
-      height = AppConstants.kVirtualCanvasHeight;
+    if (height > availableHeight) {
+      height = availableHeight;
       width = height * ratio;
     }
     ref
         .read(scannedDocumentsProvider.notifier)
         .updateDocumentLayout(
           id,
-          dx: (AppConstants.kVirtualCanvasWidth - width) / 2,
-          dy: (AppConstants.kVirtualCanvasHeight - height) / 2,
+          dx: inset + ((availableWidth - width) / 2),
+          dy: inset + ((availableHeight - height) / 2),
           width: width,
           height: height,
           rotationAngle: document.rotationAngle,
@@ -479,9 +483,10 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
           .keys
           .reduce((a, b) => a > b ? a : b);
     }
+    final inset = AppConstants.kA4PreviewInset;
     final adjustedY = movingUp
-        ? AppConstants.kVirtualCanvasHeight - location.document.height
-        : 0.0;
+        ? AppConstants.kVirtualCanvasHeight - inset - location.document.height
+        : inset;
     ref
         .read(scannedDocumentsProvider.notifier)
         .moveDocument(
@@ -489,8 +494,10 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
           targetPageIndex: targetPage,
           dx: dx
               .clamp(
-                0,
-                AppConstants.kVirtualCanvasWidth - location.document.width,
+                inset,
+                AppConstants.kVirtualCanvasWidth -
+                    inset -
+                    location.document.width,
               )
               .toDouble(),
           dy: adjustedY,
@@ -653,41 +660,90 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
                     height: AppConstants.kVirtualCanvasHeight,
                     child: Stack(
                       clipBehavior: Clip.hardEdge,
-                      children: documents
-                          .map(
-                            (document) => DraggableResizableDocument(
-                              key: ValueKey(document.id),
-                              document: document,
-                              isSelected: document.id == _selectedDocumentId,
-                              addFrame: appState.addFrame,
-                              canvasWidth: AppConstants.kVirtualCanvasWidth,
-                              canvasHeight: AppConstants.kVirtualCanvasHeight,
-                              canvasScale: canvasScale,
-                              onTap: _selectDocument,
-                              onLayoutUpdate: (id, dx, dy, scale) {
-                                final current = ref
-                                    .read(scannedDocumentsProvider.notifier)
-                                    .findDocument(id);
-                                if (current == null) return;
-                                ref
-                                    .read(scannedDocumentsProvider.notifier)
-                                    .updateDocumentLayout(
-                                      id,
-                                      dx: dx,
-                                      dy: dy,
-                                      width: current.document.width,
-                                      height: current.document.height,
-                                      rotationAngle:
-                                          current.document.rotationAngle,
-                                      scale: scale,
-                                    );
-                              },
-                              onCrossPageMove: _moveCrossPage,
-                              onGestureStart: () =>
-                                  _selectDocument(document.id),
+                      children: <Widget>[
+                        ...documents.map(
+                          (document) => DraggableResizableDocument(
+                            key: ValueKey(document.id),
+                            document: document,
+                            isSelected: document.id == _selectedDocumentId,
+                            addFrame: appState.addFrame,
+                            canvasWidth: AppConstants.kVirtualCanvasWidth,
+                            canvasHeight: AppConstants.kVirtualCanvasHeight,
+                            canvasGuide: const Rect.fromLTWH(
+                              AppConstants.kA4GuideLeft,
+                              AppConstants.kA4GuideTop,
+                              AppConstants.kA4GuideWidth,
+                              AppConstants.kA4GuideHeight,
                             ),
-                          )
-                          .toList(growable: false),
+                            canvasScale: canvasScale,
+                            onTap: _selectDocument,
+                            onLayoutUpdate: (id, dx, dy, scale) {
+                              final current = ref
+                                  .read(scannedDocumentsProvider.notifier)
+                                  .findDocument(id);
+                              if (current == null) return;
+                              ref
+                                  .read(scannedDocumentsProvider.notifier)
+                                  .updateDocumentLayout(
+                                    id,
+                                    dx: dx,
+                                    dy: dy,
+                                    width: current.document.width,
+                                    height: current.document.height,
+                                    rotationAngle:
+                                        current.document.rotationAngle,
+                                    scale: scale,
+                                  );
+                            },
+                            onCrossPageMove: _moveCrossPage,
+                            onGestureStart: () => _selectDocument(document.id),
+                          ),
+                        ),
+                        Positioned(
+                          top: AppConstants.kA4GuideTop,
+                          left: AppConstants.kA4GuideLeft,
+                          width: AppConstants.kA4GuideWidth,
+                          height: AppConstants.kA4GuideHeight,
+                          child: IgnorePointer(
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                border: Border.all(
+                                  color: Colors.indigo.withValues(alpha: 0.72),
+                                  width: 1.5,
+                                ),
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                              child: const SizedBox.expand(),
+                            ),
+                          ),
+                        ),
+                        Positioned(
+                          top: AppConstants.kA4GuideTop + 4,
+                          left: AppConstants.kA4GuideLeft + 4,
+                          child: IgnorePointer(
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.86),
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                              child: const Padding(
+                                padding: EdgeInsets.symmetric(
+                                  horizontal: 5,
+                                  vertical: 2,
+                                ),
+                                child: Text(
+                                  'A4',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color: Colors.indigo,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),

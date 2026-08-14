@@ -14,6 +14,7 @@ class DraggableResizableDocument extends StatefulWidget {
     required this.addFrame,
     required this.canvasWidth,
     required this.canvasHeight,
+    required this.canvasGuide,
     required this.canvasScale,
     required this.onTap,
     required this.onLayoutUpdate,
@@ -27,6 +28,7 @@ class DraggableResizableDocument extends StatefulWidget {
   final bool addFrame;
   final double canvasWidth;
   final double canvasHeight;
+  final Rect canvasGuide;
   final double canvasScale;
   final ValueChanged<String> onTap;
   final void Function(String documentId, double dx, double dy, double scale)
@@ -93,24 +95,28 @@ class _DraggableResizableDocumentState
         .toDouble();
     final scaledWidth = widget.document.width * proposedScale;
     final scaledHeight = widget.document.height * proposedScale;
-    final maxX = math.max(0, widget.canvasWidth - scaledWidth);
-    final maxY = math.max(0, widget.canvasHeight - scaledHeight);
+    final minX = widget.canvasGuide.left;
+    final maxX = math.max(minX, widget.canvasGuide.right - scaledWidth);
+    final minY = widget.canvasGuide.top;
+    final maxY = math.max(minY, widget.canvasGuide.bottom - scaledHeight);
     final dragOffset = details.focalPoint - _startFocalPoint;
     setState(() {
       _scale = proposedScale;
       _dx = (_startDx + dragOffset.dx / widget.canvasScale)
-          .clamp(0, maxX)
+          .clamp(minX, maxX)
           .toDouble();
+      // A short vertical overscroll is intentional: releasing it transfers the
+      // document to the adjacent A4 page rather than leaving it outside.
       _dy = (_startDy + dragOffset.dy / widget.canvasScale)
-          .clamp(-scaledHeight * 0.2, maxY + scaledHeight * 0.2)
+          .clamp(minY - scaledHeight * 0.2, maxY + scaledHeight * 0.2)
           .toDouble();
     });
     _emitLayout();
   }
 
   void _endTransform() {
-    if (_dy < 0 ||
-        _dy + widget.document.height * _scale > widget.canvasHeight) {
+    if (_dy < widget.canvasGuide.top ||
+        _dy + widget.document.height * _scale > widget.canvasGuide.bottom) {
       widget.onCrossPageMove(widget.document.id, _dx, _dy);
     } else {
       _emitLayout();
@@ -133,13 +139,35 @@ class _DraggableResizableDocumentState
       0.3,
       3.0,
     );
-    final maxScaleX = widget.canvasWidth / widget.document.width;
-    final maxScaleY = widget.canvasHeight / widget.document.height;
+    final maxScaleX = widget.canvasGuide.width / widget.document.width;
+    final maxScaleY = widget.canvasGuide.height / widget.document.height;
     final boundedScale = math.min(
       proposedScale,
       math.min(maxScaleX, maxScaleY),
     );
-    setState(() => _scale = boundedScale);
+    final scaledWidth = widget.document.width * boundedScale;
+    final scaledHeight = widget.document.height * boundedScale;
+    setState(() {
+      _scale = boundedScale;
+      _dx = _dx
+          .clamp(
+            widget.canvasGuide.left,
+            math.max(
+              widget.canvasGuide.left,
+              widget.canvasGuide.right - scaledWidth,
+            ),
+          )
+          .toDouble();
+      _dy = _dy
+          .clamp(
+            widget.canvasGuide.top,
+            math.max(
+              widget.canvasGuide.top,
+              widget.canvasGuide.bottom - scaledHeight,
+            ),
+          )
+          .toDouble();
+    });
     _emitLayout();
   }
 

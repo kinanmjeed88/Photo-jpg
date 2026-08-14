@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:doc_scanner_app/constants/app_constants.dart';
 import 'package:doc_scanner_app/providers/app_state.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -116,10 +117,20 @@ void main() {
         );
         expect(documents[0].dy, closeTo(documents[1].dy, 0.001));
         for (final document in documents) {
-          expect(document.dx, greaterThanOrEqualTo(0));
-          expect(document.dy, greaterThanOrEqualTo(0));
-          expect(document.dx + document.width, lessThanOrEqualTo(400));
-          expect(document.dy + document.height, lessThanOrEqualTo(565.6));
+          expect(document.dx, greaterThanOrEqualTo(AppConstants.kA4GuideLeft));
+          expect(document.dy, greaterThanOrEqualTo(AppConstants.kA4GuideTop));
+          expect(
+            document.dx + document.width,
+            lessThanOrEqualTo(
+              AppConstants.kA4GuideLeft + AppConstants.kA4GuideWidth,
+            ),
+          );
+          expect(
+            document.dy + document.height,
+            lessThanOrEqualTo(
+              AppConstants.kA4GuideTop + AppConstants.kA4GuideHeight,
+            ),
+          );
         }
       },
     );
