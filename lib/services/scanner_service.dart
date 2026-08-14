@@ -1,68 +1,111 @@
 import 'dart:io';
 import 'dart:isolate';
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:image/image.dart' as img;
-import 'package:opencv_dart/opencv_dart.dart' as cv;
-import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
-import 'package:path_provider/path_provider.dart';
-import '../providers/app_state.dart';
+import 'dart:typed_data';
 
-class RectModel {
-  final int left, top, right, bottom;
-  RectModel(this.left, this.top, this.right, this.bottom);
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import 'package:image/image.dart' as img;
+import 'package:image_picker/image_picker.dart';
+import 'package:opencv_dart/opencv_dart.dart' as cv;
+import 'package:path_provider/path_provider.dart';
+
+import '../providers/app_state.dart';
+import 'temporary_image_store.dart';
+
+enum SmartScanStatus { succeeded, manualReviewRequired, failed, cancelled }
+
+class ScanCancellationToken {
+  bool _isCancelled = false;
+
+  bool get isCancelled => _isCancelled;
+
+  void cancel() => _isCancelled = true;
 }
 
-cv.VecPoint _orderPoints(cv.VecPoint pts) {
-  // We expect 4 points.
-  var p0 = pts[0];
-  var p1 = pts[1];
-  var p2 = pts[2];
-  var p3 = pts[3];
+class DocumentClassification {
+  const DocumentClassification({
+    required this.type,
+    required this.normalizedText,
+    required this.confidence,
+    required this.reason,
+    required this.requiresManualReview,
+  });
 
-  List<cv.Point> points = [p0, p1, p2, p3];
+  final DocumentType type;
+  final String normalizedText;
+  final double confidence;
+  final String reason;
+  final bool requiresManualReview;
 
-  var sum = points.map((p) => p.x + p.y).toList();
-  var diff = points.map((p) => p.y - p.x).toList();
+  static const unknown = DocumentClassification(
+    type: DocumentType.unknown,
+    normalizedText: '',
+    confidence: 0,
+    reason: 'لم يُحسم نوع المستند تلقائياً.',
+    requiresManualReview: true,
+  );
+}
 
-  var tlIndex = 0, brIndex = 0, trIndex = 0, blIndex = 0;
-  var minSum = sum[0], maxSum = sum[0], minDiff = diff[0], maxDiff = diff[0];
+class SmartScanResult {
+  const SmartScanResult({
+    required this.source,
+    required this.files,
+    required this.classification,
+    required this.status,
+    required this.message,
+  });
 
-  for (var i = 1; i < 4; i++) {
-    if (sum[i] < minSum) {
-      minSum = sum[i];
-      tlIndex = i;
-    }
-    if (sum[i] > maxSum) {
-      maxSum = sum[i];
-      brIndex = i;
-    }
-    if (diff[i] < minDiff) {
-      minDiff = diff[i];
-      trIndex = i;
-    }
-    if (diff[i] > maxDiff) {
-      maxDiff = diff[i];
-      blIndex = i;
-    }
-  }
+  final File source;
+  final List<File> files;
+  final DocumentClassification classification;
+  final SmartScanStatus status;
+  final String message;
 
-  return cv.VecPoint.fromList([
-    points[tlIndex],
-    points[trIndex],
-    points[brIndex],
-    points[blIndex],
+  bool get requiresManualFallback =>
+      status == SmartScanStatus.manualReviewRequired ||
+      status == SmartScanStatus.failed ||
+      classification.requiresManualReview;
+}
+
+class SmartScanBatchResult {
+  const SmartScanBatchResult({
+    required this.results,
+    required this.wasCancelled,
+  });
+
+  final Map<File, SmartScanResult> results;
+  final bool wasCancelled;
+}
+
+cv.VecPoint _orderPoints(cv.VecPoint points) {
+  final source = List<cv.Point>.generate(4, (index) => points[index]);
+  final sums = source.map((point) => point.x + point.y).toList();
+  final diffs = source.map((point) => point.y - point.x).toList();
+
+  int indexOfMin(List<int> values) =>
+      values.indexOf(values.reduce((a, b) => a < b ? a : b));
+  int indexOfMax(List<int> values) =>
+      values.indexOf(values.reduce((a, b) => a > b ? a : b));
+
+  final topLeft = indexOfMin(sums);
+  final bottomRight = indexOfMax(sums);
+  final topRight = indexOfMin(diffs);
+  final bottomLeft = indexOfMax(diffs);
+
+  return cv.VecPoint.fromList(<cv.Point>[
+    source[topLeft],
+    source[topRight],
+    source[bottomRight],
+    source[bottomLeft],
   ]);
 }
 
-Future<List<File>> _isolateProcessSmartCVLayer(
-  Map<String, dynamic> args,
-) async {
-  final String tempPath = args['tempPath'] as String;
-  final String imagePath = args['imagePath'] as String;
-  cv.Mat? src;
-  cv.Mat? srcClone;
+int _clampInt(int value, int lower, int upper) =>
+    value.clamp(lower, upper).toInt();
+
+List<String> _detectAndCropInIsolate(Map<String, String> args) {
+  final imagePath = args['imagePath']!;
+  final tempPath = args['tempPath']!;
+  cv.Mat? source;
   cv.Mat? gray;
   cv.Mat? blurred;
   cv.Mat? edges;
@@ -70,161 +113,131 @@ Future<List<File>> _isolateProcessSmartCVLayer(
   cv.Mat? closed;
   cv.Contours? contours;
   cv.VecVec4i? hierarchy;
-  List<File> croppedFiles = [];
-  List<List<int>> croppedCenters = [];
-  int count = 0;
+  final results = <String>[];
+  final acceptedCenters = <(int, int)>[];
 
   try {
-    final bytes = File(imagePath).readAsBytesSync();
-    src = cv.imdecode(bytes, cv.IMREAD_COLOR);
-    if (src.isEmpty) return [];
-    srcClone = src.clone();
-    gray = cv.cvtColor(srcClone, cv.COLOR_BGR2GRAY);
-    blurred = cv.gaussianBlur(gray, (7, 7), 0);
-    edges = cv.canny(blurred, 30, 100);
-    kernel = cv.getStructuringElement(cv.MORPH_RECT, (11, 11));
+    source = cv.imdecode(File(imagePath).readAsBytesSync(), cv.IMREAD_COLOR);
+    if (source.isEmpty) return results;
+
+    gray = cv.cvtColor(source, cv.COLOR_BGR2GRAY);
+    blurred = cv.gaussianBlur(gray, (5, 5), 0);
+    edges = cv.canny(blurred, 40, 120);
+    kernel = cv.getStructuringElement(cv.MORPH_RECT, (9, 9));
     closed = cv.morphologyEx(edges, cv.MORPH_CLOSE, kernel);
-    final (conts, hier) = cv.findContours(
+    final contourResult = cv.findContours(
       closed,
       cv.RETR_LIST,
       cv.CHAIN_APPROX_SIMPLE,
     );
-    contours = conts;
-    hierarchy = hier;
-    double imageArea = (gray.rows * gray.cols).toDouble();
+    contours = contourResult.$1;
+    hierarchy = contourResult.$2;
+    final imageArea = (source.rows * source.cols).toDouble();
 
-    for (var contour in contours) {
-      final area = cv.contourArea(contour);
-      if (area < imageArea * 0.03 || area > imageArea * 0.85) continue;
-      final double peri = cv.arcLength(contour, true);
-      final cv.VecPoint approx = cv.approxPolyDP(contour, 0.02 * peri, true);
-      cv.VecPoint? orderedPts;
-      bool isValidShape = false;
-
+    for (final contour in contours) {
+      cv.VecPoint? approximation;
+      cv.VecPoint? ordered;
+      cv.VecPoint? sourcePoints;
+      cv.VecPoint? destinationPoints;
+      cv.Mat? transform;
+      cv.Mat? warped;
       try {
-        if (approx.length == 4) {
-          orderedPts = _orderPoints(approx);
-          isValidShape = true;
+        final area = cv.contourArea(contour);
+        if (area < imageArea * 0.035 || area > imageArea * 0.92) continue;
+
+        final perimeter = cv.arcLength(contour, true);
+        approximation = cv.approxPolyDP(contour, 0.02 * perimeter, true);
+        if (approximation.length == 4) {
+          ordered = _orderPoints(approximation);
         } else {
-          final rect = cv.minAreaRect(contour);
-          final boxPts = cv.boxPoints(rect);
-          final ptsList = [
-            cv.Point(boxPts[0].x.toInt(), boxPts[0].y.toInt()),
-            cv.Point(boxPts[1].x.toInt(), boxPts[1].y.toInt()),
-            cv.Point(boxPts[2].x.toInt(), boxPts[2].y.toInt()),
-            cv.Point(boxPts[3].x.toInt(), boxPts[3].y.toInt()),
-          ];
-          final tempVec = cv.VecPoint.fromList(ptsList);
-          orderedPts = _orderPoints(tempVec);
-          tempVec.dispose();
-          isValidShape = true;
+          final rectangle = cv.minAreaRect(contour);
+          final box = cv.boxPoints(rectangle);
+          final boxPoints = cv.VecPoint.fromList(<cv.Point>[
+            cv.Point(box[0].x.round(), box[0].y.round()),
+            cv.Point(box[1].x.round(), box[1].y.round()),
+            cv.Point(box[2].x.round(), box[2].y.round()),
+            cv.Point(box[3].x.round(), box[3].y.round()),
+          ]);
+          ordered = _orderPoints(boxPoints);
+          boxPoints.dispose();
         }
 
-        if (isValidShape && orderedPts != null) {
-          final minRect = cv.minAreaRect(contour);
-          double w = minRect.size.width;
-          double h = minRect.size.height;
-          double maxDim = w > h ? w : h;
-          double minDim = w < h ? w : h;
-          double ratio = minDim > 0 ? maxDim / minDim : 0;
+        final points = List<cv.Point>.generate(4, (index) => ordered![index]);
+        final centerX = (points.fold<int>(0, (sum, point) => sum + point.x) / 4)
+            .round();
+        final centerY = (points.fold<int>(0, (sum, point) => sum + point.y) / 4)
+            .round();
+        final duplicate = acceptedCenters.any((center) {
+          final deltaX = center.$1 - centerX;
+          final deltaY = center.$2 - centerY;
+          return deltaX * deltaX + deltaY * deltaY < 2500;
+        });
+        if (duplicate) continue;
 
-          if (ratio >= 0.8 && ratio <= 2.5) {
-            var p0 = orderedPts[0];
-            var p1 = orderedPts[1];
-            var p2 = orderedPts[2];
-            var p3 = orderedPts[3];
-            int cx = ((p0.x + p1.x + p2.x + p3.x) / 4).toInt();
-            int cy = ((p0.y + p1.y + p2.y + p3.y) / 4).toInt();
+        final widthTop = (points[1].x - points[0].x).abs();
+        final widthBottom = (points[2].x - points[3].x).abs();
+        final heightRight = (points[2].y - points[1].y).abs();
+        final heightLeft = (points[3].y - points[0].y).abs();
+        final width = widthTop > widthBottom ? widthTop : widthBottom;
+        final height = heightRight > heightLeft ? heightRight : heightLeft;
+        if (width < 32 || height < 32) continue;
 
-            bool isDuplicate = false;
-            for (var center in croppedCenters) {
-              int dx = cx - center[0];
-              int dy = cy - center[1];
-              double distance = (dx * dx + dy * dy).toDouble();
-              if (distance < 2500) {
-                isDuplicate = true;
-                break;
-              }
-            }
-            if (isDuplicate) continue;
-            croppedCenters.add([cx, cy]);
+        final ratio = width > height ? width / height : height / width;
+        if (ratio > 3.5) continue;
 
-            int widthA = (p2.x - p3.x).abs();
-            int widthB = (p1.x - p0.x).abs();
-            int maxWidth = widthA > widthB ? widthA : widthB;
-            int heightA = (p1.y - p2.y).abs();
-            int heightB = (p0.y - p3.y).abs();
-            int maxHeight = heightA > heightB ? heightA : heightB;
-            if (maxWidth < 10 || maxHeight < 10) continue;
+        const padding = 10;
+        final padded = <cv.Point>[
+          cv.Point(
+            _clampInt(points[0].x - padding, 0, source.cols - 1),
+            _clampInt(points[0].y - padding, 0, source.rows - 1),
+          ),
+          cv.Point(
+            _clampInt(points[1].x + padding, 0, source.cols - 1),
+            _clampInt(points[1].y - padding, 0, source.rows - 1),
+          ),
+          cv.Point(
+            _clampInt(points[2].x + padding, 0, source.cols - 1),
+            _clampInt(points[2].y + padding, 0, source.rows - 1),
+          ),
+          cv.Point(
+            _clampInt(points[3].x - padding, 0, source.cols - 1),
+            _clampInt(points[3].y + padding, 0, source.rows - 1),
+          ),
+        ];
+        final outputWidth = width + padding * 2;
+        final outputHeight = height + padding * 2;
+        sourcePoints = cv.VecPoint.fromList(padded);
+        destinationPoints = cv.VecPoint.fromList(<cv.Point>[
+          cv.Point(0, 0),
+          cv.Point(outputWidth - 1, 0),
+          cv.Point(outputWidth - 1, outputHeight - 1),
+          cv.Point(0, outputHeight - 1),
+        ]);
+        transform = cv.getPerspectiveTransform(sourcePoints, destinationPoints);
+        warped = cv.warpPerspective(source, transform, (
+          outputWidth,
+          outputHeight,
+        ));
 
-            // Expand bounding box by +20 pixels (10px padding on all sides) BEFORE warpPerspective
-            // Clamping against source bounds
-            int pad = 10;
-            int srcW = srcClone!.cols;
-            int srcH = srcClone.rows;
-
-            p0 = cv.Point(
-              (p0.x - pad).clamp(0, srcW - 1),
-              (p0.y - pad).clamp(0, srcH - 1),
-            );
-            p1 = cv.Point(
-              (p1.x + pad).clamp(0, srcW - 1),
-              (p1.y - pad).clamp(0, srcH - 1),
-            );
-            p2 = cv.Point(
-              (p2.x + pad).clamp(0, srcW - 1),
-              (p2.y + pad).clamp(0, srcH - 1),
-            );
-            p3 = cv.Point(
-              (p3.x - pad).clamp(0, srcW - 1),
-              (p3.y + pad).clamp(0, srcH - 1),
-            );
-
-            final paddedOrderedPts = cv.VecPoint.fromList([p0, p1, p2, p3]);
-
-            int paddedMaxWidth = maxWidth + 2 * pad;
-            int paddedMaxHeight = maxHeight + 2 * pad;
-
-            final dstPts = cv.VecPoint.fromList([
-              cv.Point(0, 0),
-              cv.Point(paddedMaxWidth - 1, 0),
-              cv.Point(paddedMaxWidth - 1, paddedMaxHeight - 1),
-              cv.Point(0, paddedMaxHeight - 1),
-            ]);
-            final transMat = cv.getPerspectiveTransform(
-              paddedOrderedPts,
-              dstPts,
-            );
-            final warped = cv.warpPerspective(srcClone, transMat, (
-              paddedMaxWidth,
-              paddedMaxHeight,
-            ));
-
-            String suffix = '_ID'; // Default suffix
-            final croppedPath =
-                '$tempPath/smart_cropped_${DateTime.now().millisecondsSinceEpoch}_${count}$suffix.jpg';
-
-            cv.imwrite(croppedPath, warped);
-            croppedFiles.add(File(croppedPath));
-            warped.dispose();
-            transMat.dispose();
-            dstPts.dispose();
-            paddedOrderedPts.dispose();
-            count++;
-          }
+        final outputPath =
+            '$tempPath/${TemporaryImageStore.uniqueJpegName('smart_cropped_', suffix: '-${results.length}')}';
+        if (cv.imwrite(outputPath, warped)) {
+          results.add(outputPath);
+          acceptedCenters.add((centerX, centerY));
         }
       } finally {
-        orderedPts?.dispose();
-        approx.dispose();
+        approximation?.dispose();
+        ordered?.dispose();
+        sourcePoints?.dispose();
+        destinationPoints?.dispose();
+        transform?.dispose();
+        warped?.dispose();
       }
     }
-    return croppedFiles;
-  } catch (e) {
-    print('Smart CV Layer failed: $e');
-    return [];
+  } catch (_) {
+    return <String>[];
   } finally {
-    src?.dispose();
-    srcClone?.dispose();
+    source?.dispose();
     gray?.dispose();
     blurred?.dispose();
     edges?.dispose();
@@ -233,180 +246,252 @@ Future<List<File>> _isolateProcessSmartCVLayer(
     contours?.dispose();
     hierarchy?.dispose();
   }
+  return results;
 }
 
-Future<String> _isolatePreprocessForOCR(Map<String, dynamic> args) async {
-  final String imagePath = args['imagePath'] as String;
-  final String tempPath = args['tempPath'] as String;
-
-  cv.Mat? src;
+String _preprocessForOcrInIsolate(Map<String, String> args) {
+  final imagePath = args['imagePath']!;
+  final tempPath = args['tempPath']!;
+  cv.Mat? source;
   cv.Mat? gray;
-  cv.Mat? claheMat;
-
+  cv.Mat? processed;
   try {
-    final bytes = File(imagePath).readAsBytesSync();
-    src = cv.imdecode(bytes, cv.IMREAD_COLOR);
-    if (src.isEmpty) return imagePath;
-
-    gray = cv.cvtColor(src, cv.COLOR_BGR2GRAY);
-
+    source = cv.imdecode(File(imagePath).readAsBytesSync(), cv.IMREAD_COLOR);
+    if (source.isEmpty) return imagePath;
+    gray = cv.cvtColor(source, cv.COLOR_BGR2GRAY);
     final clahe = cv.CLAHE.empty();
-    claheMat = clahe.apply(gray);
-
-    final processedPath =
-        '$tempPath/ocr_preprocessed_${DateTime.now().millisecondsSinceEpoch}.jpg';
-    cv.imwrite(processedPath, claheMat);
-    return processedPath;
-  } catch (e) {
-    print('OCR pre-processing failed: $e');
+    processed = clahe.apply(gray);
+    clahe.dispose();
+    final outputPath =
+        '$tempPath/${TemporaryImageStore.uniqueJpegName('ocr_preprocessed_')}';
+    return cv.imwrite(outputPath, processed) ? outputPath : imagePath;
+  } catch (_) {
     return imagePath;
   } finally {
-    src?.dispose();
+    source?.dispose();
     gray?.dispose();
-    claheMat?.dispose();
+    processed?.dispose();
   }
 }
 
 class ScannerService {
-  final ImagePicker _picker = ImagePicker();
+  ScannerService({ImagePicker? picker}) : _picker = picker ?? ImagePicker();
 
-  Future<File?> manualCrop(String sourcePath) async {
-    // manualCrop now delegates to the UI layer (SingleCropScreen)
-    // for pure-flutter crop with custom hitboxes.
-    // So this should ideally not be called directly without context.
-    return File(sourcePath);
-  }
+  final ImagePicker _picker;
 
   Future<File?> scanDocument({ImageSource source = ImageSource.camera}) async {
-    final XFile? image = await _picker.pickImage(source: source);
-    if (image == null) return null;
-
-    return manualCrop(image.path);
+    final image = await _picker.pickImage(source: source);
+    return image == null ? null : File(image.path);
   }
 
   Future<List<File>?> scanMultipleDocuments() async {
-    final List<XFile> images = await _picker.pickMultiImage();
-    if (images.isEmpty) return null;
-
-    // As per instruction, maybe we process them sequentially and inject them.
-    // If they go through multi-picker, we probably just return the original files,
-    // and rely on `processSmartRecognition` or manual crop for each.
-    // Actually, manual crop on 10 images might be annoying, but the mandate states:
-    // "Iterate through the selected images, processing each through the pipeline, and injecting all resulting cropped files into the state sequentially."
-
-    return images.map((x) => File(x.path)).toList();
+    final images = await _picker.pickMultiImage();
+    return images.isEmpty
+        ? null
+        : images.map((image) => File(image.path)).toList();
   }
 
   Future<File?> applyFilter(File imageFile, bool highContrast) async {
-    // Read bytes on main thread
     final bytes = await imageFile.readAsBytes();
-
-    // Pass only raw data to isolate for heavy processing
     final processedBytes = await Isolate.run(() {
-      img.Image? decodedImage = img.decodeImage(bytes);
-
-      if (decodedImage == null) return null;
-
-      // Apply Grayscale
-      decodedImage = img.grayscale(decodedImage);
-
+      var decoded = img.decodeImage(bytes);
+      if (decoded == null) return null;
+      decoded = img.grayscale(decoded);
       if (highContrast) {
-        // Basic contrast adjustment for a "scanner" look
-        decodedImage = img.adjustColor(
-          decodedImage,
-          contrast: 1.5,
-          exposure: 0.1,
-        );
+        decoded = img.adjustColor(decoded, contrast: 1.5, exposure: 0.1);
       }
-
-      return Uint8List.fromList(img.encodeJpg(decodedImage, quality: 90));
+      return Uint8List.fromList(img.encodeJpg(decoded, quality: 90));
     });
-
-    if (processedBytes == null) return null;
-
-    // Write safely on main thread asynchronously
-    return await imageFile.writeAsBytes(processedBytes);
+    return processedBytes == null
+        ? null
+        : TemporaryImageStore.writeJpeg(processedBytes, prefix: 'edited_');
   }
 
-  Future<List<File>> processSmartRecognition(File imageFile) async {
-    final tempDir = await getTemporaryDirectory();
-    final tempPath = tempDir.path;
-    final imagePath = imageFile.path;
-
-    final args = {'tempPath': tempPath, 'imagePath': imagePath};
-
-    // Stage 2: OpenCV Precision Cropping (in background isolate)
-    return await Isolate.run(() => _isolateProcessSmartCVLayer(args));
-  }
-
-  Future<Map<File, List<File>>> processBatchSmartRecognition(
-    List<File> imageFiles, {
-    void Function(int current, int total)? onProgress,
+  Future<SmartScanResult> processSmartRecognition(
+    File imageFile, {
+    ScanCancellationToken? cancellationToken,
   }) async {
-    Map<File, List<File>> mappedCroppedFiles = {};
-    final tempDir = await getTemporaryDirectory();
-    final tempPath = tempDir.path;
-
-    for (int i = 0; i < imageFiles.length; i++) {
-      try {
-        final args = {'tempPath': tempPath, 'imagePath': imageFiles[i].path};
-        final result = await Isolate.run(
-          () => _isolateProcessSmartCVLayer(args),
-        );
-        mappedCroppedFiles[imageFiles[i]] = result;
-      } catch (e) {
-        print('Error processing image in batch: $e');
-        mappedCroppedFiles[imageFiles[i]] = [];
-      }
-
-      // Allow Dart Garbage Collector to reclaim heavy isolate memory
-      await Future.delayed(const Duration(milliseconds: 100));
-
-      // Update progress
-      onProgress?.call(i + 1, imageFiles.length);
+    if (cancellationToken?.isCancelled ?? false) {
+      return SmartScanResult(
+        source: imageFile,
+        files: const <File>[],
+        classification: DocumentClassification.unknown,
+        status: SmartScanStatus.cancelled,
+        message: 'ألغيت المعالجة قبل البدء.',
+      );
     }
 
-    return mappedCroppedFiles;
-  }
-
-  Future<DocumentType> classifyDocument(File imageFile) async {
-    final imagePath = imageFile.path;
-    final tempDir = await getTemporaryDirectory();
-    final tempPath = tempDir.path;
-
-    // Pre-process for OCR in background
-    final preprocessedImagePath = await Isolate.run(
-      () => _isolatePreprocessForOCR({
-        'imagePath': imagePath,
-        'tempPath': tempPath,
+    await TemporaryImageStore.cleanupStale();
+    final tempDirectory = await getTemporaryDirectory();
+    final outputPaths = await Isolate.run(
+      () => _detectAndCropInIsolate(<String, String>{
+        'imagePath': imageFile.path,
+        'tempPath': tempDirectory.path,
       }),
     );
 
-    final inputImage = InputImage.fromFilePath(preprocessedImagePath);
-    final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
-
-    try {
-      final RecognizedText recognizedText = await textRecognizer.processImage(
-        inputImage,
-      );
-      final text = recognizedText.text;
-
-      if (text.contains('البطاقة الوطنية')) {
-        return DocumentType.nationalId;
-      } else if (text.contains('بطاقة السكن')) {
-        return DocumentType.housingCard;
-      } else if (text.contains('البطاقة التموينية')) {
-        return DocumentType.rationCard;
-      } else if (text.contains('جواز السفر')) {
-        return DocumentType.passport;
+    if (cancellationToken?.isCancelled ?? false) {
+      for (final outputPath in outputPaths) {
+        await TemporaryImageStore.deleteIfManaged(File(outputPath));
       }
-
-      return DocumentType.unknown;
-    } catch (e) {
-      print('Text recognition failed: $e');
-      return DocumentType.unknown;
-    } finally {
-      textRecognizer.close();
+      return SmartScanResult(
+        source: imageFile,
+        files: const <File>[],
+        classification: DocumentClassification.unknown,
+        status: SmartScanStatus.cancelled,
+        message: 'ألغيت المعالجة.',
+      );
     }
+
+    if (outputPaths.isEmpty) {
+      return SmartScanResult(
+        source: imageFile,
+        files: const <File>[],
+        classification: DocumentClassification.unknown,
+        status: SmartScanStatus.manualReviewRequired,
+        message: 'لم يُعثر على مستند موثوق؛ يُرجى تحديده يدوياً.',
+      );
+    }
+
+    final files = List<File>.unmodifiable(outputPaths.map(File.new));
+    final classification = await classifyDocument(files.first);
+    final status = classification.requiresManualReview
+        ? SmartScanStatus.manualReviewRequired
+        : SmartScanStatus.succeeded;
+    return SmartScanResult(
+      source: imageFile,
+      files: files,
+      classification: classification,
+      status: status,
+      message: classification.requiresManualReview
+          ? 'اكتمل القص، لكن تصنيف المستند يحتاج مراجعة يدوية.'
+          : 'اكتمل القص والتصنيف بثقة مناسبة.',
+    );
+  }
+
+  Future<SmartScanBatchResult> processBatchSmartRecognition(
+    List<File> imageFiles, {
+    void Function(int current, int total)? onProgress,
+    ScanCancellationToken? cancellationToken,
+  }) async {
+    final results = <File, SmartScanResult>{};
+    for (var index = 0; index < imageFiles.length; index++) {
+      if (cancellationToken?.isCancelled ?? false) {
+        return SmartScanBatchResult(
+          results: Map.unmodifiable(results),
+          wasCancelled: true,
+        );
+      }
+      final source = imageFiles[index];
+      try {
+        results[source] = await processSmartRecognition(
+          source,
+          cancellationToken: cancellationToken,
+        );
+      } catch (_) {
+        results[source] = SmartScanResult(
+          source: source,
+          files: const <File>[],
+          classification: DocumentClassification.unknown,
+          status: SmartScanStatus.failed,
+          message: 'تعذرت معالجة هذه الصورة؛ يُرجى قصها يدوياً.',
+        );
+      }
+      onProgress?.call(index + 1, imageFiles.length);
+    }
+    return SmartScanBatchResult(
+      results: Map.unmodifiable(results),
+      wasCancelled: false,
+    );
+  }
+
+  Future<DocumentClassification> classifyDocument(File imageFile) async {
+    final tempDirectory = await getTemporaryDirectory();
+    final preprocessedPath = await Isolate.run(
+      () => _preprocessForOcrInIsolate(<String, String>{
+        'imagePath': imageFile.path,
+        'tempPath': tempDirectory.path,
+      }),
+    );
+    final preprocessedFile = File(preprocessedPath);
+    final recognizer = TextRecognizer(script: TextRecognitionScript.latin);
+    try {
+      final recognized = await recognizer.processImage(
+        InputImage.fromFilePath(preprocessedPath),
+      );
+      return _classifyRecognizedText(recognized.text);
+    } catch (_) {
+      return const DocumentClassification(
+        type: DocumentType.unknown,
+        normalizedText: '',
+        confidence: 0,
+        reason: 'تعذر استخراج النص تلقائياً؛ اختر نوع المستند يدوياً.',
+        requiresManualReview: true,
+      );
+    } finally {
+      await recognizer.close();
+      if (preprocessedPath != imageFile.path) {
+        await TemporaryImageStore.deleteIfManaged(preprocessedFile);
+      }
+    }
+  }
+
+  DocumentClassification _classifyRecognizedText(String rawText) {
+    final text = _normalizeForMatching(rawText);
+    const keywords = <DocumentType, List<String>>{
+      DocumentType.nationalId: <String>[
+        'البطاقة الوطنية',
+        'بطاقه وطنيه',
+        'national id',
+      ],
+      DocumentType.housingCard: <String>[
+        'بطاقة السكن',
+        'بطاقه السكن',
+        'housing card',
+      ],
+      DocumentType.rationCard: <String>[
+        'البطاقة التموينية',
+        'بطاقه تموينيه',
+        'ration card',
+      ],
+      DocumentType.passport: <String>[
+        'جواز السفر',
+        'jawaz alsafar',
+        'passport',
+      ],
+    };
+
+    for (final entry in keywords.entries) {
+      if (entry.value.any(text.contains)) {
+        return DocumentClassification(
+          type: entry.key,
+          normalizedText: text,
+          confidence: 0.85,
+          reason: 'تطابق عنوان مستند معروف في النص المستخرج.',
+          requiresManualReview: false,
+        );
+      }
+    }
+
+    return DocumentClassification(
+      type: DocumentType.unknown,
+      normalizedText: text,
+      confidence: 0,
+      reason:
+          'لا يدعم محرك OCR الحالي العربية أصلاً؛ لا يمكن الاعتماد على تصنيف عربي تلقائي.',
+      requiresManualReview: true,
+    );
+  }
+
+  String _normalizeForMatching(String value) {
+    return value
+        .toLowerCase()
+        .replaceAll(RegExp(r'[\u064B-\u065F\u0670\u0640]'), '')
+        .replaceAll('أ', 'ا')
+        .replaceAll('إ', 'ا')
+        .replaceAll('آ', 'ا')
+        .replaceAll('ة', 'ه')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
   }
 }

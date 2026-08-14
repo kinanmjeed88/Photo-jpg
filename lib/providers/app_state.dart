@@ -1,7 +1,11 @@
-import 'package:flutter/material.dart';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' show Offset;
+
+import 'package:flutter/foundation.dart';
+import 'package:image/image.dart' as img;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../constants/app_constants.dart';
 
 enum DisplayMethod { onePage, twoPages, frontOnly }
@@ -15,50 +19,103 @@ enum DocumentType {
   a4Document,
 }
 
+@immutable
+class DocumentInput {
+  const DocumentInput({
+    required this.file,
+    this.type = DocumentType.unknown,
+    this.originalImagePath,
+  });
+
+  final File file;
+  final DocumentType type;
+  final String? originalImagePath;
+}
+
+@immutable
 class BatchAddResult {
+  const BatchAddResult({
+    this.addedDocuments = const <ScannedDocument>[],
+    this.overflowFiles = const <File>[],
+    this.failedFiles = const <File>[],
+    this.skippedFiles = const <File>[],
+  });
+
   final List<ScannedDocument> addedDocuments;
   final List<File> overflowFiles;
   final List<File> failedFiles;
-
-  BatchAddResult({
-    this.addedDocuments = const [],
-    this.overflowFiles = const [],
-    this.failedFiles = const [],
-  });
+  final List<File> skippedFiles;
 }
 
-class ScannedDocument {
-  final File file;
-  final DocumentType type;
-  double dx;
-  double dy;
-  double width;
-  double height;
-  final double originalWidth;
-  final double originalHeight;
-  int rotationAngle;
-  final String? originalImagePath;
-  double scale;
+@immutable
+class DocumentLocation {
+  const DocumentLocation({required this.pageIndex, required this.document});
 
-  Offset get position => Offset(dx, dy);
-  set position(Offset newPosition) {
-    dx = newPosition.dx;
-    dy = newPosition.dy;
+  final int pageIndex;
+  final ScannedDocument document;
+}
+
+@immutable
+class ScannedDocument {
+  factory ScannedDocument({
+    required File file,
+    DocumentType type = DocumentType.unknown,
+    double dx = 20,
+    double dy = 20,
+    double width = 300,
+    double height = 400,
+    double originalWidth = 300,
+    double originalHeight = 400,
+    int rotationAngle = 0,
+    String? originalImagePath,
+    double scale = 1.0,
+    String? id,
+  }) {
+    return ScannedDocument._(
+      id: id ?? _DocumentIdGenerator.next(),
+      file: file,
+      type: type,
+      dx: dx,
+      dy: dy,
+      width: width,
+      height: height,
+      originalWidth: originalWidth,
+      originalHeight: originalHeight,
+      rotationAngle: rotationAngle,
+      originalImagePath: originalImagePath,
+      scale: scale,
+    );
   }
 
-  ScannedDocument({
+  const ScannedDocument._({
+    required this.id,
     required this.file,
-    this.type = DocumentType.unknown,
-    this.dx = 20,
-    this.dy = 20,
-    this.width = 300,
-    this.height = 400,
-    this.originalWidth = 300,
-    this.originalHeight = 400,
-    this.rotationAngle = 0,
-    this.originalImagePath,
-    this.scale = 1.0,
+    required this.type,
+    required this.dx,
+    required this.dy,
+    required this.width,
+    required this.height,
+    required this.originalWidth,
+    required this.originalHeight,
+    required this.rotationAngle,
+    required this.originalImagePath,
+    required this.scale,
   });
+
+  final String id;
+  final File file;
+  final DocumentType type;
+  final double dx;
+  final double dy;
+  final double width;
+  final double height;
+  final double originalWidth;
+  final double originalHeight;
+  final int rotationAngle;
+  final String? originalImagePath;
+  final double scale;
+
+  Offset get position => Offset(dx, dy);
 
   ScannedDocument copyWith({
     File? file,
@@ -73,11 +130,8 @@ class ScannedDocument {
     String? originalImagePath,
     double? scale,
   }) {
-    assert(
-      originalImagePath == null || originalImagePath == this.originalImagePath,
-      'originalImagePath is immutable once set and cannot be changed during copyWith.',
-    );
-    return ScannedDocument(
+    return ScannedDocument._(
+      id: id,
       file: file ?? this.file,
       type: type ?? this.type,
       dx: dx ?? this.dx,
@@ -93,325 +147,355 @@ class ScannedDocument {
   }
 }
 
+class _DocumentIdGenerator {
+  static final math.Random _random = math.Random.secure();
+
+  static String next() {
+    final bytes = List<int>.generate(16, (_) => _random.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    final hex = bytes
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join();
+    return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-'
+        '${hex.substring(12, 16)}-${hex.substring(16, 20)}-'
+        '${hex.substring(20)}';
+  }
+}
+
 class ScannedDocumentsNotifier
     extends Notifier<Map<int, List<ScannedDocument>>> {
+  static const double _margin = 12;
+  static const int _maxDocumentsPerPage = 4;
+
   @override
-  Map<int, List<ScannedDocument>> build() => {};
+  Map<int, List<ScannedDocument>> build() =>
+      _freeze(<int, List<ScannedDocument>>{});
 
-  Future<BatchAddResult> batchAddDocuments(
-    List<File> files,
-    AppState appState, {
-    String? originalImagePath,
-  }) async {
-    List<ScannedDocument> added = [];
-    List<File> overflow = [];
-    List<File> failed = [];
+  /// The sole intake API. Camera, gallery, smart-crop and manual-crop flows all
+  /// use this method so that [DisplayMethod] is enforced consistently.
+  Future<BatchAddResult> placeDocuments(
+    List<DocumentInput> inputs,
+    AppState appState,
+  ) async {
+    final working = _copyState(state);
+    final added = <ScannedDocument>[];
+    final overflow = <File>[];
+    final failed = <File>[];
+    final skipped = <File>[];
 
-    const double VIRTUAL_A4_WIDTH = AppConstants.kVirtualCanvasWidth;
-    const double margin = 12.0;
+    if (appState.displayMethod == DisplayMethod.frontOnly &&
+        _hasAnyDocument(working)) {
+      return BatchAddResult(
+        skippedFiles: inputs.map((input) => input.file).toList(),
+      );
+    }
 
-    int pageIndex = state.isEmpty ? 0 : state.keys.reduce(math.max);
-    List<ScannedDocument> localDocs = List<ScannedDocument>.from(
-      state[pageIndex] ?? [],
-    );
+    for (final input in inputs) {
+      if (appState.displayMethod == DisplayMethod.frontOnly &&
+          added.isNotEmpty) {
+        skipped.add(input.file);
+        continue;
+      }
 
-    for (var f in files) {
       try {
-        if (localDocs.length >= 4) {
-          overflow.add(f);
+        final dimensions = await _readImageDimensions(input.file);
+        if (dimensions == null) {
+          failed.add(input.file);
           continue;
         }
 
-        final bytes = await f.readAsBytes();
-        final decoded = await decodeImageFromList(bytes);
-        final double originalWidth = decoded.width.toDouble();
-        final double originalHeight = decoded.height.toDouble();
-        decoded.dispose(); // Explicitly dispose to prevent OOM
-
-        DocumentType specificType = DocumentType.unknown;
-        if (f.path.endsWith('_A4.jpg')) {
-          specificType = DocumentType.a4Document;
-        }
-
-        DocumentType effectiveType = specificType != DocumentType.unknown
-            ? specificType
-            : _guessDocumentType(appState);
-
-        double intrinsicAspectRatio = originalHeight > 0
-            ? originalWidth / originalHeight
-            : 1.0;
-
-        double newDocWidth = VIRTUAL_A4_WIDTH * 0.45;
-        double newDocHeight = newDocWidth / intrinsicAspectRatio;
-
-        double currentDx = margin;
-
-        // Calculate safe Y position based on existing docs to prevent overlap
-        double safeY = localDocs.isEmpty
-            ? margin
-            : localDocs.map((d) => d.dy + d.height).reduce(math.max) + margin;
-
-        double currentDy = safeY;
-
-        int index = localDocs.length;
-        if (index == 0) {
-          currentDx = 20.0;
-          currentDy = 20.0;
-        } else if (index == 1) {
-          currentDx = (VIRTUAL_A4_WIDTH * 0.45) + 40.0;
-          // Align with the first item on the same row if possible
-          currentDy = localDocs.isNotEmpty ? localDocs.first.dy : 20.0;
-        } else if (index == 2) {
-          currentDx = 20.0;
-          // Safe Y is already calculated to be below all existing docs
-          currentDy = safeY;
-        } else if (index == 3) {
-          currentDx = (VIRTUAL_A4_WIDTH * 0.45) + 40.0;
-          // Align with the third item (index 2) on the same row
-          currentDy = localDocs.length > 2 ? localDocs[2].dy : safeY;
-        }
-
-        final doc = ScannedDocument(
-          file: f,
-          type: effectiveType,
-          originalWidth: originalWidth,
-          originalHeight: originalHeight,
-          width: newDocWidth,
-          height: newDocHeight,
-          dx: currentDx,
-          dy: currentDy,
-          originalImagePath:
-              originalImagePath ??
-              f.path, // Use the provided original image path, fallback to itself
+        final requestedType = input.type == DocumentType.unknown
+            ? _guessDocumentType(appState)
+            : input.type;
+        final document = _newDocument(
+          input: input,
+          type: requestedType,
+          originalWidth: dimensions.$1,
+          originalHeight: dimensions.$2,
+        );
+        final outcome = _placeDocument(
+          pages: working,
+          document: document,
+          displayMethod: appState.displayMethod,
         );
 
-        localDocs.add(doc);
-        added.add(doc);
-      } catch (e) {
-        failed.add(f);
+        if (outcome == _PlacementOutcome.added) {
+          added.add(document);
+        } else {
+          overflow.add(input.file);
+        }
+      } catch (_) {
+        failed.add(input.file);
       }
     }
 
-    // Single atomic state assignment
-    state = {...state, pageIndex: localDocs};
-
+    state = _freeze(working);
     return BatchAddResult(
-      addedDocuments: added,
-      overflowFiles: overflow,
-      failedFiles: failed,
+      addedDocuments: List.unmodifiable(added),
+      overflowFiles: List.unmodifiable(overflow),
+      failedFiles: List.unmodifiable(failed),
+      skippedFiles: List.unmodifiable(skipped),
     );
   }
 
   void forceNewPage() {
-    int pageIndex = state.isEmpty ? 0 : state.keys.reduce(math.max) + 1;
-    state = {...state, pageIndex: []};
+    final nextPage = _nextPageIndex(state);
+    final working = _copyState(state)
+      ..putIfAbsent(nextPage, () => <ScannedDocument>[]);
+    state = _freeze(working);
   }
 
-  void addDocument(ScannedDocument doc, AppState appState) {
-    const double VIRTUAL_A4_WIDTH = AppConstants.kVirtualCanvasWidth;
-    const double VIRTUAL_A4_HEIGHT = AppConstants.kVirtualCanvasHeight;
-    const double margin = 12.0;
+  DocumentLocation? findDocument(String documentId) {
+    for (final entry in state.entries) {
+      for (final document in entry.value) {
+        if (document.id == documentId) {
+          return DocumentLocation(pageIndex: entry.key, document: document);
+        }
+      }
+    }
+    return null;
+  }
 
-    DocumentType effectiveType = doc.type != DocumentType.unknown
-        ? doc.type
-        : _guessDocumentType(appState);
+  ScannedDocument? removeDocument(String documentId) {
+    final location = findDocument(documentId);
+    if (location == null) return null;
 
-    double intrinsicAspectRatio = doc.originalHeight > 0
-        ? doc.originalWidth / doc.originalHeight
+    final working = _copyState(state);
+    final page = List<ScannedDocument>.from(working[location.pageIndex]!);
+    page.removeWhere((document) => document.id == documentId);
+    if (page.isEmpty && location.pageIndex != 0) {
+      working.remove(location.pageIndex);
+    } else {
+      working[location.pageIndex] = page;
+    }
+    state = _freeze(working);
+    return location.document;
+  }
+
+  void updateDocument(
+    String documentId, {
+    File? file,
+    DocumentType? type,
+    double? dx,
+    double? dy,
+    double? width,
+    double? height,
+    double? originalWidth,
+    double? originalHeight,
+    int? rotationAngle,
+    double? scale,
+  }) {
+    final location = findDocument(documentId);
+    if (location == null) return;
+
+    final working = _copyState(state);
+    final page = List<ScannedDocument>.from(working[location.pageIndex]!);
+    final index = page.indexWhere((document) => document.id == documentId);
+    if (index < 0) return;
+
+    page[index] = page[index].copyWith(
+      file: file,
+      type: type,
+      dx: dx,
+      dy: dy,
+      width: width,
+      height: height,
+      originalWidth: originalWidth,
+      originalHeight: originalHeight,
+      rotationAngle: rotationAngle,
+      scale: scale,
+    );
+    working[location.pageIndex] = page;
+    state = _freeze(working);
+  }
+
+  void updateDocumentLayout(
+    String documentId, {
+    required double dx,
+    required double dy,
+    required double width,
+    required double height,
+    required int rotationAngle,
+    double? scale,
+  }) {
+    updateDocument(
+      documentId,
+      dx: dx,
+      dy: dy,
+      width: width,
+      height: height,
+      rotationAngle: rotationAngle,
+      scale: scale,
+    );
+  }
+
+  void moveDocumentToTop(String documentId) {
+    final location = findDocument(documentId);
+    if (location == null) return;
+
+    final working = _copyState(state);
+    final page = List<ScannedDocument>.from(working[location.pageIndex]!);
+    final index = page.indexWhere((document) => document.id == documentId);
+    if (index < 0) return;
+    final document = page.removeAt(index);
+    page.add(document);
+    working[location.pageIndex] = page;
+    state = _freeze(working);
+  }
+
+  /// Performs source removal, target insertion and final layout in one state
+  /// transaction. Page keys remain stable for the lifetime of the session.
+  void moveDocument(
+    String documentId, {
+    required int targetPageIndex,
+    required double dx,
+    required double dy,
+  }) {
+    final location = findDocument(documentId);
+    if (location == null) return;
+
+    final working = _copyState(state);
+    final source = List<ScannedDocument>.from(working[location.pageIndex]!);
+    final sourceIndex = source.indexWhere(
+      (document) => document.id == documentId,
+    );
+    if (sourceIndex < 0) return;
+
+    final moved = source.removeAt(sourceIndex).copyWith(dx: dx, dy: dy);
+    if (source.isEmpty && location.pageIndex != 0) {
+      working.remove(location.pageIndex);
+    } else {
+      working[location.pageIndex] = source;
+    }
+
+    final target = List<ScannedDocument>.from(
+      working[targetPageIndex] ?? const [],
+    );
+    target.removeWhere((document) => document.id == documentId);
+    target.add(moved);
+    working[targetPageIndex] = target;
+    state = _freeze(working);
+  }
+
+  void clear() => state = _freeze(<int, List<ScannedDocument>>{});
+
+  _PlacementOutcome _placeDocument({
+    required Map<int, List<ScannedDocument>> pages,
+    required ScannedDocument document,
+    required DisplayMethod displayMethod,
+  }) {
+    var pageIndex = _currentPageIndex(pages);
+    final currentPage = pages.putIfAbsent(pageIndex, () => <ScannedDocument>[]);
+
+    if (displayMethod == DisplayMethod.frontOnly) {
+      if (_hasAnyDocument(pages)) return _PlacementOutcome.overflow;
+      pages[0] = <ScannedDocument>[document.copyWith(dx: _margin, dy: _margin)];
+      return _PlacementOutcome.added;
+    }
+
+    if (document.type == DocumentType.a4Document) {
+      if (currentPage.isNotEmpty) {
+        pageIndex = _nextPageIndex(pages);
+      }
+      pages[pageIndex] = <ScannedDocument>[document.copyWith(dx: 0, dy: 0)];
+      return _PlacementOutcome.added;
+    }
+
+    if (displayMethod == DisplayMethod.twoPages && currentPage.isNotEmpty) {
+      pageIndex = _nextPageIndex(pages);
+      pages[pageIndex] = <ScannedDocument>[
+        document.copyWith(dx: _margin, dy: _margin),
+      ];
+      return _PlacementOutcome.added;
+    }
+
+    if (currentPage.length >= _maxDocumentsPerPage) {
+      return _PlacementOutcome.overflow;
+    }
+
+    final positioned = _positionDocument(document, currentPage);
+    if (positioned == null) return _PlacementOutcome.overflow;
+    currentPage.add(positioned);
+    return _PlacementOutcome.added;
+  }
+
+  ScannedDocument _newDocument({
+    required DocumentInput input,
+    required DocumentType type,
+    required double originalWidth,
+    required double originalHeight,
+  }) {
+    final aspectRatio = originalHeight > 0
+        ? originalWidth / originalHeight
         : 1.0;
-
-    double newDocWidth;
-
-    if (effectiveType == DocumentType.a4Document) {
-      newDocWidth = VIRTUAL_A4_WIDTH;
-    } else if (effectiveType == DocumentType.rationCard) {
-      newDocWidth = VIRTUAL_A4_WIDTH * 0.90;
-    } else if (effectiveType == DocumentType.passport) {
-      newDocWidth = VIRTUAL_A4_WIDTH * 0.85;
-    } else if (effectiveType == DocumentType.nationalId ||
-        effectiveType == DocumentType.housingCard) {
-      // National ID / Housing Card: MUST be EXACTLY VIRTUAL_A4_WIDTH * 0.45
-      newDocWidth = VIRTUAL_A4_WIDTH * 0.45;
-    } else {
-      effectiveType = DocumentType.nationalId;
-      newDocWidth = VIRTUAL_A4_WIDTH * 0.45;
-    }
-
-    double newDocHeight = newDocWidth / intrinsicAspectRatio;
-
-    // Only clamp if not explicitly hard-clamped to 0.45
-    if (effectiveType != DocumentType.nationalId &&
-        effectiveType != DocumentType.housingCard) {
-      if (newDocWidth > VIRTUAL_A4_WIDTH) {
-        newDocWidth = VIRTUAL_A4_WIDTH;
-        newDocHeight = newDocWidth / intrinsicAspectRatio;
-      }
-      if (newDocHeight > VIRTUAL_A4_HEIGHT) {
-        newDocHeight = VIRTUAL_A4_HEIGHT;
-        newDocWidth = newDocHeight * intrinsicAspectRatio;
-      }
-    }
-
-    if (appState.displayMethod == DisplayMethod.frontOnly &&
-        state.isNotEmpty &&
-        (state[0] ?? []).isNotEmpty) {
-      return;
-    }
-
-    ScannedDocument newDoc = doc.copyWith(
-      type: effectiveType,
-      width: newDocWidth,
-      height: newDocHeight,
+    final width = _preferredWidth(type);
+    final height = width / aspectRatio;
+    return ScannedDocument(
+      file: input.file,
+      type: type,
+      width: width,
+      height: height,
+      originalWidth: originalWidth,
+      originalHeight: originalHeight,
+      originalImagePath: input.originalImagePath ?? input.file.path,
     );
+  }
 
-    if (state.isEmpty) {
-      state = {
-        0: [newDoc.copyWith(dx: margin, dy: margin)],
-      };
-      return;
-    }
+  ScannedDocument? _positionDocument(
+    ScannedDocument document,
+    List<ScannedDocument> existing,
+  ) {
+    final maxWidth = AppConstants.kVirtualCanvasWidth;
+    final maxHeight = AppConstants.kVirtualCanvasHeight;
+    final candidates = <Offset>[
+      const Offset(20, 20),
+      Offset(maxWidth * 0.45 + 40, 20),
+      Offset(20, maxHeight * 0.5 + 12),
+      Offset(maxWidth * 0.45 + 40, maxHeight * 0.5 + 12),
+    ];
 
-    int pageIndex = state.keys.reduce(math.max);
-    List<ScannedDocument> pageDocs = List<ScannedDocument>.from(
-      state[pageIndex] ?? [],
-    );
-
-    if (appState.displayMethod == DisplayMethod.twoPages &&
-        pageDocs.isNotEmpty) {
-      pageIndex++;
-      state = {
-        ...state,
-        pageIndex: [newDoc.copyWith(dx: margin, dy: margin)],
-      };
-      return;
-    }
-
-    if (effectiveType == DocumentType.a4Document) {
-      if (pageDocs.isNotEmpty) {
-        pageIndex++;
-      }
-      state = {
-        ...state,
-        pageIndex: [newDoc.copyWith(dx: 0, dy: 0)],
-      };
-      return;
-    }
-
-    double currentDx = margin;
-    double currentDy = margin;
-
-    // Advanced layout engine to find the first non-overlapping position
-    if (effectiveType == DocumentType.nationalId ||
-        effectiveType == DocumentType.housingCard) {
-      int index = pageDocs.length;
-      if (index == 0) {
-        currentDx = 20.0;
-        currentDy = 20.0;
-      } else if (index == 1) {
-        currentDx = (VIRTUAL_A4_WIDTH * 0.45) + 40.0;
-        currentDy = 20.0;
-      } else if (index == 2) {
-        double firstDocHeight = pageDocs.isNotEmpty
-            ? pageDocs.first.height
-            : newDocHeight;
-        currentDx = 20.0;
-        currentDy = firstDocHeight + 40.0;
-      } else if (index == 3) {
-        double firstDocHeight = pageDocs.isNotEmpty
-            ? pageDocs.first.height
-            : newDocHeight;
-        currentDx = (VIRTUAL_A4_WIDTH * 0.45) + 40.0;
-        currentDy = firstDocHeight + 40.0;
-      } else {
-        // If more than 4 on page, fallback to forcing new page
-        currentDy = VIRTUAL_A4_HEIGHT + 1;
-      }
-    } else {
-      bool foundPosition = false;
-
-      // We want to flow left to right, top to bottom.
-      // Let's sort existing docs by dy then dx
-      var sortedDocs = List<ScannedDocument>.from(pageDocs);
-      sortedDocs.sort((a, b) {
-        int dyCmp = a.dy.compareTo(b.dy);
-        if (dyCmp != 0) return dyCmp;
-        return a.dx.compareTo(b.dx);
-      });
-
-      // Try to place to the right of the last document, or below it
-      if (sortedDocs.isNotEmpty) {
-        ScannedDocument lastDoc = sortedDocs.last;
-        double rightDx = lastDoc.dx + lastDoc.width + margin;
-        if (rightDx + newDocWidth <= VIRTUAL_A4_WIDTH) {
-          currentDx = rightDx;
-          currentDy = lastDoc.dy;
-        } else {
-          currentDx = margin;
-          // Find max height in the current row
-          double maxRowHeight = 0;
-          for (var d in sortedDocs) {
-            if (d.dy >= lastDoc.dy - 10 && d.dy <= lastDoc.dy + 10) {
-              if (d.height > maxRowHeight) maxRowHeight = d.height;
-            }
-          }
-          if (maxRowHeight == 0) maxRowHeight = lastDoc.height; // Fallback
-          currentDy = lastDoc.dy + maxRowHeight + margin;
-        }
-      }
-
-      // Check overlap helper
-      bool hasOverlap(double x, double y, double w, double h) {
-        for (var d in pageDocs) {
-          if (!(x + w + margin < d.dx ||
-              x > d.dx + d.width + margin ||
-              y + h + margin < d.dy ||
-              y > d.dy + d.height + margin)) {
-            return true;
-          }
-        }
-        return false;
-      }
-
-      // Grid search if the heuristic placement overlaps
-      if (hasOverlap(currentDx, currentDy, newDocWidth, newDocHeight)) {
-        foundPosition = false;
-        for (
-          double y = margin;
-          y + newDocHeight <= VIRTUAL_A4_HEIGHT;
-          y += 20
-        ) {
-          for (
-            double x = margin;
-            x + newDocWidth <= VIRTUAL_A4_WIDTH;
-            x += 20
-          ) {
-            if (!hasOverlap(x, y, newDocWidth, newDocHeight)) {
-              currentDx = x;
-              currentDy = y;
-              foundPosition = true;
-              break;
-            }
-          }
-          if (foundPosition) break;
-        }
-        if (!foundPosition) {
-          // Force new page if no room
-          currentDy = VIRTUAL_A4_HEIGHT + 1;
-        }
+    for (final candidate in candidates) {
+      final positioned = document.copyWith(dx: candidate.dx, dy: candidate.dy);
+      if (_fitsOnCanvas(positioned) && !_overlaps(positioned, existing)) {
+        return positioned;
       }
     }
+    return null;
+  }
 
-    if (currentDy + newDocHeight > VIRTUAL_A4_HEIGHT) {
-      pageIndex++;
-      pageDocs = [];
-      currentDx = margin;
-      currentDy = margin;
+  bool _fitsOnCanvas(ScannedDocument document) {
+    return document.dx >= 0 &&
+        document.dy >= 0 &&
+        document.dx + document.width <= AppConstants.kVirtualCanvasWidth &&
+        document.dy + document.height <= AppConstants.kVirtualCanvasHeight;
+  }
+
+  bool _overlaps(ScannedDocument candidate, List<ScannedDocument> documents) {
+    for (final document in documents) {
+      final separated =
+          candidate.dx + candidate.width + _margin <= document.dx ||
+          document.dx + document.width + _margin <= candidate.dx ||
+          candidate.dy + candidate.height + _margin <= document.dy ||
+          document.dy + document.height + _margin <= candidate.dy;
+      if (!separated) return true;
     }
+    return false;
+  }
 
-    state = {
-      ...state,
-      pageIndex: [...pageDocs, newDoc.copyWith(dx: currentDx, dy: currentDy)],
-    };
+  double _preferredWidth(DocumentType type) {
+    switch (type) {
+      case DocumentType.a4Document:
+        return AppConstants.kVirtualCanvasWidth;
+      case DocumentType.rationCard:
+        return AppConstants.kVirtualCanvasWidth * 0.9;
+      case DocumentType.passport:
+        return AppConstants.kVirtualCanvasWidth * 0.85;
+      case DocumentType.nationalId:
+      case DocumentType.housingCard:
+      case DocumentType.unknown:
+        return AppConstants.kVirtualCanvasWidth * 0.45;
+    }
   }
 
   DocumentType _guessDocumentType(AppState appState) {
@@ -421,142 +505,63 @@ class ScannedDocumentsNotifier
     return DocumentType.nationalId;
   }
 
-  void removeDocumentAt(int pageIndex, int docIndex) {
-    if (!state.containsKey(pageIndex)) return;
-
-    final pageDocs = state[pageIndex]!;
-    if (docIndex < 0 || docIndex >= pageDocs.length) return;
-
-    final updatedDocs = [
-      for (int i = 0; i < pageDocs.length; i++)
-        if (i != docIndex) pageDocs[i],
-    ];
-
-    if (updatedDocs.isEmpty && pageIndex != 0) {
-      // Remove the page if empty, except for page index 0
-      final newState = Map<int, List<ScannedDocument>>.from(state)
-        ..remove(pageIndex);
-      // Re-index pages so they are contiguous starting from 0
-      final reindexedState = <int, List<ScannedDocument>>{};
-      int newIdx = 0;
-      final sortedKeys = newState.keys.toList()..sort();
-      for (var key in sortedKeys) {
-        reindexedState[newIdx++] = newState[key]!;
-      }
-      state = reindexedState;
-    } else {
-      state = {...state, pageIndex: updatedDocs};
-    }
+  @visibleForTesting
+  void seedDocuments(Map<int, List<ScannedDocument>> documents) {
+    state = _freeze(_copyState(documents));
   }
 
-  void updateDocumentAt(int pageIndex, int docIndex, ScannedDocument newDoc) {
-    if (!state.containsKey(pageIndex)) return;
-
-    final pageDocs = state[pageIndex]!;
-    if (docIndex < 0 || docIndex >= pageDocs.length) return;
-
-    final updatedDocs = [
-      for (int i = 0; i < pageDocs.length; i++)
-        if (i == docIndex) newDoc else pageDocs[i],
-    ];
-
-    state = {...state, pageIndex: updatedDocs};
+  Future<(double, double)?> _readImageDimensions(File file) async {
+    final image = img.decodeImage(await file.readAsBytes());
+    return image == null
+        ? null
+        : (image.width.toDouble(), image.height.toDouble());
   }
 
-  void updateAndMoveToTop(int pageIndex, int docIndex, ScannedDocument newDoc) {
-    if (!state.containsKey(pageIndex)) return;
-
-    final pageDocs = List<ScannedDocument>.from(state[pageIndex]!);
-    if (docIndex < 0 || docIndex >= pageDocs.length) return;
-
-    pageDocs.removeAt(docIndex);
-    pageDocs.add(newDoc);
-
-    state = {...state, pageIndex: pageDocs};
+  bool _hasAnyDocument(Map<int, List<ScannedDocument>> pages) {
+    return pages.values.any((documents) => documents.isNotEmpty);
   }
 
-  void updateDocumentLayout(
-    int pageIndex,
-    int docIndex, {
-    double? dx,
-    double? dy,
-    double? width,
-    double? height,
-    int? rotationAngle,
-    double? scale,
-    ScannedDocument? originalDoc,
-  }) {
-    if (!state.containsKey(pageIndex)) return;
+  int _currentPageIndex(Map<int, List<ScannedDocument>> pages) {
+    if (pages.isEmpty) return 0;
+    return pages.keys.reduce(math.max);
+  }
 
-    final pageDocs = state[pageIndex]!;
+  int _nextPageIndex(Map<int, List<ScannedDocument>> pages) {
+    if (pages.isEmpty) return 0;
+    return pages.keys.reduce(math.max) + 1;
+  }
 
-    // Fix stale docIndex by finding actual index if originalDoc is provided
-    int actualIndex = docIndex;
-    if (originalDoc != null) {
-      actualIndex = pageDocs.indexWhere(
-        (d) => d.file.path == originalDoc.file.path,
-      );
-      if (actualIndex == -1) actualIndex = docIndex;
-    }
+  Map<int, List<ScannedDocument>> _copyState(
+    Map<int, List<ScannedDocument>> source,
+  ) {
+    return <int, List<ScannedDocument>>{
+      for (final entry in source.entries)
+        entry.key: List<ScannedDocument>.from(entry.value),
+    };
+  }
 
-    if (actualIndex < 0 || actualIndex >= pageDocs.length) return;
-
-    final doc = pageDocs[actualIndex];
-    final newDoc = doc.copyWith(
-      dx: dx,
-      dy: dy,
-      width: width,
-      height: height,
-      rotationAngle: rotationAngle,
-      scale: scale,
+  Map<int, List<ScannedDocument>> _freeze(
+    Map<int, List<ScannedDocument>> source,
+  ) {
+    return Map<int, List<ScannedDocument>>.unmodifiable(
+      <int, List<ScannedDocument>>{
+        for (final entry in source.entries)
+          entry.key: List<ScannedDocument>.unmodifiable(entry.value),
+      },
     );
-
-    final updatedDocs = [
-      for (int i = 0; i < pageDocs.length; i++)
-        if (i == actualIndex) newDoc else pageDocs[i],
-    ];
-
-    state = {...state, pageIndex: updatedDocs};
-  }
-
-  void moveDocumentToTop(int pageIndex, int docIndex) {
-    if (!state.containsKey(pageIndex)) return;
-    final pageDocs = List<ScannedDocument>.from(state[pageIndex]!);
-    if (docIndex < 0 || docIndex >= pageDocs.length) return;
-
-    final doc = pageDocs.removeAt(docIndex);
-    pageDocs.add(doc);
-
-    state = {...state, pageIndex: pageDocs};
-  }
-
-  void setRawState(Map<int, List<ScannedDocument>> newState) {
-    state = newState;
-  }
-
-  void clear() {
-    state = {};
   }
 }
 
+enum _PlacementOutcome { added, overflow }
+
 final scannedDocumentsProvider =
     NotifierProvider<ScannedDocumentsNotifier, Map<int, List<ScannedDocument>>>(
-      () {
-        return ScannedDocumentsNotifier();
-      },
+      ScannedDocumentsNotifier.new,
     );
 
+@immutable
 class AppState {
-  final bool hasNationalId;
-  final bool hasHousingCard;
-  final bool hasRationCard;
-  final bool hasPassport;
-  final DisplayMethod displayMethod;
-  final bool addFrame;
-  final String fileName;
-  final bool smartRecognition;
-
-  AppState({
+  const AppState({
     this.hasNationalId = false,
     this.hasHousingCard = false,
     this.hasRationCard = false,
@@ -566,6 +571,15 @@ class AppState {
     this.fileName = 'مستمسكاتي',
     this.smartRecognition = false,
   });
+
+  final bool hasNationalId;
+  final bool hasHousingCard;
+  final bool hasRationCard;
+  final bool hasPassport;
+  final DisplayMethod displayMethod;
+  final bool addFrame;
+  final String fileName;
+  final bool smartRecognition;
 
   AppState copyWith({
     bool? hasNationalId,
@@ -595,7 +609,7 @@ class AppState {
 
 class AppStateNotifier extends Notifier<AppState> {
   @override
-  AppState build() => AppState();
+  AppState build() => const AppState();
 
   void toggleNationalId(bool? value) =>
       state = state.copyWith(hasNationalId: value ?? false);
@@ -617,6 +631,6 @@ class AppStateNotifier extends Notifier<AppState> {
       state = state.copyWith(smartRecognition: value);
 }
 
-final appStateProvider = NotifierProvider<AppStateNotifier, AppState>(() {
-  return AppStateNotifier();
-});
+final appStateProvider = NotifierProvider<AppStateNotifier, AppState>(
+  AppStateNotifier.new,
+);

@@ -1,15 +1,109 @@
 import 'dart:io';
-import 'package:flutter_test/flutter_test.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import 'package:doc_scanner_app/providers/app_state.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+ScannedDocument _document({
+  required String id,
+  double dx = 10,
+  double dy = 20,
+}) {
+  return ScannedDocument(
+    id: id,
+    file: File('/tmp/$id.jpg'),
+    originalWidth: 400,
+    originalHeight: 200,
+    dx: dx,
+    dy: dy,
+    width: 200,
+    height: 100,
+  );
+}
 
 void main() {
-  test('batchAddDocuments does not silently drop overflow files', () async {
-    final container = ProviderContainer();
-    final notifier = container.read(scannedDocumentsProvider.notifier);
+  group('ScannedDocumentsNotifier', () {
+    late ProviderContainer container;
+    late ScannedDocumentsNotifier notifier;
 
-    // We cannot easily test image decoding in a unit test without mocking File and decodeImageFromList,
-    // but we can test that the codebase compiles and test runner works.
-    expect(notifier.state.isEmpty, true);
+    setUp(() {
+      container = ProviderContainer();
+      notifier = container.read(scannedDocumentsProvider.notifier);
+    });
+
+    tearDown(() => container.dispose());
+
+    test('updates an immutable document through its stable id', () {
+      final original = _document(id: 'doc-a');
+      notifier.seedDocuments(<int, List<ScannedDocument>>{
+        0: <ScannedDocument>[original],
+      });
+
+      notifier.updateDocumentLayout(
+        'doc-a',
+        dx: 30,
+        dy: 40,
+        width: 200,
+        height: 100,
+        rotationAngle: 90,
+        scale: 1.5,
+      );
+
+      final updated = notifier.findDocument('doc-a')!.document;
+      expect(updated.id, 'doc-a');
+      expect(updated.dx, 30);
+      expect(updated.dy, 40);
+      expect(updated.rotationAngle, 90);
+      expect(updated.scale, 1.5);
+      expect(identical(original, updated), isFalse);
+      expect(original.dx, 10);
+    });
+
+    test('moves the intended document after sibling order changes', () {
+      notifier.seedDocuments(<int, List<ScannedDocument>>{
+        0: <ScannedDocument>[_document(id: 'first'), _document(id: 'target')],
+      });
+      notifier
+        ..moveDocumentToTop('first')
+        ..moveDocument('target', targetPageIndex: 1, dx: 12, dy: 24);
+
+      expect(notifier.findDocument('target')!.pageIndex, 1);
+      expect(notifier.findDocument('target')!.document.dx, 12);
+      expect(notifier.findDocument('first')!.pageIndex, 0);
+      expect(
+        container
+            .read(scannedDocumentsProvider)[0]!
+            .map((document) => document.id),
+        contains('first'),
+      );
+    });
+
+    test('removes only the document matching the given id', () {
+      notifier.seedDocuments(<int, List<ScannedDocument>>{
+        0: <ScannedDocument>[_document(id: 'keep'), _document(id: 'remove')],
+      });
+
+      final removed = notifier.removeDocument('remove');
+
+      expect(removed!.id, 'remove');
+      expect(notifier.findDocument('remove'), isNull);
+      expect(notifier.findDocument('keep'), isNotNull);
+    });
+  });
+
+  test('display method is selected through an immutable AppState copy', () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    final initial = container.read(appStateProvider);
+
+    container
+        .read(appStateProvider.notifier)
+        .updateDisplayMethod(DisplayMethod.twoPages);
+
+    expect(
+      container.read(appStateProvider).displayMethod,
+      DisplayMethod.twoPages,
+    );
+    expect(identical(initial, container.read(appStateProvider)), isFalse);
   });
 }

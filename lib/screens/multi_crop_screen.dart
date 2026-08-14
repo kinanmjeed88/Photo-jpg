@@ -2,8 +2,9 @@ import 'dart:io';
 import 'dart:isolate';
 import 'package:flutter/material.dart';
 import 'package:opencv_dart/opencv_dart.dart' as cv;
-import 'package:path_provider/path_provider.dart';
 import 'dart:math' as math;
+
+import '../services/temporary_image_store.dart';
 
 class CropRect {
   double left, top, width, height;
@@ -18,7 +19,7 @@ List<File> _processMultiCrop(Map<String, dynamic> args) {
   final String imagePath = args['imagePath'];
   final List<Map<String, double>> rects = (args['rects'] as List)
       .cast<Map<String, double>>();
-  final String tempPath = args['tempPath'];
+  final List<String> outputPaths = (args['outputPaths'] as List).cast<String>();
 
   cv.Mat? src;
   List<File> croppedFiles = [];
@@ -26,8 +27,6 @@ List<File> _processMultiCrop(Map<String, dynamic> args) {
   try {
     src = cv.imread(imagePath, flags: cv.IMREAD_COLOR);
     if (src.isEmpty) return [];
-
-    double imageArea = (src.rows * src.cols).toDouble();
 
     for (int i = 0; i < rects.length; i++) {
       final rect = rects[i];
@@ -45,25 +44,15 @@ List<File> _processMultiCrop(Map<String, dynamic> args) {
 
       cv.Mat cropped = src.region(cv.Rect(l, t, w, h));
 
-      double cropArea = (w * h).toDouble();
-      double aspect = w / h;
-
-      bool isA4 =
-          cropArea > (imageArea * 0.6) ||
-          (aspect >= 0.67 && aspect <= 0.75) ||
-          (aspect >= 1.35 &&
-              aspect <= 1.48); // A4 portrait ~0.71, landscape ~1.41
-
-      String suffix = isA4 ? '_A4' : '_ID';
-      String path =
-          '$tempPath/manual_crop_${DateTime.now().millisecondsSinceEpoch}_$i$suffix.jpg';
-
-      cv.imwrite(path, cropped);
-      croppedFiles.add(File(path));
+      if (i >= outputPaths.length) continue;
+      final outputPath = outputPaths[i];
+      if (cv.imwrite(outputPath, cropped)) {
+        croppedFiles.add(File(outputPath));
+      }
       cropped.dispose();
     }
-  } catch (e) {
-    print('Multi crop OpenCV failed: $e');
+  } catch (_) {
+    // A failed worker yields an empty result and preserves the source image.
   } finally {
     src?.dispose();
   }
@@ -144,8 +133,6 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
       final double scaleX = _imageSize!.width / widgetSize.width;
       final double scaleY = _imageSize!.height / widgetSize.height;
 
-      final tempDir = await getTemporaryDirectory();
-
       final mappedRects = _cropRects.map((rect) {
         return {
           'left': rect.left * scaleX,
@@ -155,10 +142,17 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
         };
       }).toList();
 
+      final outputPaths = await Future.wait(
+        List<Future<String>>.generate(
+          mappedRects.length,
+          (index) =>
+              TemporaryImageStore.createPath('manual_crop_', suffix: '-$index'),
+        ),
+      );
       final args = {
         'imagePath': widget.imageFile.path,
         'rects': mappedRects,
-        'tempPath': tempDir.path,
+        'outputPaths': outputPaths,
       };
 
       final croppedFiles = await _runMultiCropIsolate(args);
@@ -169,10 +163,11 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
           croppedFiles.isEmpty ? [widget.imageFile] : croppedFiles,
         );
       }
-    } catch (e) {
-      print("Manual crop failed: $e");
+    } catch (_) {
       if (mounted) {
-        Navigator.pop(context, [widget.imageFile]);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('تعذر حفظ القص اليدوي.')));
       }
     } finally {
       if (mounted) setState(() => _isProcessing = false);
@@ -233,7 +228,9 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
                                       color: Colors.redAccent,
                                       width: 2,
                                     ),
-                                    color: Colors.redAccent.withOpacity(0.1),
+                                    color: Colors.redAccent.withValues(
+                                      alpha: 0.1,
+                                    ),
                                   ),
                                   child: Stack(
                                     clipBehavior: Clip.none,
@@ -302,7 +299,7 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
                                 ),
                               ),
                             );
-                          }).toList(),
+                          }),
                         ],
                       ),
                     ),

@@ -1,14 +1,15 @@
 import 'dart:io';
-import 'package:flutter/material.dart';
+
 import 'package:extended_image/extended_image.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:flutter/material.dart';
 import 'package:image_editor/image_editor.dart';
-import 'package:path/path.dart' as p;
+
+import '../services/temporary_image_store.dart';
 
 class SingleCropScreen extends StatefulWidget {
-  final File imageFile;
-
   const SingleCropScreen({super.key, required this.imageFile});
+
+  final File imageFile;
 
   @override
   State<SingleCropScreen> createState() => _SingleCropScreenState();
@@ -22,65 +23,51 @@ class _SingleCropScreenState extends State<SingleCropScreen> {
 
   Future<void> _cropImage() async {
     if (_isProcessing) return;
-    setState(() {
-      _isProcessing = true;
-    });
+    setState(() => _isProcessing = true);
 
     try {
-      final ExtendedImageEditorState? state = editorKey.currentState;
-      if (state == null) {
-        setState(() => _isProcessing = false);
-        return;
-      }
-
-      final Rect? cropRect = state.getCropRect();
-      final EditActionDetails? action = state.editAction;
+      final editor = editorKey.currentState;
+      final cropRect = editor?.getCropRect();
+      final action = editor?.editAction;
       if (cropRect == null || action == null) {
-        setState(() => _isProcessing = false);
-        return;
+        throw StateError('تعذر قراءة إطار القص.');
       }
 
-      final img = await widget.imageFile.readAsBytes();
-
-      final ImageEditorOption option = ImageEditorOption();
-
+      final options = ImageEditorOption();
       if (action.needCrop) {
-        option.addOption(ClipOption.fromRect(cropRect));
+        options.addOption(ClipOption.fromRect(cropRect));
       }
       if (action.hasRotateDegrees) {
-        option.addOption(RotateOption(action.rotateDegrees.toInt()));
+        options.addOption(RotateOption(action.rotateDegrees.round()));
       }
       if (action.needFlip) {
-        option.addOption(
+        options.addOption(
           FlipOption(horizontal: action.rotationYRadians != 0, vertical: false),
         );
       }
 
       final result = await ImageEditor.editImage(
-        image: img,
-        imageEditorOption: option,
+        image: await widget.imageFile.readAsBytes(),
+        imageEditorOption: options,
       );
-
-      if (result == null) {
-        setState(() => _isProcessing = false);
-        return;
+      if (result == null || result.isEmpty) {
+        throw StateError('لم يُنتج محرر القص ملفاً صالحاً.');
       }
 
-      final tempDir = await getTemporaryDirectory();
-      final tempPath = p.join(
-        tempDir.path,
-        'cropped_\${DateTime.now().millisecondsSinceEpoch}.jpg',
+      final file = await TemporaryImageStore.writeJpeg(
+        result,
+        prefix: 'cropped_',
       );
-      final file = File(tempPath);
-      await file.writeAsBytes(result);
-
       if (!mounted) return;
       Navigator.of(context).pop(file);
-    } catch (e) {
-      debugPrint('Crop failed: $e');
+    } catch (_) {
       if (mounted) {
-        setState(() => _isProcessing = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('تعذر حفظ القص. حاول مرة أخرى.')),
+        );
       }
+    } finally {
+      if (mounted) setState(() => _isProcessing = false);
     }
   }
 
@@ -89,72 +76,79 @@ class _SingleCropScreenState extends State<SingleCropScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('تعديل الصورة'),
-        actions: [
+        actions: <Widget>[
           IconButton(
             icon: const Icon(Icons.check),
+            tooltip: 'تأكيد القص',
             onPressed: _isProcessing ? null : _cropImage,
           ),
         ],
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: ExtendedImage.file(
-              widget.imageFile,
-              fit: BoxFit.contain,
-              mode: ExtendedImageMode.editor,
-              extendedImageEditorKey: editorKey,
-              initEditorConfigHandler: (ExtendedImageState? state) {
-                return EditorConfig(
-                  maxScale: 8.0,
-                  cropRectPadding: const EdgeInsets.all(20.0),
-                  hitTestSize: 24.0, // 48px hitboxes -> 48px minimum crop size
-                  initCropRectType: InitCropRectType.imageRect,
-                  cropAspectRatio: _aspectRatio,
-                  cornerSize: const Size(30.0, 5.0),
-                );
-              },
+      body: _isProcessing
+          ? const Center(child: CircularProgressIndicator())
+          : Column(
+              children: <Widget>[
+                Expanded(
+                  child: ExtendedImage.file(
+                    widget.imageFile,
+                    fit: BoxFit.contain,
+                    mode: ExtendedImageMode.editor,
+                    extendedImageEditorKey: editorKey,
+                    initEditorConfigHandler: (ExtendedImageState? state) {
+                      return EditorConfig(
+                        maxScale: 8,
+                        cropRectPadding: const EdgeInsets.all(20),
+                        hitTestSize: 24,
+                        initCropRectType: InitCropRectType.imageRect,
+                        cropAspectRatio: _aspectRatio,
+                        cornerSize: const Size(30, 5),
+                      );
+                    },
+                  ),
+                ),
+                Container(
+                  color: const Color(0xFF1E293B),
+                  padding: const EdgeInsets.all(8),
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: <Widget>[
+                        _buildAspectRatioChip(
+                          'Original',
+                          CropAspectRatios.original,
+                        ),
+                        _buildAspectRatioChip(
+                          'Square',
+                          CropAspectRatios.ratio1_1,
+                        ),
+                        _buildAspectRatioChip('3 × 2', 3 / 2),
+                        _buildAspectRatioChip(
+                          '4 × 3',
+                          CropAspectRatios.ratio4_3,
+                        ),
+                        _buildAspectRatioChip(
+                          '16 × 9',
+                          CropAspectRatios.ratio16_9,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ),
-          ),
-          Container(
-            color: const Color(0xFF1E293B),
-            padding: const EdgeInsets.all(8.0),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  _buildAspectRatioChip('Original', CropAspectRatios.original),
-                  _buildAspectRatioChip('square', CropAspectRatios.ratio1_1),
-                  _buildAspectRatioChip('3x2', 3.0 / 2.0),
-                  _buildAspectRatioChip('4x3', CropAspectRatios.ratio4_3),
-                  _buildAspectRatioChip('16x9', CropAspectRatios.ratio16_9),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
     );
   }
 
   Widget _buildAspectRatioChip(String label, double? ratio) {
-    final isSelected = _aspectRatio == ratio;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 4.0),
+      padding: const EdgeInsets.symmetric(horizontal: 4),
       child: ChoiceChip(
         label: Text(label),
-        selected: isSelected,
-        onSelected: (bool selected) {
-          if (selected) {
-            setState(() {
-              _aspectRatio = ratio;
-            });
-          } else {
-            setState(() {
-              _aspectRatio = CropAspectRatios.custom;
-            });
-          }
+        selected: _aspectRatio == ratio,
+        onSelected: (selected) {
+          setState(() {
+            _aspectRatio = selected ? ratio : CropAspectRatios.custom;
+          });
         },
       ),
     );

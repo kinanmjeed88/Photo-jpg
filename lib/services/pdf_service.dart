@@ -1,140 +1,124 @@
 import 'dart:io';
 import 'dart:isolate';
-import 'dart:typed_data';
 import 'dart:math' as math;
+import 'dart:typed_data';
+
+import 'package:image/image.dart' as img;
+import 'package:path/path.dart' as path;
+import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:path_provider/path_provider.dart';
-import 'package:image/image.dart' as img;
+
 import '../providers/app_state.dart';
 
-Future<File> _isolateGeneratePdf(Map<String, dynamic> args) async {
-  final String outputPath = args['outputPath'];
-  // Now passing a list of pages, where each page is a list of maps (docs)
-  final List<dynamic> rawPagesData = args['pagesData'];
+const double _a4WidthPoints = 595.275590551;
+const double _a4HeightPoints = 841.88976378;
 
-  final List<List<Map<String, dynamic>>> pagesData = rawPagesData.map((page) {
-    return List<Map<String, dynamic>>.from(page as List<dynamic>);
-  }).toList();
+String _safePdfFileName(String rawName) {
+  final withoutExtension = path.basenameWithoutExtension(rawName);
+  final normalized = withoutExtension
+      .replaceAll(RegExp(r'[^\p{L}\p{N}_ -]', unicode: true), '_')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  final safe = normalized.isEmpty ? 'scanned_document' : normalized;
+  return '${safe.substring(0, math.min(safe.length, 80))}.pdf';
+}
 
-  final double uiReferenceWidth = args['uiCanvasWidth'] as double;
-  final double uiReferenceHeight = args['uiCanvasHeight'] as double;
-  final bool addFrame = args['addFrame'] as bool? ?? false;
+Uint8List _preparePdfImage(String sourcePath) {
+  final rawBytes = File(sourcePath).readAsBytesSync();
+  var image = img.decodeImage(rawBytes);
+  if (image == null) return rawBytes;
+  image = img.bakeOrientation(image);
+  final longestEdge = math.max(image.width, image.height);
+  if (longestEdge > 2400) {
+    final scale = 2400 / longestEdge;
+    image = img.copyResize(
+      image,
+      width: (image.width * scale).round(),
+      height: (image.height * scale).round(),
+      interpolation: img.Interpolation.average,
+    );
+  }
+  return Uint8List.fromList(img.encodeJpg(image, quality: 95));
+}
 
-  final pdf = pw.Document();
+Future<File> _generatePdfInIsolate(Map<String, dynamic> args) async {
+  final outputPath = args['outputPath'] as String;
+  final pagesData = (args['pagesData'] as List)
+      .map((page) => (page as List).cast<Map<String, dynamic>>())
+      .toList(growable: false);
+  final canvasWidth = args['uiCanvasWidth'] as double;
+  final canvasHeight = args['uiCanvasHeight'] as double;
+  final addFrame = args['addFrame'] as bool;
+  if (canvasWidth <= 0 || canvasHeight <= 0) {
+    throw ArgumentError('Canvas dimensions must be positive.');
+  }
 
   final pageFormat = PdfPageFormat(
-    uiReferenceWidth,
-    uiReferenceHeight,
+    _a4WidthPoints,
+    _a4HeightPoints,
     marginAll: 0,
   );
+  final xScale = pageFormat.width / canvasWidth;
+  final yScale = pageFormat.height / canvasHeight;
+  final document = pw.Document();
 
-  for (final docsOnPage in pagesData) {
-    pdf.addPage(
+  final renderedPages = pagesData.isEmpty
+      ? <List<Map<String, dynamic>>>[<Map<String, dynamic>>[]]
+      : pagesData;
+  for (final documentsOnPage in renderedPages) {
+    document.addPage(
       pw.Page(
         pageFormat: pageFormat,
-        margin: pw.EdgeInsets.zero, // Crucial for perfect origin alignment
-        build: (pw.Context context) {
-          return pw.Stack(
-            children: docsOnPage.map((docData) {
-              final String path = docData['path'] as String;
-              // UI coordinates
-              final double dx = docData['dx'] as double;
-              final double dy = docData['dy'] as double;
-              final double docWidth = docData['width'] as double;
-              final double docHeight = docData['height'] as double;
-              final int rotationAngle = docData['rotationAngle'] as int? ?? 0;
-
-              // High-fidelity image processing with memory safety
-              final Uint8List rawBytes = File(path).readAsBytesSync();
-              img.Image? decodedImage = img.decodeImage(rawBytes);
-
-              Uint8List processedBytes = rawBytes;
-
-              if (decodedImage != null) {
-                // EXIF Orientation fix
-                decodedImage = img.bakeOrientation(decodedImage);
-
-                // RAM safety: scale down only if longest edge exceeds 2400px
-                final int maxEdge = math.max(
-                  decodedImage.width,
-                  decodedImage.height,
+        margin: pw.EdgeInsets.zero,
+        build: (context) => pw.Stack(
+          children: documentsOnPage
+              .map((data) {
+                final scale = data['scale'] as double;
+                final left = (data['dx'] as double) * xScale;
+                final top = (data['dy'] as double) * yScale;
+                final width = (data['width'] as double) * scale * xScale;
+                final height = (data['height'] as double) * scale * yScale;
+                final rotation = (data['rotationAngle'] as int) % 360;
+                pw.Widget image = pw.Image(
+                  pw.MemoryImage(_preparePdfImage(data['path'] as String)),
+                  fit: pw.BoxFit.contain,
                 );
-                if (maxEdge > 2400) {
-                  final double scale = 2400 / maxEdge;
-                  decodedImage = img.copyResize(
-                    decodedImage,
-                    width: (decodedImage.width * scale).toInt(),
-                    height: (decodedImage.height * scale).toInt(),
-                    interpolation: img.Interpolation.linear,
+                if (rotation != 0) {
+                  image = pw.Transform.rotate(
+                    angle: rotation * math.pi / 180,
+                    child: image,
                   );
                 }
-
-                // Keep 95% quality for high-res output
-                processedBytes = Uint8List.fromList(
-                  img.encodeJpg(decodedImage, quality: 95),
+                return pw.Positioned(
+                  left: left,
+                  top: top,
+                  child: pw.Container(
+                    width: width,
+                    height: height,
+                    decoration: addFrame
+                        ? pw.BoxDecoration(
+                            border: pw.Border.all(
+                              color: PdfColors.black,
+                              width: 0.75,
+                            ),
+                          )
+                        : null,
+                    child: image,
+                  ),
                 );
-              }
-
-              final memoryImage = pw.MemoryImage(processedBytes);
-
-              // PDF origin is bottom-left, UI origin is top-left
-              final pdfX = dx;
-              // Correct Y-axis mapping: pdfY goes from bottom up.
-              // Top-left of the document in UI corresponds to top-left in PDF.
-              // We need the bottom coordinate of the document in PDF space.
-              final pdfY = uiReferenceHeight - (dy + docHeight);
-
-              pw.Widget imageWidget = pw.Image(
-                memoryImage,
-                fit: pw.BoxFit.contain,
-              );
-
-              if (rotationAngle != 0) {
-                // PDF rotate rotates around its center and takes angle in radians
-                imageWidget = pw.Transform.rotate(
-                  angle: -rotationAngle * math.pi / 180,
-                  child: imageWidget,
-                );
-              }
-
-              return pw.Positioned(
-                left: pdfX,
-                bottom: pdfY,
-                child: pw.Container(
-                  width: docWidth,
-                  height: docHeight,
-                  decoration: addFrame
-                      ? pw.BoxDecoration(
-                          border: pw.Border.all(
-                            color: PdfColors.black,
-                            width: 1.0,
-                          ),
-                        )
-                      : null,
-                  child: imageWidget,
-                ),
-              );
-            }).toList(),
-          );
-        },
+              })
+              .toList(growable: false),
+        ),
       ),
     );
   }
 
-  // If there are no pages, at least add one empty page so it doesn't crash
-  if (pagesData.isEmpty) {
-    pdf.addPage(
-      pw.Page(
-        pageFormat: pageFormat,
-        build: (pw.Context context) => pw.Container(),
-      ),
-    );
-  }
-
-  final file = File(outputPath);
-  await file.writeAsBytes(await pdf.save());
-  return file;
+  final target = File(outputPath);
+  final temporary = File('$outputPath.partial');
+  await temporary.writeAsBytes(await document.save(), flush: true);
+  if (await target.exists()) await target.delete();
+  return temporary.rename(target.path);
 }
 
 class PdfService {
@@ -144,39 +128,38 @@ class PdfService {
     required double uiCanvasWidth,
     required double uiCanvasHeight,
   }) async {
-    final output = await getApplicationDocumentsDirectory();
-    final outputPath = '${output.path}/${state.fileName}.pdf';
+    final directory = await getApplicationDocumentsDirectory();
+    final outputPath = path.join(
+      directory.path,
+      _safePdfFileName(state.fileName),
+    );
+    final pageKeys = groupedPages.keys.toList()..sort();
+    final pagesData = pageKeys
+        .map(
+          (pageKey) => groupedPages[pageKey]!
+              .map(
+                (document) => <String, dynamic>{
+                  'path': document.file.path,
+                  'dx': document.dx,
+                  'dy': document.dy,
+                  'width': document.width,
+                  'height': document.height,
+                  'scale': document.scale,
+                  'rotationAngle': document.rotationAngle,
+                },
+              )
+              .toList(growable: false),
+        )
+        .toList(growable: false);
 
-    // Map document data to primitives to pass to the isolate securely
-    final List<List<Map<String, dynamic>>> pagesData = [];
-    final keys = groupedPages.keys.toList()..sort();
-
-    for (var key in keys) {
-      final docs = groupedPages[key]!;
-      pagesData.add(
-        docs
-            .map(
-              (doc) => {
-                'path': doc.file.path,
-                'dx': doc.dx,
-                'dy': doc.dy,
-                'width': doc.width,
-                'height': doc.height,
-                'rotationAngle': doc.rotationAngle,
-              },
-            )
-            .toList(),
-      );
-    }
-
-    final args = {
-      'outputPath': outputPath,
-      'pagesData': pagesData,
-      'uiCanvasWidth': uiCanvasWidth,
-      'uiCanvasHeight': uiCanvasHeight,
-      'addFrame': state.addFrame,
-    };
-
-    return await Isolate.run(() => _isolateGeneratePdf(args));
+    return Isolate.run(
+      () => _generatePdfInIsolate(<String, dynamic>{
+        'outputPath': outputPath,
+        'pagesData': pagesData,
+        'uiCanvasWidth': uiCanvasWidth,
+        'uiCanvasHeight': uiCanvasHeight,
+        'addFrame': state.addFrame,
+      }),
+    );
   }
 }

@@ -1,59 +1,38 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'dart:math' as math;
+
 import '../providers/app_state.dart';
 
 class DraggableResizableDocument extends StatefulWidget {
-  final ScannedDocument document;
-  final int pageIndex;
-  final int docIndex;
-  final bool isSelected;
-  final bool addFrame;
-  final VoidCallback onTap;
-  final void Function(
-    int pageIndex,
-    int docIndex,
-    double dx,
-    double dy,
-    double width,
-    double height,
-    int rotationAngle,
-  )
-  onLayoutUpdate;
-  final void Function(
-    int sourcePageIndex,
-    int docIndex,
-    ScannedDocument doc,
-    double dx,
-    double dy,
-  )
-  onCrossPageMove;
-  final double canvasWidth;
-  final double canvasHeight;
-  final double canvasScale;
-  final VoidCallback? onGestureStart;
-  final void Function(double newScale, Offset delta)? onTransformUpdate;
-  final ValueChanged<double>? onHandleResize;
-  final VoidCallback? onGestureEnd;
-
   const DraggableResizableDocument({
     super.key,
     required this.document,
-    required this.pageIndex,
-    required this.docIndex,
     required this.isSelected,
     required this.addFrame,
-    required this.onTap,
-    required this.onLayoutUpdate,
-    required this.onCrossPageMove,
     required this.canvasWidth,
     required this.canvasHeight,
     required this.canvasScale,
+    required this.onTap,
+    required this.onLayoutUpdate,
+    required this.onCrossPageMove,
     this.onGestureStart,
-    this.onTransformUpdate,
-    this.onHandleResize,
     this.onGestureEnd,
   });
+
+  final ScannedDocument document;
+  final bool isSelected;
+  final bool addFrame;
+  final double canvasWidth;
+  final double canvasHeight;
+  final double canvasScale;
+  final ValueChanged<String> onTap;
+  final void Function(String documentId, double dx, double dy, double scale)
+  onLayoutUpdate;
+  final void Function(String documentId, double dx, double dy) onCrossPageMove;
+  final VoidCallback? onGestureStart;
+  final VoidCallback? onGestureEnd;
 
   @override
   State<DraggableResizableDocument> createState() =>
@@ -62,295 +41,177 @@ class DraggableResizableDocument extends StatefulWidget {
 
 class _DraggableResizableDocumentState
     extends State<DraggableResizableDocument> {
-  late double dx;
-  late double dy;
-  late double width;
-  late double height;
-  late int rotationAngle;
-  bool isDragging = false;
-  double _baseScale = 1.0;
+  late double _dx;
+  late double _dy;
+  late double _scale;
+  double _startDx = 0;
+  double _startDy = 0;
+  double _startScale = 1;
+  double _resizeBaseScale = 1;
+  double _resizeDrag = 0;
+  bool _isInteracting = false;
   bool _isResizing = false;
-  double _handleBaseScale = 1.0;
-  double _accumulatedDrag = 0.0;
-
-  final LayerLink _layerLink = LayerLink();
-  OverlayEntry? _overlayEntry;
 
   @override
   void initState() {
     super.initState();
-    dx = widget.document.dx;
-    dy = widget.document.dy;
-    width = widget.document.width;
-    height = widget.document.height;
-    rotationAngle = widget.document.rotationAngle;
+    _syncFromDocument();
   }
 
   @override
-  void dispose() {
-    _removeOverlay();
-    super.dispose();
-  }
-
-  void _removeOverlay() {
-    _overlayEntry?.remove();
-    _overlayEntry = null;
-  }
-
-  @override
-  void didUpdateWidget(DraggableResizableDocument oldWidget) {
+  void didUpdateWidget(covariant DraggableResizableDocument oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.document != widget.document) {
-      dx = widget.document.dx;
-      dy = widget.document.dy;
-      width = widget.document.width;
-      height = widget.document.height;
-      rotationAngle = widget.document.rotationAngle;
+    if (!_isInteracting && oldWidget.document != widget.document) {
+      _syncFromDocument();
     }
   }
 
-  double get _documentAspectRatio {
-    bool isRotated = rotationAngle % 180 != 0;
+  void _syncFromDocument() {
+    _dx = widget.document.dx;
+    _dy = widget.document.dy;
+    _scale = widget.document.scale;
+  }
 
-    if (widget.document.originalHeight > 0) {
-      double baseRatio =
-          widget.document.originalWidth / widget.document.originalHeight;
-      return isRotated ? (1 / baseRatio) : baseRatio;
+  void _emitLayout() {
+    widget.onLayoutUpdate(widget.document.id, _dx, _dy, _scale);
+  }
+
+  void _beginTransform() {
+    _isInteracting = true;
+    _startDx = _dx;
+    _startDy = _dy;
+    _startScale = _scale;
+    widget.onGestureStart?.call();
+  }
+
+  void _updateTransform(ScaleUpdateDetails details) {
+    final proposedScale = (_startScale * details.scale).clamp(0.3, 3.0);
+    final scaledWidth = widget.document.width * proposedScale;
+    final scaledHeight = widget.document.height * proposedScale;
+    final maxX = math.max(0, widget.canvasWidth - scaledWidth);
+    final maxY = math.max(0, widget.canvasHeight - scaledHeight);
+    setState(() {
+      _scale = proposedScale;
+      _dx = (_startDx + details.focalPointDelta.dx / widget.canvasScale)
+          .clamp(0, maxX)
+          .toDouble();
+      _dy = (_startDy + details.focalPointDelta.dy / widget.canvasScale)
+          .clamp(-scaledHeight * 0.2, maxY + scaledHeight * 0.2)
+          .toDouble();
+    });
+    _emitLayout();
+  }
+
+  void _endTransform() {
+    if (_dy < 0 ||
+        _dy + widget.document.height * _scale > widget.canvasHeight) {
+      widget.onCrossPageMove(widget.document.id, _dx, _dy);
+    } else {
+      _emitLayout();
     }
-    return 1.0;
+    setState(() => _isInteracting = false);
+    widget.onGestureEnd?.call();
   }
 
-  Widget _buildDocumentImage({bool isOverlay = false}) {
-    return RepaintBoundary(
-      child: SizedBox(
-        width: width,
-        height: height,
-        child: AspectRatio(
-          aspectRatio: _documentAspectRatio,
-          child: Container(
-            decoration: BoxDecoration(
-              border: widget.isSelected
-                  ? Border.all(color: Colors.blueAccent, width: 3)
-                  : (widget.addFrame
-                        ? Border.all(color: Colors.black, width: 1.0)
-                        : null),
-            ),
-            child: RotatedBox(
-              quarterTurns: rotationAngle ~/ 90,
-              child: Image.file(widget.document.file, fit: BoxFit.contain),
-            ),
-          ),
-        ),
-      ),
-    );
+  void _beginResize() {
+    HapticFeedback.selectionClick();
+    _isInteracting = true;
+    _isResizing = true;
+    _resizeBaseScale = _scale;
+    _resizeDrag = 0;
   }
 
-  void _showOverlay(BuildContext context) {
-    if (_overlayEntry != null) return;
-    final overlay = Overlay.of(context);
-
-    _overlayEntry = OverlayEntry(
-      builder: (context) {
-        return Positioned(
-          left: 0,
-          top: 0,
-          child: CompositedTransformFollower(
-            link: _layerLink,
-            showWhenUnlinked: false,
-            child: IgnorePointer(
-              ignoring: true,
-              child: Transform.scale(
-                scale: widget.canvasScale,
-                alignment: Alignment.topLeft,
-                child: SizedBox(
-                  width: width,
-                  height: height,
-                  child: Transform.scale(
-                    scale: widget.document.scale,
-                    alignment: Alignment.center,
-                    child: Stack(
-                      clipBehavior: Clip.none,
-                      children: [
-                        _buildDocumentImage(isOverlay: true),
-                        if (widget.isSelected)
-                          Positioned(
-                            bottom: -60 / widget.document.scale,
-                            right: -60 / widget.document.scale,
-                            child: SizedBox(
-                              width: 120 / widget.document.scale,
-                              height: 120 / widget.document.scale,
-                              child: Center(
-                                child: Transform.scale(
-                                  scale: 1.0 / widget.document.scale,
-                                  alignment: Alignment.center,
-                                  child: SizedBox(
-                                    width: 120,
-                                    height: 120,
-                                    child: Center(child: _buildHandleUI()),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
+  void _updateResize(DragUpdateDetails details) {
+    _resizeDrag += (details.delta.dx + details.delta.dy) / math.sqrt2;
+    final proposedScale = (_resizeBaseScale + _resizeDrag / 150).clamp(
+      0.3,
+      3.0,
     );
-
-    overlay.insert(_overlayEntry!);
+    final maxScaleX = widget.canvasWidth / widget.document.width;
+    final maxScaleY = widget.canvasHeight / widget.document.height;
+    final boundedScale = math.min(
+      proposedScale,
+      math.min(maxScaleX, maxScaleY),
+    );
+    setState(() => _scale = boundedScale);
+    _emitLayout();
   }
 
-  Widget _buildHandleUI() {
-    return Container(
-      width: 120,
-      height: 120,
-      color: Colors.transparent,
-      child: Center(
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          decoration: BoxDecoration(
-            color: _isResizing ? Colors.orange : Colors.blue,
-            shape: BoxShape.circle,
-            border: Border.all(color: Colors.white, width: 2),
-            boxShadow: const [
-              BoxShadow(color: Colors.black26, blurRadius: 4, spreadRadius: 1),
-            ],
-          ),
-          padding: const EdgeInsets.all(12),
-          child: const Icon(Icons.open_in_full, size: 32, color: Colors.white),
-        ),
-      ),
-    );
+  void _endResize() {
+    setState(() {
+      _isResizing = false;
+      _isInteracting = false;
+    });
+    _emitLayout();
   }
 
   @override
   Widget build(BuildContext context) {
-    debugPrint('isSelected: ${widget.isSelected}, isDragging: $isDragging');
+    final scaledWidth = widget.document.width * _scale;
+    final scaledHeight = widget.document.height * _scale;
+    final imageAspectRatio = widget.document.originalHeight == 0
+        ? 1.0
+        : widget.document.originalWidth / widget.document.originalHeight;
 
-    Widget documentWidget = CompositedTransformTarget(
-      link: _layerLink,
-      child: Opacity(
-        opacity: isDragging ? 0.0 : 1.0,
+    return Positioned(
+      left: _dx,
+      top: _dy,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => widget.onTap(widget.document.id),
+        onScaleStart: (_) => _beginTransform(),
+        onScaleUpdate: _updateTransform,
+        onScaleEnd: (_) => _endTransform(),
         child: SizedBox(
-          width: width,
-          height: height,
-          child: Transform.scale(
-            scale: widget.document.scale,
-            alignment: Alignment.center,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                GestureDetector(
-                  behavior: HitTestBehavior.deferToChild,
-                  onTapDown: (_) {
-                    // ignore: unnecessary_null_comparison
-                    if (widget.onTap != null) widget.onTap();
-                  },
-                  onScaleStart: (details) {
-                    _baseScale = widget.document.scale;
-                    setState(() {
-                      isDragging = true;
-                    });
-                    _showOverlay(context);
-                    if (widget.onGestureStart != null) widget.onGestureStart!();
-                  },
-                  onScaleUpdate: (details) {
-                    final double newScale = (_baseScale * details.scale).clamp(0.3, 3.0);
-                    if (widget.onTransformUpdate != null) {
-                      widget.onTransformUpdate!(newScale, details.focalPointDelta);
-                    }
-                    _overlayEntry?.markNeedsBuild();
-                  },
-                  onScaleEnd: (details) {
-                    setState(() {
-                      isDragging = false;
-                    });
-                    _removeOverlay();
-
-                    if (widget.document.position.dy < 0 || widget.document.position.dy > widget.canvasHeight) {
-                      widget.onCrossPageMove(
-                        widget.pageIndex,
-                        widget.docIndex,
-                        widget.document,
-                        widget.document.position.dx,
-                        widget.document.position.dy,
-                      );
-                    }
-
-                    if (widget.onGestureEnd != null) widget.onGestureEnd!();
-                  },
-                  child: _buildDocumentImage(isOverlay: false),
+          width: scaledWidth,
+          height: scaledHeight,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: <Widget>[
+              Container(
+                decoration: BoxDecoration(
+                  border: widget.isSelected
+                      ? Border.all(color: Colors.blueAccent, width: 3)
+                      : widget.addFrame
+                      ? Border.all(color: Colors.black)
+                      : null,
                 ),
-
-                if (widget.isSelected)
-                  Positioned(
-                    bottom: -60 / widget.document.scale,
-                    right: -60 / widget.document.scale,
-                    child: SizedBox(
-                      width: 120 / widget.document.scale,
-                      height: 120 / widget.document.scale,
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onPanStart: (details) {
-                          HapticFeedback.selectionClick();
-                          setState(() {
-                            _isResizing = true;
-                            _handleBaseScale = widget.document.scale;
-                            _accumulatedDrag = 0.0;
-                          });
-                        },
-                        onPanUpdate: (details) {
-                          final double dx = details.delta.dx;
-                          final double dy = details.delta.dy;
-
-                          final double diagonalDrag = (dx + dy) / math.sqrt(2);
-                          _accumulatedDrag += diagonalDrag;
-
-                          final double newScale =
-                              (_handleBaseScale + (_accumulatedDrag / 150.0))
-                                  .clamp(0.3, 3.0);
-
-                          if (widget.onHandleResize != null) {
-                            widget.onHandleResize!(newScale);
-                          }
-                          _overlayEntry?.markNeedsBuild();
-                        },
-                        onPanEnd: (_) => setState(() => _isResizing = false),
-                        onPanCancel: () => setState(() => _isResizing = false),
-                        child: Center(
-                          child: Transform.scale(
-                            scale: 1.0 / widget.document.scale,
-                            alignment: Alignment.center,
-                            child: SizedBox(
-                              width: 120,
-                              height: 120,
-                              child: Center(child: _buildHandleUI()),
-                            ),
-                          ),
-                        ),
+                child: RotatedBox(
+                  quarterTurns: widget.document.rotationAngle ~/ 90,
+                  child: AspectRatio(
+                    aspectRatio: imageAspectRatio,
+                    child: Image.file(
+                      widget.document.file,
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                ),
+              ),
+              if (widget.isSelected)
+                Positioned(
+                  right: -24,
+                  bottom: -24,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onPanStart: (_) => _beginResize(),
+                    onPanUpdate: _updateResize,
+                    onPanEnd: (_) => _endResize(),
+                    onPanCancel: _endResize,
+                    child: CircleAvatar(
+                      radius: 20,
+                      backgroundColor: _isResizing
+                          ? Colors.orange
+                          : Colors.blue,
+                      child: const Icon(
+                        Icons.open_in_full,
+                        color: Colors.white,
                       ),
                     ),
                   ),
-              ],
-            ),
+                ),
+            ],
           ),
         ),
-      ),
-    );
-
-    return Positioned(
-      left: widget.document.position.dx,
-      top: widget.document.position.dy,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: widget.onTap,
-        child: Stack(clipBehavior: Clip.none, children: [documentWidget]),
       ),
     );
   }

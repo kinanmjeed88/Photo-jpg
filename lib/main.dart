@@ -69,7 +69,6 @@ class _DocScannerAppState extends State<DocScannerApp> {
           primary: Color(0xFF4F46E5), // Indigo
           secondary: Color(0xFFF59E0B), // Gold/Yellow
           surface: Color(0xFF1E293B),
-          background: Color(0xFF0F172A),
         ),
         appBarTheme: const AppBarTheme(
           backgroundColor: Color(0xFF1E293B),

@@ -23,10 +23,10 @@ void main() {
 
       // 4. Verify aspect ratio chips are present with correct Strings
       expect(find.text('Original'), findsOneWidget);
-      expect(find.text('square'), findsOneWidget);
-      expect(find.text('3x2'), findsOneWidget);
-      expect(find.text('4x3'), findsOneWidget);
-      expect(find.text('16x9'), findsOneWidget);
+      expect(find.text('Square'), findsOneWidget);
+      expect(find.text('3 × 2'), findsOneWidget);
+      expect(find.text('4 × 3'), findsOneWidget);
+      expect(find.text('16 × 9'), findsOneWidget);
 
       // We confirm the screen builds properly.
       // Manual QA covers the 48px interaction limits as instructed.

@@ -1,450 +1,451 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
-import 'dart:async';
-import 'package:flutter/foundation.dart';
+import 'dart:typed_data';
+import 'package:extended_image/extended_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:extended_image/extended_image.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:opencv_dart/opencv_dart.dart' as cv;
-import 'dart:typed_data';
 import 'package:gal/gal.dart';
+import 'package:image/image.dart' as img;
+import 'package:opencv_dart/opencv_dart.dart' as cv;
 import 'package:permission_handler/permission_handler.dart';
+
 import '../providers/app_state.dart';
+import '../services/temporary_image_store.dart';
 
 Future<Map<String, dynamic>> _runProxyIsolate(Map<String, dynamic> args) {
   return Isolate.run(() => _generateProxy(args));
 }
 
 Map<String, dynamic> _generateProxy(Map<String, dynamic> args) {
-  final Uint8List bytes = args['bytes'];
-  cv.Mat? src;
+  final bytes = args['bytes'] as Uint8List;
+  cv.Mat? source;
   cv.Mat? scaled;
   try {
-    src = cv.imdecode(bytes, cv.IMREAD_COLOR);
-    double scale = 1.0;
-    int maxDim = src.cols > src.rows ? src.cols : src.rows;
-    if (maxDim > 1080) {
-      scale = 1080.0 / maxDim;
-      scaled = cv.resize(src, (0, 0), fx: scale, fy: scale);
-      final (_, encodedBytes) = cv.imencode('.jpg', scaled);
-      return {'bytes': encodedBytes, 'scale': scale};
+    source = cv.imdecode(bytes, cv.IMREAD_COLOR);
+    if (source.isEmpty) return <String, dynamic>{'bytes': bytes, 'scale': 1.0};
+    final maxDimension = source.cols > source.rows ? source.cols : source.rows;
+    if (maxDimension <= 1080) {
+      return <String, dynamic>{'bytes': bytes, 'scale': 1.0};
     }
-    return {'bytes': bytes, 'scale': 1.0};
-  } catch (e) {
-    print('Proxy Isolate failed: $e');
-    return {'bytes': bytes, 'scale': 1.0};
+    final scale = 1080 / maxDimension;
+    scaled = cv.resize(source, (0, 0), fx: scale, fy: scale);
+    final encoded = cv.imencode('.jpg', scaled).$2;
+    return <String, dynamic>{'bytes': encoded, 'scale': scale};
+  } catch (_) {
+    return <String, dynamic>{'bytes': bytes, 'scale': 1.0};
   } finally {
-    src?.dispose();
+    source?.dispose();
     scaled?.dispose();
   }
 }
 
-Future<Uint8List> _runGalleryIsolate(Map<String, dynamic> args) {
-  return Isolate.run(() => _processGalleryImage(args));
+class _CropBounds {
+  const _CropBounds({
+    required this.left,
+    required this.top,
+    required this.width,
+    required this.height,
+  });
+
+  final int left;
+  final int top;
+  final int width;
+  final int height;
+
+  Map<String, int> toMap() => <String, int>{
+    'left': left,
+    'top': top,
+    'width': width,
+    'height': height,
+  };
+
+  static _CropBounds? fromProxyRect({
+    required Rect? rect,
+    required double proxyScale,
+    required int sourceWidth,
+    required int sourceHeight,
+  }) {
+    if (rect == null || sourceWidth <= 0 || sourceHeight <= 0) return null;
+    final safeScale = proxyScale <= 0 ? 1.0 : proxyScale;
+    final left = (rect.left / safeScale)
+        .floor()
+        .clamp(0, sourceWidth - 1)
+        .toInt();
+    final top = (rect.top / safeScale)
+        .floor()
+        .clamp(0, sourceHeight - 1)
+        .toInt();
+    final right = (rect.right / safeScale)
+        .ceil()
+        .clamp(left + 1, sourceWidth)
+        .toInt();
+    final bottom = (rect.bottom / safeScale)
+        .ceil()
+        .clamp(top + 1, sourceHeight)
+        .toInt();
+    final width = right - left;
+    final height = bottom - top;
+    if (width <= 0 || height <= 0) return null;
+    return _CropBounds(left: left, top: top, width: width, height: height);
+  }
 }
 
-Future<String> _runEditedIsolate(Map<String, dynamic> args) {
-  return Isolate.run(() => _processEditedImage(args));
+cv.Mat _applyAdjustments(
+  cv.Mat source, {
+  required double contrast,
+  required double brightness,
+  required double sharpness,
+}) {
+  var current = source;
+  if (contrast != 1 || brightness != 0) {
+    final adjusted = cv.convertScaleAbs(
+      current,
+      alpha: contrast,
+      beta: brightness,
+    );
+    if (!identical(current, source)) current.dispose();
+    current = adjusted;
+  }
+  if (sharpness > 0) {
+    final blurred = cv.gaussianBlur(current, (0, 0), sharpness);
+    final sharpened = cv.addWeighted(current, 1.5, blurred, -0.5, 0);
+    blurred.dispose();
+    if (!identical(current, source)) current.dispose();
+    current = sharpened;
+  }
+  return current;
 }
 
-Uint8List _processGalleryImage(Map<String, dynamic> args) {
-  final Uint8List bytes = args['bytes'];
-  final int? rectLeft = args['rectLeft'];
-  final int? rectTop = args['rectTop'];
-  final int? rectWidth = args['rectWidth'];
-  final int? rectHeight = args['rectHeight'];
-  final double contrast = args['contrast'];
-  final double brightness = args['brightness'];
-  final double sharpness = args['sharpness'];
-
-  cv.Mat? src;
-  cv.Mat? scaled;
-  cv.Mat? sharpened;
+Uint8List _processForGallery(Map<String, dynamic> args) {
+  final bytes = args['bytes'] as Uint8List;
+  final bounds = args['bounds'] as Map<String, int>?;
+  cv.Mat? source;
+  cv.Mat? processed;
   cv.Mat? cropped;
   try {
-    src = cv.imdecode(bytes, cv.IMREAD_COLOR);
-
-    if (contrast != 1.0 || brightness != 0.0) {
-      scaled = cv.convertScaleAbs(src, alpha: contrast, beta: brightness);
-      src.dispose();
-      src = scaled;
+    source = cv.imdecode(bytes, cv.IMREAD_COLOR);
+    if (source.isEmpty) return bytes;
+    processed = _applyAdjustments(
+      source,
+      contrast: args['contrast'] as double,
+      brightness: args['brightness'] as double,
+      sharpness: args['sharpness'] as double,
+    );
+    if (bounds != null) {
+      cropped = processed.region(
+        cv.Rect(
+          bounds['left']!,
+          bounds['top']!,
+          bounds['width']!,
+          bounds['height']!,
+        ),
+      );
     }
-
-    if (sharpness > 0) {
-      final blurred = cv.gaussianBlur(src, (0, 0), sharpness);
-      sharpened = cv.addWeighted(src, 1.5, blurred, -0.5, 0);
-      blurred.dispose();
-      src.dispose();
-      src = sharpened;
-    }
-
-    if (rectLeft != null &&
-        rectTop != null &&
-        rectWidth != null &&
-        rectHeight != null) {
-      cropped = src.region(cv.Rect(rectLeft, rectTop, rectWidth, rectHeight));
-      final (_, encodedBytes) = cv.imencode('.jpg', cropped);
-      return encodedBytes;
-    } else {
-      final (_, encodedBytes) = cv.imencode('.jpg', src);
-      return encodedBytes;
-    }
-  } catch (e) {
-    print('Gallery save OpenCV failed: $e');
+    return cv.imencode('.jpg', cropped ?? processed).$2;
+  } catch (_) {
     return bytes;
   } finally {
-    src?.dispose();
+    if (processed != null && !identical(processed, source)) processed.dispose();
+    source?.dispose();
     cropped?.dispose();
   }
 }
 
-Future<Map<String, dynamic>> _runPreviewIsolate(
-  Map<String, dynamic> args,
-) async {
-  final Uint8List bytes = args['bytes'];
-  final double contrast = args['contrast'];
-  final double brightness = args['brightness'];
-  final double sharpness = args['sharpness'];
-  final int version = args['version'];
-
-  cv.Mat? src;
-  cv.Mat? scaled;
-  cv.Mat? sharpened;
+Map<String, dynamic> _processForPreview(Map<String, dynamic> args) {
+  final bytes = args['bytes'] as Uint8List;
+  final version = args['version'] as int;
+  cv.Mat? source;
+  cv.Mat? processed;
   try {
-    src = cv.imdecode(bytes, cv.IMREAD_COLOR);
-    if (src.isEmpty) return {'bytes': bytes, 'version': version};
-
-    if (contrast != 1.0 || brightness != 0.0) {
-      scaled = cv.convertScaleAbs(src, alpha: contrast, beta: brightness);
-      src.dispose();
-      src = scaled;
+    source = cv.imdecode(bytes, cv.IMREAD_COLOR);
+    if (source.isEmpty) {
+      return <String, dynamic>{'bytes': bytes, 'version': version};
     }
-
-    if (sharpness > 0) {
-      final blurred = cv.gaussianBlur(src, (0, 0), sharpness);
-      sharpened = cv.addWeighted(src, 1.5, blurred, -0.5, 0);
-      blurred.dispose();
-      src.dispose();
-      src = sharpened;
-    }
-
-    final (_, encodedBytes) = cv.imencode('.jpg', src);
-    return {'bytes': encodedBytes, 'version': version};
-  } catch (e) {
-    print('OpenCV Preview Isolate failed: $e');
-    return {'bytes': bytes, 'version': version};
+    processed = _applyAdjustments(
+      source,
+      contrast: args['contrast'] as double,
+      brightness: args['brightness'] as double,
+      sharpness: args['sharpness'] as double,
+    );
+    return <String, dynamic>{
+      'bytes': cv.imencode('.jpg', processed).$2,
+      'version': version,
+    };
+  } catch (_) {
+    return <String, dynamic>{'bytes': bytes, 'version': version};
   } finally {
-    src?.dispose();
+    if (processed != null && !identical(processed, source)) processed.dispose();
+    source?.dispose();
   }
 }
 
-String _processEditedImage(Map<String, dynamic> args) {
-  final Uint8List bytes = args['bytes'];
-  final int? rectLeft = args['rectLeft'];
-  final int? rectTop = args['rectTop'];
-  final int? rectWidth = args['rectWidth'];
-  final int? rectHeight = args['rectHeight'];
-  final double contrast = args['contrast'];
-  final double brightness = args['brightness'];
-  final double sharpness = args['sharpness'];
-  final String tempPath = args['tempPath'];
-  final String docPath = args['docPath'];
-
-  cv.Mat? src;
-  cv.Mat? scaled;
-  cv.Mat? sharpened;
+bool _processEditedFile(Map<String, dynamic> args) {
+  final bytes = args['bytes'] as Uint8List;
+  final outputPath = args['outputPath'] as String;
+  final bounds = args['bounds'] as Map<String, int>?;
+  cv.Mat? source;
+  cv.Mat? processed;
   cv.Mat? cropped;
   try {
-    src = cv.imdecode(bytes, cv.IMREAD_COLOR);
-    if (src.isEmpty) {
-      return docPath;
+    source = cv.imdecode(bytes, cv.IMREAD_COLOR);
+    if (source.isEmpty) return false;
+    processed = _applyAdjustments(
+      source,
+      contrast: args['contrast'] as double,
+      brightness: args['brightness'] as double,
+      sharpness: args['sharpness'] as double,
+    );
+    if (bounds != null) {
+      cropped = processed.region(
+        cv.Rect(
+          bounds['left']!,
+          bounds['top']!,
+          bounds['width']!,
+          bounds['height']!,
+        ),
+      );
     }
-
-    if (contrast != 1.0 || brightness != 0.0) {
-      scaled = cv.convertScaleAbs(src, alpha: contrast, beta: brightness);
-      src.dispose();
-      src = scaled;
-    }
-
-    if (sharpness > 0) {
-      final blurred = cv.gaussianBlur(src, (0, 0), sharpness);
-      sharpened = cv.addWeighted(src, 1.5, blurred, -0.5, 0);
-      blurred.dispose();
-      src.dispose();
-      src = sharpened;
-    }
-
-    final outPath =
-        '$tempPath/edited_${DateTime.now().millisecondsSinceEpoch}.jpg';
-    if (rectLeft != null &&
-        rectTop != null &&
-        rectWidth != null &&
-        rectHeight != null) {
-      cropped = src.region(cv.Rect(rectLeft, rectTop, rectWidth, rectHeight));
-      cv.imwrite(outPath, cropped);
-    } else {
-      cv.imwrite(outPath, src);
-    }
-    return outPath;
-  } catch (e) {
-    print('OpenCV Isolate failed: $e');
-    return docPath;
+    return cv.imwrite(outputPath, cropped ?? processed);
+  } catch (_) {
+    return false;
   } finally {
-    src?.dispose();
+    if (processed != null && !identical(processed, source)) processed.dispose();
+    source?.dispose();
     cropped?.dispose();
   }
 }
 
 class ImageEditorScreen extends ConsumerStatefulWidget {
-  final int pageIndex;
-  final int documentIndex;
+  const ImageEditorScreen({super.key, required this.documentId});
 
-  const ImageEditorScreen({
-    super.key,
-    required this.pageIndex,
-    required this.documentIndex,
-  });
+  final String documentId;
 
   @override
   ConsumerState<ImageEditorScreen> createState() => _ImageEditorScreenState();
 }
 
 class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
-  final GlobalKey<ExtendedImageEditorState> editorKey =
+  final GlobalKey<ExtendedImageEditorState> _editorKey =
       GlobalKey<ExtendedImageEditorState>();
+  final ValueNotifier<Uint8List?> _previewBytes = ValueNotifier<Uint8List?>(
+    null,
+  );
 
+  Timer? _debounce;
+  Uint8List? _originalBytes;
+  Uint8List? _proxyBytes;
+  double _proxyScale = 1;
   double _brightness = 0;
   double _contrast = 1;
   double _sharpness = 0;
-  bool _isProcessing = false;
-
-  Timer? _debounceTimer;
-  ValueNotifier<Uint8List?> _previewImage = ValueNotifier<Uint8List?>(null);
-  Uint8List? _originalBytes;
-
-  Uint8List? _proxyBytes;
-  double _proxyScale = 1.0;
   int _previewVersion = 0;
-
-  bool _isLoadingPreview = false;
+  bool _isLoadingPreview = true;
+  bool _isProcessing = false;
 
   @override
   void initState() {
     super.initState();
-    _loadOriginalBytes();
+    _loadDocument();
   }
 
   @override
   void dispose() {
-    _debounceTimer?.cancel();
-    _previewImage.dispose();
+    _debounce?.cancel();
+    _previewBytes.dispose();
     super.dispose();
   }
 
-  Future<void> _loadOriginalBytes() async {
-    final pageDocs = ref.read(scannedDocumentsProvider)[widget.pageIndex];
-    if (pageDocs == null) return;
-    final doc = pageDocs[widget.documentIndex];
-    _originalBytes = await doc.file.readAsBytes();
+  DocumentLocation? get _location => ref
+      .read(scannedDocumentsProvider.notifier)
+      .findDocument(widget.documentId);
 
-    setState(() => _isLoadingPreview = true);
-    final proxyResult = await _runProxyIsolate({'bytes': _originalBytes!});
-    _proxyBytes = proxyResult['bytes'];
-    _proxyScale = proxyResult['scale'];
-
-    _generateLivePreview();
-  }
-
-  void _onSliderChanged() {
-    if (_debounceTimer?.isActive ?? false) _debounceTimer!.cancel();
-
-    _previewVersion++;
-
-    _debounceTimer = Timer(const Duration(milliseconds: 100), () {
-      if (_proxyBytes != null) {
-        _generateLivePreview();
-      }
-    });
-  }
-
-  Future<void> _generateLivePreview() async {
-    if (_proxyBytes == null) return;
-
-    final int currentVersion = _previewVersion;
-    setState(() => _isLoadingPreview = true);
-
+  Future<void> _loadDocument() async {
+    final location = _location;
+    if (location == null) return;
     try {
-      final args = {
-        'bytes': _proxyBytes!,
-        'contrast': _contrast,
-        'brightness': _brightness,
-        'sharpness': _sharpness,
-        'version': currentVersion,
-      };
+      _originalBytes = await location.document.file.readAsBytes();
+      final result = await _runProxyIsolate(<String, dynamic>{
+        'bytes': _originalBytes!,
+      });
+      _proxyBytes = result['bytes'] as Uint8List;
+      _proxyScale = result['scale'] as double;
+      final protectedPaths = ref
+          .read(scannedDocumentsProvider)
+          .values
+          .expand((documents) => documents)
+          .map((document) => document.file.path)
+          .toSet();
+      await TemporaryImageStore.cleanupStale(protectedPaths: protectedPaths);
+      await _generatePreview();
+    } catch (_) {
+      if (mounted) _showError('تعذر تحميل الصورة للتعديل.');
+    }
+  }
 
-      final result = await compute(_runPreviewIsolate, args);
+  void _schedulePreview() {
+    _debounce?.cancel();
+    _previewVersion++;
+    _debounce = Timer(const Duration(milliseconds: 120), _generatePreview);
+  }
 
-      final int resultVersion = result['version'];
-      if (resultVersion < _previewVersion) {
-        // Discard stale result
-        return;
-      }
-
-      _previewImage.value = result['bytes'];
-      if (mounted) setState(() => _isLoadingPreview = false);
-    } catch (e) {
-      print('Preview Isolate error: $e');
-      if (currentVersion == _previewVersion && mounted) {
+  Future<void> _generatePreview() async {
+    if (_proxyBytes == null) return;
+    final version = _previewVersion;
+    if (mounted) setState(() => _isLoadingPreview = true);
+    try {
+      final result = await Isolate.run(
+        () => _processForPreview(<String, dynamic>{
+          'bytes': _proxyBytes!,
+          'contrast': _contrast,
+          'brightness': _brightness,
+          'sharpness': _sharpness,
+          'version': version,
+        }),
+      );
+      if (!mounted || result['version'] != _previewVersion) return;
+      _previewBytes.value = result['bytes'] as Uint8List;
+    } catch (_) {
+      if (mounted) _showError('تعذر إنشاء معاينة التعديلات.');
+    } finally {
+      if (mounted && version == _previewVersion) {
         setState(() => _isLoadingPreview = false);
       }
     }
   }
 
-  Future<void> _saveToGallery() async {
-    final status = await Permission.storage.request();
-    if (!status.isGranted && !await Permission.photos.request().isGranted) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('الرجاء منح صلاحية الوصول إلى المعرض')),
-        );
-      }
-      return;
-    }
+  _CropBounds? _currentBounds(ScannedDocument document) {
+    return _CropBounds.fromProxyRect(
+      rect: _editorKey.currentState?.getCropRect(),
+      proxyScale: _proxyScale,
+      sourceWidth: document.originalWidth.round(),
+      sourceHeight: document.originalHeight.round(),
+    );
+  }
 
+  Future<void> _saveToGallery() async {
+    final location = _location;
+    if (location == null || _originalBytes == null) return;
     setState(() => _isProcessing = true);
     try {
-      final pageDocs = ref.read(scannedDocumentsProvider)[widget.pageIndex];
-      if (pageDocs == null) return;
-      final doc = pageDocs[widget.documentIndex];
-      final bytes = await doc.file.readAsBytes();
-
-      final rect = editorKey.currentState?.getCropRect();
-      final rectLeft = rect != null ? (rect.left / _proxyScale).toInt() : null;
-      final rectTop = rect != null ? (rect.top / _proxyScale).toInt() : null;
-      final rectWidth = rect != null
-          ? (rect.width / _proxyScale).toInt()
-          : null;
-      final rectHeight = rect != null
-          ? (rect.height / _proxyScale).toInt()
-          : null;
-
-      final args = {
-        'bytes': bytes,
-        'rectLeft': rectLeft,
-        'rectTop': rectTop,
-        'rectWidth': rectWidth,
-        'rectHeight': rectHeight,
-        'contrast': _contrast,
-        'brightness': _brightness,
-        'sharpness': _sharpness,
-      };
-
-      final processedBytes = await _runGalleryIsolate(args);
-
-      await Gal.putImageBytes(
-        processedBytes,
-        name: "scanned_${DateTime.now().millisecondsSinceEpoch}",
-      );
-
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('تم الحفظ في المعرض')));
+      final storage = await Permission.storage.request();
+      final photos = await Permission.photos.request();
+      if (!storage.isGranted && !photos.isGranted) {
+        throw StateError('لم تمنح صلاحية حفظ الصور.');
       }
-    } catch (e) {
+      final bytes = await Isolate.run(
+        () => _processForGallery(<String, dynamic>{
+          'bytes': _originalBytes!,
+          'bounds': _currentBounds(location.document)?.toMap(),
+          'contrast': _contrast,
+          'brightness': _brightness,
+          'sharpness': _sharpness,
+        }),
+      );
+      await Gal.putImageBytes(
+        bytes,
+        name: 'scanned_${DateTime.now().microsecondsSinceEpoch}',
+      );
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('حدث خطأ أثناء الحفظ: $e')));
+        ).showSnackBar(const SnackBar(content: Text('تم الحفظ في المعرض.')));
+      }
+    } catch (_) {
+      if (mounted) _showError('تعذر حفظ الصورة في المعرض.');
+    } finally {
+      if (mounted) setState(() => _isProcessing = false);
+    }
+  }
+
+  Future<void> _applyChanges() async {
+    final location = _location;
+    if (location == null || _originalBytes == null) return;
+    setState(() => _isProcessing = true);
+    File? outputFile;
+    try {
+      final outputPath = await TemporaryImageStore.createPath('edited_');
+      outputFile = File(outputPath);
+      final wroteFile = await Isolate.run(
+        () => _processEditedFile(<String, dynamic>{
+          'bytes': _originalBytes!,
+          'outputPath': outputPath,
+          'bounds': _currentBounds(location.document)?.toMap(),
+          'contrast': _contrast,
+          'brightness': _brightness,
+          'sharpness': _sharpness,
+        }),
+      );
+      if (!wroteFile ||
+          !await outputFile.exists() ||
+          await outputFile.length() == 0) {
+        throw StateError('تعذر إنشاء ملف التعديل.');
+      }
+      final dimensions = img.decodeImage(await outputFile.readAsBytes());
+      if (dimensions == null) throw StateError('ملف التعديل غير صالح.');
+      final width = dimensions.width.toDouble();
+      final height = dimensions.height.toDouble();
+      if (width <= 0 || height <= 0) {
+        throw StateError('ملف التعديل غير صالح.');
+      }
+
+      final oldFile = location.document.file;
+      ref
+          .read(scannedDocumentsProvider.notifier)
+          .updateDocument(
+            widget.documentId,
+            file: outputFile,
+            originalWidth: width,
+            originalHeight: height,
+          );
+      final oldFileStillReferenced = ref
+          .read(scannedDocumentsProvider)
+          .values
+          .expand((documents) => documents)
+          .any((document) => document.file.path == oldFile.path);
+      if (!oldFileStillReferenced) {
+        await TemporaryImageStore.deleteIfManaged(oldFile);
+      }
+      if (mounted) Navigator.of(context).pop();
+    } catch (_) {
+      if (outputFile != null) {
+        await TemporaryImageStore.deleteIfManaged(outputFile);
+      }
+      if (mounted) {
+        _showError('تعذر تطبيق التعديلات. لم تتغير الوثيقة الأصلية.');
       }
     } finally {
       if (mounted) setState(() => _isProcessing = false);
     }
   }
 
-  void _applyChanges() async {
-    setState(() => _isProcessing = true);
-    try {
-      final pageDocs = ref.read(scannedDocumentsProvider)[widget.pageIndex];
-      if (pageDocs == null) return;
-      final doc = pageDocs[widget.documentIndex];
-      final bytes = await doc.file.readAsBytes();
-
-      final rect = editorKey.currentState?.getCropRect();
-      final rectLeft = rect != null ? (rect.left / _proxyScale).toInt() : null;
-      final rectTop = rect != null ? (rect.top / _proxyScale).toInt() : null;
-      final rectWidth = rect != null
-          ? (rect.width / _proxyScale).toInt()
-          : null;
-      final rectHeight = rect != null
-          ? (rect.height / _proxyScale).toInt()
-          : null;
-
-      final tempDir = await getTemporaryDirectory();
-      final tempPath = tempDir.path;
-      final contrast = _contrast;
-      final brightness = _brightness;
-      final sharpness = _sharpness;
-
-      final String docPath = doc.file.path;
-
-      final args = {
-        'bytes': bytes,
-        'rectLeft': rectLeft,
-        'rectTop': rectTop,
-        'rectWidth': rectWidth,
-        'rectHeight': rectHeight,
-        'contrast': contrast,
-        'brightness': brightness,
-        'sharpness': sharpness,
-        'tempPath': tempPath,
-        'docPath': docPath,
-      };
-
-      final editedPath = await _runEditedIsolate(args);
-
-      final newDoc = doc.copyWith(file: File(editedPath));
-      ref
-          .read(scannedDocumentsProvider.notifier)
-          .updateDocumentAt(widget.pageIndex, widget.documentIndex, newDoc);
-
-      if (mounted) {
-        Navigator.pop(context);
-      }
-    } catch (e) {
-      print('Editor failed: $e');
-    } finally {
-      if (mounted) setState(() => _isProcessing = false);
-    }
+  void _showError(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
   Widget build(BuildContext context) {
-    final pages = ref.watch(scannedDocumentsProvider);
-    if (!pages.containsKey(widget.pageIndex)) return const Scaffold();
-
-    final pageDocs = pages[widget.pageIndex]!;
-    if (widget.documentIndex >= pageDocs.length) return const Scaffold();
-
-    final doc = pageDocs[widget.documentIndex];
-
+    final location = ref
+        .watch(scannedDocumentsProvider.notifier)
+        .findDocument(widget.documentId);
+    if (location == null) {
+      return const Scaffold(
+        body: Center(child: Text('لم تعد هذه الوثيقة متاحة.')),
+      );
+    }
     return Scaffold(
       appBar: AppBar(
         title: const Text('تعديل الصورة'),
-        actions: [
+        actions: <Widget>[
           if (_isLoadingPreview)
-            const Center(
-              child: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16.0),
-                child: SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Colors.white,
-                  ),
-                ),
+            const Padding(
+              padding: EdgeInsets.all(14),
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
               ),
             ),
           IconButton(
@@ -462,93 +463,86 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
       body: _isProcessing
           ? const Center(child: CircularProgressIndicator())
           : Column(
-              children: [
+              children: <Widget>[
                 Expanded(
                   child: ValueListenableBuilder<Uint8List?>(
-                    valueListenable: _previewImage,
-                    builder: (context, previewBytes, child) {
-                      return previewBytes != null
-                          ? ExtendedImage.memory(
-                              previewBytes,
-                              fit: BoxFit.contain,
-                              mode: ExtendedImageMode.editor,
-                              extendedImageEditorKey: editorKey,
-                              initEditorConfigHandler:
-                                  (ExtendedImageState? state) {
-                                    return EditorConfig(
-                                      maxScale: 8.0,
-                                      cropRectPadding: const EdgeInsets.all(
-                                        20.0,
-                                      ),
-                                      hitTestSize: 20.0,
-                                    );
-                                  },
-                            )
-                          : const Center(child: CircularProgressIndicator());
+                    valueListenable: _previewBytes,
+                    builder: (context, preview, child) {
+                      if (preview == null) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
+                      return ExtendedImage.memory(
+                        preview,
+                        fit: BoxFit.contain,
+                        mode: ExtendedImageMode.editor,
+                        extendedImageEditorKey: _editorKey,
+                        initEditorConfigHandler: (state) => EditorConfig(
+                          maxScale: 8,
+                          cropRectPadding: const EdgeInsets.all(20),
+                          hitTestSize: 24,
+                          initCropRectType: InitCropRectType.imageRect,
+                        ),
+                      );
                     },
                   ),
                 ),
-                Container(
-                  color: const Color(0xFF1E293B),
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    children: [
-                      Row(
-                        children: [
-                          const Icon(Icons.brightness_6, size: 20),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Slider(
-                              value: _brightness,
-                              min: -100,
-                              max: 100,
-                              onChanged: (v) {
-                                setState(() => _brightness = v);
-                                _onSliderChanged();
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
-                      Row(
-                        children: [
-                          const Icon(Icons.contrast, size: 20),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Slider(
-                              value: _contrast,
-                              min: 0.5,
-                              max: 3.0,
-                              onChanged: (v) {
-                                setState(() => _contrast = v);
-                                _onSliderChanged();
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
-                      Row(
-                        children: [
-                          const Icon(Icons.lens_blur, size: 20),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Slider(
-                              value: _sharpness,
-                              min: 0.0,
-                              max: 10.0,
-                              onChanged: (v) {
-                                setState(() => _sharpness = v);
-                                _onSliderChanged();
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
+                _slider(
+                  label: 'السطوع',
+                  value: _brightness,
+                  min: -100,
+                  max: 100,
+                  onChanged: (value) {
+                    setState(() => _brightness = value);
+                    _schedulePreview();
+                  },
+                ),
+                _slider(
+                  label: 'التباين',
+                  value: _contrast,
+                  min: 0.5,
+                  max: 2,
+                  onChanged: (value) {
+                    setState(() => _contrast = value);
+                    _schedulePreview();
+                  },
+                ),
+                _slider(
+                  label: 'الحدّة',
+                  value: _sharpness,
+                  min: 0,
+                  max: 5,
+                  onChanged: (value) {
+                    setState(() => _sharpness = value);
+                    _schedulePreview();
+                  },
                 ),
               ],
             ),
+    );
+  }
+
+  Widget _slider({
+    required String label,
+    required double value,
+    required double min,
+    required double max,
+    required ValueChanged<double> onChanged,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+      child: Row(
+        children: <Widget>[
+          SizedBox(width: 64, child: Text(label)),
+          Expanded(
+            child: Slider(
+              value: value,
+              min: min,
+              max: max,
+              onChanged: onChanged,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
