@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -329,7 +330,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     if (id == null) return;
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (context) => ImageEditorScreen(documentId: id),
+        builder: (context) =>
+            ImageEditorScreen(documentId: id, useOriginalSource: true),
       ),
     );
   }
@@ -460,47 +462,118 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
         );
   }
 
-  void _moveCrossPage(String documentId, double dx, double dy) {
+  void _moveCrossPage(
+    String documentId,
+    double dx,
+    double dy,
+    CrossPageDirection direction,
+  ) {
     final pages = ref.read(scannedDocumentsProvider);
     final pageKeys = pages.keys.toList()..sort();
-    final location = ref
-        .read(scannedDocumentsProvider.notifier)
-        .findDocument(documentId);
+    final notifier = ref.read(scannedDocumentsProvider.notifier);
+    final location = notifier.findDocument(documentId);
     if (location == null) return;
+
     final currentPosition = pageKeys.indexOf(location.pageIndex);
-    final movingUp = dy < 0;
-    int targetPage;
-    if (movingUp && currentPosition > 0) {
+    final movingToPrevious =
+        direction == CrossPageDirection.left ||
+        direction == CrossPageDirection.up;
+    if (movingToPrevious && currentPosition <= 0) {
+      _snapDocumentBackToCurrentPage(location.document);
+      return;
+    }
+
+    late final int targetPage;
+    if (movingToPrevious) {
       targetPage = pageKeys[currentPosition - 1];
-    } else if (!movingUp &&
-        currentPosition >= 0 &&
-        currentPosition < pageKeys.length - 1) {
+    } else if (currentPosition >= 0 && currentPosition < pageKeys.length - 1) {
       targetPage = pageKeys[currentPosition + 1];
     } else {
-      ref.read(scannedDocumentsProvider.notifier).forceNewPage();
-      targetPage = ref
-          .read(scannedDocumentsProvider)
-          .keys
-          .reduce((a, b) => a > b ? a : b);
+      targetPage = notifier.forceNewPage();
     }
+
     final inset = AppConstants.kA4PreviewInset;
-    final adjustedY = movingUp
-        ? AppConstants.kVirtualCanvasHeight - inset - location.document.height
-        : inset;
+    final scaledWidth = location.document.width * location.document.scale;
+    final scaledHeight = location.document.height * location.document.scale;
+    final targetDx = direction == CrossPageDirection.left
+        ? AppConstants.kVirtualCanvasWidth - inset - scaledWidth
+        : direction == CrossPageDirection.right
+        ? inset
+        : dx;
+    final targetDy = direction == CrossPageDirection.up
+        ? AppConstants.kVirtualCanvasHeight - inset - scaledHeight
+        : direction == CrossPageDirection.down
+        ? inset
+        : dy;
+
+    notifier.moveDocument(
+      documentId,
+      targetPageIndex: targetPage,
+      dx: targetDx
+          .clamp(
+            inset,
+            math.max(
+              inset,
+              AppConstants.kVirtualCanvasWidth - inset - scaledWidth,
+            ),
+          )
+          .toDouble(),
+      dy: targetDy
+          .clamp(
+            inset,
+            math.max(
+              inset,
+              AppConstants.kVirtualCanvasHeight - inset - scaledHeight,
+            ),
+          )
+          .toDouble(),
+    );
+
+    if (mounted) {
+      final targetPosition =
+          (ref.read(scannedDocumentsProvider).keys.toList()..sort()).indexOf(
+            targetPage,
+          );
+      if (targetPosition >= 0 && targetPosition != _visiblePagePosition) {
+        _pageController.animateToPage(
+          targetPosition,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+        );
+      }
+    }
+  }
+
+  void _snapDocumentBackToCurrentPage(ScannedDocument document) {
+    final inset = AppConstants.kA4PreviewInset;
+    final scaledWidth = document.width * document.scale;
+    final scaledHeight = document.height * document.scale;
     ref
         .read(scannedDocumentsProvider.notifier)
-        .moveDocument(
-          documentId,
-          targetPageIndex: targetPage,
-          dx: dx
+        .updateDocumentLayout(
+          document.id,
+          dx: document.dx
               .clamp(
                 inset,
-                AppConstants.kVirtualCanvasWidth -
-                    inset -
-                    location.document.width,
+                math.max(
+                  inset,
+                  AppConstants.kVirtualCanvasWidth - inset - scaledWidth,
+                ),
               )
               .toDouble(),
-          dy: adjustedY,
+          dy: document.dy
+              .clamp(
+                inset,
+                math.max(
+                  inset,
+                  AppConstants.kVirtualCanvasHeight - inset - scaledHeight,
+                ),
+              )
+              .toDouble(),
+          width: document.width,
+          height: document.height,
+          rotationAngle: document.rotationAngle,
+          scale: document.scale,
         );
   }
 

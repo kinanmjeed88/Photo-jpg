@@ -240,11 +240,12 @@ class ScannedDocumentsNotifier
     );
   }
 
-  void forceNewPage() {
+  int forceNewPage() {
     final nextPage = _nextPageIndex(state);
     final working = _copyState(state)
       ..putIfAbsent(nextPage, () => <ScannedDocument>[]);
     state = _freeze(working);
+    return nextPage;
   }
 
   DocumentLocation? findDocument(String documentId) {

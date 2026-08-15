@@ -139,14 +139,18 @@ void _applyUnsharpMask(img.Image image, double sharpness) {
 }
 
 img.Image _cropIfRequested(img.Image image, Map<String, int>? bounds) {
-  if (bounds == null) return image;
-  return img.copyCrop(
-    image,
-    x: bounds['left']!,
-    y: bounds['top']!,
-    width: bounds['width']!,
-    height: bounds['height']!,
-  );
+  if (bounds == null || image.width <= 0 || image.height <= 0) return image;
+
+  final left = (bounds['left'] ?? 0).clamp(0, image.width - 1).toInt();
+  final top = (bounds['top'] ?? 0).clamp(0, image.height - 1).toInt();
+  final width = (bounds['width'] ?? image.width - left)
+      .clamp(1, image.width - left)
+      .toInt();
+  final height = (bounds['height'] ?? image.height - top)
+      .clamp(1, image.height - top)
+      .toInt();
+
+  return img.copyCrop(image, x: left, y: top, width: width, height: height);
 }
 
 Uint8List _processForGallery(Map<String, dynamic> args) {
@@ -169,10 +173,14 @@ Map<String, dynamic> _processForPreview(Map<String, dynamic> args) {
   final version = args['version'] as int;
   final source = img.decodeImage(bytes);
   if (source == null) throw StateError('ملف معاينة غير صالح.');
+
+  // Brightness and contrast are rendered synchronously by the Flutter layer so
+  // slider changes are visible on the same frame. Only the expensive raster
+  // operation is delegated to the isolate.
   final processed = _applyAdjustments(
     source,
-    contrast: args['contrast'] as double,
-    brightness: args['brightness'] as double,
+    contrast: 1,
+    brightness: 0,
     sharpness: args['sharpness'] as double,
   );
   return <String, dynamic>{'bytes': _encodeJpeg(processed), 'version': version};
@@ -198,9 +206,14 @@ bool _processEditedFile(Map<String, dynamic> args) {
 }
 
 class ImageEditorScreen extends ConsumerStatefulWidget {
-  const ImageEditorScreen({super.key, required this.documentId});
+  const ImageEditorScreen({
+    super.key,
+    required this.documentId,
+    this.useOriginalSource = false,
+  });
 
   final String documentId;
+  final bool useOriginalSource;
 
   @override
   ConsumerState<ImageEditorScreen> createState() => _ImageEditorScreenState();
@@ -216,6 +229,8 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
   Timer? _debounce;
   Uint8List? _originalBytes;
   Uint8List? _proxyBytes;
+  int _sourceWidth = 0;
+  int _sourceHeight = 0;
   double _proxyScale = 1;
   double _brightness = 0;
   double _contrast = 1;
@@ -246,7 +261,19 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
     final location = _location;
     if (location == null) return;
     try {
-      _originalBytes = await location.document.file.readAsBytes();
+      var sourceFile = location.document.file;
+      if (widget.useOriginalSource &&
+          location.document.originalImagePath != null) {
+        final originalFile = File(location.document.originalImagePath!);
+        if (await originalFile.exists()) sourceFile = originalFile;
+      }
+      _originalBytes = await sourceFile.readAsBytes();
+      final decodedSource = img.decodeImage(_originalBytes!);
+      if (decodedSource == null) {
+        throw StateError('ملف الصورة غير صالح للتحرير.');
+      }
+      _sourceWidth = decodedSource.width;
+      _sourceHeight = decodedSource.height;
       final result = await _runProxyIsolate(<String, dynamic>{
         'bytes': _originalBytes!,
       });
@@ -272,7 +299,7 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
   void _schedulePreview() {
     _debounce?.cancel();
     _previewVersion++;
-    _debounce = Timer(const Duration(milliseconds: 80), _generatePreview);
+    _debounce = Timer(const Duration(milliseconds: 40), _generatePreview);
   }
 
   Future<void> _generatePreview() async {
@@ -319,12 +346,12 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
     }
   }
 
-  _CropBounds? _currentBounds(ScannedDocument document) {
+  _CropBounds? _currentBounds() {
     return _CropBounds.fromProxyRect(
       rect: _editorKey.currentState?.getCropRect(),
       proxyScale: _proxyScale,
-      sourceWidth: document.originalWidth.round(),
-      sourceHeight: document.originalHeight.round(),
+      sourceWidth: _sourceWidth,
+      sourceHeight: _sourceHeight,
     );
   }
 
@@ -341,7 +368,7 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
       final bytes = await Isolate.run(
         () => _processForGallery(<String, dynamic>{
           'bytes': _originalBytes!,
-          'bounds': _currentBounds(location.document)?.toMap(),
+          'bounds': _currentBounds()?.toMap(),
           'contrast': _contrast,
           'brightness': _brightness,
           'sharpness': _sharpness,
@@ -375,7 +402,7 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
         () => _processEditedFile(<String, dynamic>{
           'bytes': _originalBytes!,
           'outputPath': outputPath,
-          'bounds': _currentBounds(location.document)?.toMap(),
+          'bounds': _currentBounds()?.toMap(),
           'contrast': _contrast,
           'brightness': _brightness,
           'sharpness': _sharpness,
@@ -442,7 +469,9 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
     }
     return Scaffold(
       appBar: AppBar(
-        title: const Text('تعديل الصورة'),
+        title: Text(
+          widget.useOriginalSource ? 'تعديل الصورة الأصلية' : 'تعديل الصورة',
+        ),
         actions: <Widget>[
           if (_isLoadingPreview)
             const Padding(
@@ -476,18 +505,7 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
                       if (preview == null) {
                         return const Center(child: CircularProgressIndicator());
                       }
-                      return ExtendedImage.memory(
-                        preview,
-                        fit: BoxFit.contain,
-                        mode: ExtendedImageMode.editor,
-                        extendedImageEditorKey: _editorKey,
-                        initEditorConfigHandler: (state) => EditorConfig(
-                          maxScale: 8,
-                          cropRectPadding: const EdgeInsets.all(20),
-                          hitTestSize: 24,
-                          initCropRectType: InitCropRectType.imageRect,
-                        ),
-                      );
+                      return _buildPreview(preview);
                     },
                   ),
                 ),
@@ -498,7 +516,6 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
                   max: 100,
                   onChanged: (value) {
                     setState(() => _brightness = value);
-                    _schedulePreview();
                   },
                 ),
                 _slider(
@@ -508,7 +525,6 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
                   max: 2,
                   onChanged: (value) {
                     setState(() => _contrast = value);
-                    _schedulePreview();
                   },
                 ),
                 _slider(
@@ -523,6 +539,52 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
                 ),
               ],
             ),
+    );
+  }
+
+  List<double> _previewColorMatrix() {
+    final contrast = _contrast;
+    final brightnessOffset = (_brightness / 100) * 255;
+    final intercept = 128 * (1 - contrast) + brightnessOffset;
+    return <double>[
+      contrast,
+      0,
+      0,
+      0,
+      intercept,
+      0,
+      contrast,
+      0,
+      0,
+      intercept,
+      0,
+      0,
+      contrast,
+      0,
+      intercept,
+      0,
+      0,
+      0,
+      1,
+      0,
+    ];
+  }
+
+  Widget _buildPreview(Uint8List preview) {
+    return ColorFiltered(
+      colorFilter: ColorFilter.matrix(_previewColorMatrix()),
+      child: ExtendedImage.memory(
+        preview,
+        fit: BoxFit.contain,
+        mode: ExtendedImageMode.editor,
+        extendedImageEditorKey: _editorKey,
+        initEditorConfigHandler: (state) => EditorConfig(
+          maxScale: 8,
+          cropRectPadding: const EdgeInsets.all(20),
+          hitTestSize: 32,
+          initCropRectType: InitCropRectType.imageRect,
+        ),
+      ),
     );
   }
 

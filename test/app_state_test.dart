@@ -151,4 +151,47 @@ void main() {
     );
     expect(identical(initial, container.read(appStateProvider)), isFalse);
   });
+  test('returns the created page index without exposing protected state', () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    final notifier = container.read(scannedDocumentsProvider.notifier);
+    final pageIndex = notifier.forceNewPage();
+
+    expect(pageIndex, 0);
+    expect(
+      container.read(scannedDocumentsProvider).containsKey(pageIndex),
+      isTrue,
+    );
+  });
+
+  test('preserves original source metadata when moving a document', () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    final notifier = container.read(scannedDocumentsProvider.notifier);
+    notifier.seedDocuments(<int, List<ScannedDocument>>{
+      0: <ScannedDocument>[
+        ScannedDocument(
+          id: 'source-preserved',
+          file: File('/tmp/cropped.jpg'),
+          originalImagePath: '/tmp/full-source.jpg',
+          originalWidth: 900,
+          originalHeight: 600,
+          width: 300,
+          height: 200,
+        ),
+      ],
+    });
+
+    notifier.moveDocument(
+      'source-preserved',
+      targetPageIndex: 1,
+      dx: 24,
+      dy: 36,
+    );
+
+    final moved = notifier.findDocument('source-preserved')!.document;
+    expect(moved.originalImagePath, '/tmp/full-source.jpg');
+    expect(moved.originalWidth, 900);
+    expect(moved.originalHeight, 600);
+  });
 }

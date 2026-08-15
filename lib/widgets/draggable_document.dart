@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 
 import '../providers/app_state.dart';
 
+enum CrossPageDirection { left, right, up, down }
+
 class DraggableResizableDocument extends StatefulWidget {
   const DraggableResizableDocument({
     super.key,
@@ -33,7 +35,13 @@ class DraggableResizableDocument extends StatefulWidget {
   final ValueChanged<String> onTap;
   final void Function(String documentId, double dx, double dy, double scale)
   onLayoutUpdate;
-  final void Function(String documentId, double dx, double dy) onCrossPageMove;
+  final void Function(
+    String documentId,
+    double dx,
+    double dy,
+    CrossPageDirection direction,
+  )
+  onCrossPageMove;
   final VoidCallback? onGestureStart;
   final VoidCallback? onGestureEnd;
 
@@ -100,24 +108,53 @@ class _DraggableResizableDocumentState
     final minY = widget.canvasGuide.top;
     final maxY = math.max(minY, widget.canvasGuide.bottom - scaledHeight);
     final dragOffset = details.focalPoint - _startFocalPoint;
+    final horizontalOverscroll = math.max(24, scaledWidth * 0.2);
+    final verticalOverscroll = math.max(24, scaledHeight * 0.2);
     setState(() {
       _scale = proposedScale;
+      // A bounded overscroll is intentional. It gives every page edge a
+      // reliable transfer gesture while keeping the document visually anchored
+      // to the current page until the gesture ends.
       _dx = (_startDx + dragOffset.dx / widget.canvasScale)
-          .clamp(minX, maxX)
+          .clamp(minX - horizontalOverscroll, maxX + horizontalOverscroll)
           .toDouble();
-      // A short vertical overscroll is intentional: releasing it transfers the
-      // document to the adjacent A4 page rather than leaving it outside.
       _dy = (_startDy + dragOffset.dy / widget.canvasScale)
-          .clamp(minY - scaledHeight * 0.2, maxY + scaledHeight * 0.2)
+          .clamp(minY - verticalOverscroll, maxY + verticalOverscroll)
           .toDouble();
     });
     _emitLayout();
   }
 
+  CrossPageDirection? _crossPageDirection() {
+    final scaledWidth = widget.document.width * _scale;
+    final scaledHeight = widget.document.height * _scale;
+    final overflowLeft = math.max(0.0, widget.canvasGuide.left - _dx);
+    final overflowRight = math.max(
+      0.0,
+      (_dx + scaledWidth) - widget.canvasGuide.right,
+    );
+    final overflowTop = math.max(0.0, widget.canvasGuide.top - _dy);
+    final overflowBottom = math.max(
+      0.0,
+      (_dy + scaledHeight) - widget.canvasGuide.bottom,
+    );
+    final horizontalOverflow = math.max(overflowLeft, overflowRight);
+    final verticalOverflow = math.max(overflowTop, overflowBottom);
+    if (horizontalOverflow == 0 && verticalOverflow == 0) return null;
+    if (horizontalOverflow >= verticalOverflow) {
+      return overflowLeft >= overflowRight
+          ? CrossPageDirection.left
+          : CrossPageDirection.right;
+    }
+    return overflowTop >= overflowBottom
+        ? CrossPageDirection.up
+        : CrossPageDirection.down;
+  }
+
   void _endTransform() {
-    if (_dy < widget.canvasGuide.top ||
-        _dy + widget.document.height * _scale > widget.canvasGuide.bottom) {
-      widget.onCrossPageMove(widget.document.id, _dx, _dy);
+    final direction = _crossPageDirection();
+    if (direction != null) {
+      widget.onCrossPageMove(widget.document.id, _dx, _dy, direction);
     } else {
       _emitLayout();
     }
@@ -224,22 +261,28 @@ class _DraggableResizableDocumentState
               ),
               if (widget.isSelected)
                 Positioned(
-                  right: -24,
-                  bottom: -24,
+                  right: 4,
+                  bottom: 4,
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onPanStart: (_) => _beginResize(),
                     onPanUpdate: _updateResize,
                     onPanEnd: (_) => _endResize(),
                     onPanCancel: _endResize,
-                    child: CircleAvatar(
-                      radius: 20,
-                      backgroundColor: _isResizing
-                          ? Colors.orange
-                          : Colors.blue,
-                      child: const Icon(
-                        Icons.open_in_full,
-                        color: Colors.white,
+                    child: SizedBox(
+                      width: 56,
+                      height: 56,
+                      child: Center(
+                        child: CircleAvatar(
+                          radius: 20,
+                          backgroundColor: _isResizing
+                              ? Colors.orange
+                              : Colors.blue,
+                          child: const Icon(
+                            Icons.open_in_full,
+                            color: Colors.white,
+                          ),
+                        ),
                       ),
                     ),
                   ),
