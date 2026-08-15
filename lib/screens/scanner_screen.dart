@@ -476,7 +476,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
     final currentPosition = pageKeys.indexOf(location.pageIndex);
     final movingToPrevious =
-        direction == CrossPageDirection.left ||
+        direction == CrossPageDirection.right ||
         direction == CrossPageDirection.up;
     if (movingToPrevious && currentPosition <= 0) {
       _snapDocumentBackToCurrentPage(location.document);
@@ -495,9 +495,9 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     final inset = AppConstants.kA4PreviewInset;
     final scaledWidth = location.document.width * location.document.scale;
     final scaledHeight = location.document.height * location.document.scale;
-    final targetDx = direction == CrossPageDirection.left
+    final targetDx = direction == CrossPageDirection.right
         ? AppConstants.kVirtualCanvasWidth - inset - scaledWidth
-        : direction == CrossPageDirection.right
+        : direction == CrossPageDirection.left
         ? inset
         : dx;
     final targetDy = direction == CrossPageDirection.up

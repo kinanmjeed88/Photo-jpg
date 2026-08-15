@@ -186,10 +186,10 @@ Map<String, dynamic> _processForPreview(Map<String, dynamic> args) {
   return <String, dynamic>{'bytes': _encodeJpeg(processed), 'version': version};
 }
 
-bool _processEditedFile(Map<String, dynamic> args) {
+Uint8List _processEditedBytes(Map<String, dynamic> args) {
   final bytes = args['bytes'] as Uint8List;
   final source = img.decodeImage(bytes);
-  if (source == null) return false;
+  if (source == null) throw StateError('ملف الصورة غير صالح.');
   final processed = _applyAdjustments(
     source,
     contrast: args['contrast'] as double,
@@ -200,9 +200,7 @@ bool _processEditedFile(Map<String, dynamic> args) {
     processed,
     args['bounds'] as Map<String, int>?,
   );
-  final encoded = _encodeJpeg(output);
-  File(args['outputPath'] as String).writeAsBytesSync(encoded, flush: true);
-  return true;
+  return _encodeJpeg(output);
 }
 
 class ImageEditorScreen extends ConsumerStatefulWidget {
@@ -398,19 +396,18 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
     try {
       final outputPath = await TemporaryImageStore.createPath('edited_');
       outputFile = File(outputPath);
-      final wroteFile = await Isolate.run(
-        () => _processEditedFile(<String, dynamic>{
+      final encoded = await Isolate.run(
+        () => _processEditedBytes(<String, dynamic>{
           'bytes': _originalBytes!,
-          'outputPath': outputPath,
           'bounds': _currentBounds()?.toMap(),
           'contrast': _contrast,
           'brightness': _brightness,
           'sharpness': _sharpness,
         }),
       );
-      if (!wroteFile ||
-          !await outputFile.exists() ||
-          await outputFile.length() == 0) {
+      if (encoded.isEmpty) throw StateError('تعذر إنشاء ملف التعديل.');
+      await outputFile.writeAsBytes(encoded, flush: true);
+      if (!await outputFile.exists() || await outputFile.length() == 0) {
         throw StateError('تعذر إنشاء ملف التعديل.');
       }
       final dimensions = img.decodeImage(await outputFile.readAsBytes());
@@ -543,23 +540,23 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
   }
 
   List<double> _previewColorMatrix() {
-    final contrast = _contrast;
-    final brightnessOffset = (_brightness / 100) * 255;
-    final intercept = 128 * (1 - contrast) + brightnessOffset;
+    final brightnessScale = 1 + (_brightness / 100);
+    final effectiveContrast = _contrast * brightnessScale;
+    final intercept = 127.5 * (1 - _contrast);
     return <double>[
-      contrast,
+      effectiveContrast,
       0,
       0,
       0,
       intercept,
       0,
-      contrast,
+      effectiveContrast,
       0,
       0,
       intercept,
       0,
       0,
-      contrast,
+      effectiveContrast,
       0,
       intercept,
       0,
