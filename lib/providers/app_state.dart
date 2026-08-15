@@ -11,6 +11,8 @@ import '../constants/app_constants.dart';
 enum DisplayMethod { onePage, twoPages, frontOnly }
 
 enum DocumentType {
+  /// Smart-scan selection mode: detect all unified cards in the source image.
+  allDocuments,
   nationalId,
   housingCard,
   rationCard,
@@ -607,10 +609,11 @@ class AppState {
 
   DocumentType get selectedDocumentType {
     if (hasA4Document) return DocumentType.a4Document;
+    if (hasNationalId) return DocumentType.allDocuments;
+    if (hasHousingCard) return DocumentType.housingCard;
     if (hasRationCard) return DocumentType.rationCard;
     if (hasPassport) return DocumentType.passport;
-    if (hasHousingCard) return DocumentType.housingCard;
-    return DocumentType.nationalId;
+    return DocumentType.allDocuments;
   }
 
   bool get hasAtLeastOneDocument =>

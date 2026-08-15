@@ -164,6 +164,8 @@ class _DocumentDetectionProfile {
     required this.maximumLongToShortRatio,
     required this.minimumAreaRatio,
     required this.maximumAreaRatio,
+    this.requiresGreenTint = false,
+    this.rejectsGreenTint = false,
   });
 
   final DocumentType type;
@@ -171,6 +173,8 @@ class _DocumentDetectionProfile {
   final double maximumLongToShortRatio;
   final double minimumAreaRatio;
   final double maximumAreaRatio;
+  final bool requiresGreenTint;
+  final bool rejectsGreenTint;
 
   bool acceptsAspectRatio(double width, double height) {
     if (width <= 0 || height <= 0) return false;
@@ -187,6 +191,18 @@ class _DocumentDetectionProfile {
 
 _DocumentDetectionProfile _detectionProfileFor(DocumentType type) {
   switch (type) {
+    case DocumentType.allDocuments:
+      return const _DocumentDetectionProfile(
+        type: DocumentType.allDocuments,
+        minimumLongToShortRatio: 1.15,
+        maximumLongToShortRatio: 2.05,
+        minimumAreaRatio: 0.008,
+        // A contour covering most of the light capture sheet is a background
+        // boundary, not one of the four cards placed on it. A4 has its own
+        // explicit passthrough mode and does not use this profile.
+        maximumAreaRatio: 0.65,
+        rejectsGreenTint: true,
+      );
     case DocumentType.passport:
       // The passport is commonly captured either portrait (~0.7 W/H) or
       // rotated landscape. The comparison is therefore orientation agnostic.
@@ -198,14 +214,29 @@ _DocumentDetectionProfile _detectionProfileFor(DocumentType type) {
         maximumAreaRatio: 0.96,
       );
     case DocumentType.nationalId:
-    case DocumentType.housingCard:
-    case DocumentType.rationCard:
       return _DocumentDetectionProfile(
         type: type,
         minimumLongToShortRatio: 1.4,
         maximumLongToShortRatio: 1.7,
         minimumAreaRatio: 0.008,
-        maximumAreaRatio: 0.96,
+        maximumAreaRatio: 0.65,
+      );
+    case DocumentType.housingCard:
+      return const _DocumentDetectionProfile(
+        type: DocumentType.housingCard,
+        minimumLongToShortRatio: 1.15,
+        maximumLongToShortRatio: 2.05,
+        minimumAreaRatio: 0.008,
+        maximumAreaRatio: 0.65,
+        requiresGreenTint: true,
+      );
+    case DocumentType.rationCard:
+      return const _DocumentDetectionProfile(
+        type: DocumentType.rationCard,
+        minimumLongToShortRatio: 1.4,
+        maximumLongToShortRatio: 1.7,
+        minimumAreaRatio: 0.008,
+        maximumAreaRatio: 0.65,
       );
     case DocumentType.unknown:
       return const _DocumentDetectionProfile(
@@ -359,6 +390,44 @@ _DocumentCandidate? _candidateFromContour(
   }
 }
 
+bool _matchesVisualProfile(
+  cv.Mat source,
+  _DocumentCandidate candidate,
+  _DocumentDetectionProfile profile,
+) {
+  if (!profile.requiresGreenTint && !profile.rejectsGreenTint) return true;
+
+  final left = _clampInt(candidate.left, 0, source.cols - 1);
+  final top = _clampInt(candidate.top, 0, source.rows - 1);
+  final right = _clampInt(candidate.right, left + 1, source.cols);
+  final bottom = _clampInt(candidate.bottom, top + 1, source.rows);
+  final width = right - left;
+  final height = bottom - top;
+  if (width < 8 || height < 8) return false;
+
+  cv.Rect? rect;
+  cv.Mat? roi;
+  cv.Scalar? average;
+  try {
+    rect = cv.Rect(left, top, width, height);
+    roi = source.region(rect);
+    average = roi.mean();
+    // OpenCV stores decoded color images as BGR. The green housing card has
+    // a measurable green-channel dominance over both blue and red cards.
+    final blue = average.val1;
+    final green = average.val2;
+    final red = average.val3;
+    final greenDominance = green - ((red + blue) / 2);
+    final isGreenHousingCard =
+        greenDominance >= 8 && green >= red * 1.04 && green >= blue * 1.04;
+    return profile.requiresGreenTint ? isGreenHousingCard : !isGreenHousingCard;
+  } finally {
+    average?.dispose();
+    roi?.dispose();
+    rect?.dispose();
+  }
+}
+
 _DocumentCandidate? _axisAlignedCandidateFromContour(
   cv.VecPoint contour, {
   required double contourArea,
@@ -474,9 +543,13 @@ Future<List<String>> _detectAndCropInIsolate(
   cv.Mat? sensitiveThresholdClosed;
   cv.Mat? foreground;
   cv.Mat? foregroundClosed;
+  cv.Mat? hsv;
+  cv.Mat? greenMask;
+  cv.Mat? greenClosed;
   cv.Mat? kernel;
   cv.Mat? broadKernel;
   cv.Mat? foregroundKernel;
+  cv.Mat? greenKernel;
   var candidates = <_DocumentCandidate>[];
   final results = <String>[];
 
@@ -507,6 +580,7 @@ Future<List<String>> _detectAndCropInIsolate(
           allowAxisAlignedFallback: allowAxisAlignedFallback,
         );
         if (candidate == null ||
+            !_matchesVisualProfile(image, candidate, profile) ||
             candidates.any(
               (accepted) => _isDuplicateCandidate(candidate, accepted),
             )) {
@@ -542,6 +616,16 @@ Future<List<String>> _detectAndCropInIsolate(
     kernel = cv.getStructuringElement(cv.MORPH_RECT, (7, 7));
     broadKernel = cv.getStructuringElement(cv.MORPH_RECT, (11, 11));
     foregroundKernel = cv.getStructuringElement(cv.MORPH_RECT, (5, 5));
+    if (requestedType == DocumentType.housingCard) {
+      hsv = cv.cvtColor(source, cv.COLOR_BGR2HSV);
+      greenMask = cv.inRangebyScalar(
+        hsv,
+        cv.Scalar(25, 25, 30),
+        cv.Scalar(95, 255, 255),
+      );
+      greenKernel = cv.getStructuringElement(cv.MORPH_RECT, (9, 9));
+      greenClosed = cv.morphologyEx(greenMask, cv.MORPH_CLOSE, greenKernel);
+    }
 
     // Multiple complementary proposal masks are required for a sheet that
     // contains several cards: some card borders are sharp while others have
@@ -599,7 +683,14 @@ Future<List<String>> _detectAndCropInIsolate(
           imageArea,
           retrievalMode: cv.RETR_EXTERNAL,
           allowAxisAlignedFallback: true,
-        )) {
+        ) ||
+        (greenClosed != null &&
+            !await collectCandidates(
+              greenClosed,
+              imageArea,
+              retrievalMode: cv.RETR_EXTERNAL,
+              allowAxisAlignedFallback: true,
+            ))) {
       return results;
     }
 
@@ -686,9 +777,13 @@ Future<List<String>> _detectAndCropInIsolate(
     sensitiveThresholdClosed?.dispose();
     foreground?.dispose();
     foregroundClosed?.dispose();
+    hsv?.dispose();
+    greenMask?.dispose();
+    greenClosed?.dispose();
     kernel?.dispose();
     broadKernel?.dispose();
     foregroundKernel?.dispose();
+    greenKernel?.dispose();
   }
   return results;
 }
@@ -990,11 +1085,14 @@ class ScannerService {
   }
 
   DocumentClassification _classificationForRequestedType(DocumentType type) {
+    final reason = type == DocumentType.allDocuments
+        ? 'تم اعتماد وضع البطاقة الموحدة لاكتشاف جميع المستمسكات في الصورة.'
+        : 'تم اعتماد نوع المستند المحدد من إعدادات المستخدم.';
     return DocumentClassification(
       type: type,
       normalizedText: '',
       confidence: 1,
-      reason: 'تم اعتماد نوع المستند المحدد من إعدادات المستخدم.',
+      reason: reason,
       requiresManualReview: false,
     );
   }

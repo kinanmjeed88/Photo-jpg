@@ -173,6 +173,18 @@ void main() {
     expect(state.selectedDocumentType, DocumentType.a4Document);
   });
 
+  test('national ID selects unified-card discovery mode', () {
+    const state = AppState(hasNationalId: true);
+
+    expect(state.selectedDocumentType, DocumentType.allDocuments);
+  });
+
+  test('housing card selects the single housing-card profile', () {
+    const state = AppState(hasHousingCard: true);
+
+    expect(state.selectedDocumentType, DocumentType.housingCard);
+  });
+
   test('toggles A4 through AppStateNotifier immutably', () {
     final container = ProviderContainer();
     addTearDown(container.dispose);
