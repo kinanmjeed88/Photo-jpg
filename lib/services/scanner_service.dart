@@ -206,12 +206,15 @@ _DocumentDetectionProfile _detectionProfileFor(DocumentType type) {
     case DocumentType.passport:
       // The passport is commonly captured either portrait (~0.7 W/H) or
       // rotated landscape. The comparison is therefore orientation agnostic.
+      // maximumAreaRatio 0.995 accepts flat scans whose page fills nearly the
+      // whole frame; _fullFrameCandidateForPassport is the last resort when
+      // no geometric candidate survives at all.
       return const _DocumentDetectionProfile(
         type: DocumentType.passport,
         minimumLongToShortRatio: 1.33,
         maximumLongToShortRatio: 1.55,
         minimumAreaRatio: 0.008,
-        maximumAreaRatio: 0.96,
+        maximumAreaRatio: 0.995,
       );
     case DocumentType.nationalId:
       return _DocumentDetectionProfile(
@@ -222,6 +225,12 @@ _DocumentDetectionProfile _detectionProfileFor(DocumentType type) {
         maximumAreaRatio: 0.65,
       );
     case DocumentType.housingCard:
+      // The housing card is detected exclusively through its dedicated
+      // stamp-anchored path (_housingCardStampCandidates), so the shared
+      // geometric profile is only a fallback shape contract for that path
+      // (aspect ratio and area of the expanded seal box). The green tint is
+      // enforced there by the seal mask itself; this flag still guards any
+      // residual geometric candidate from slipping in as housing stock.
       return const _DocumentDetectionProfile(
         type: DocumentType.housingCard,
         minimumLongToShortRatio: 1.15,
@@ -395,7 +404,7 @@ bool _matchesVisualProfile(
   _DocumentCandidate candidate,
   _DocumentDetectionProfile profile,
 ) {
-  if (!profile.requiresGreenTint && !profile.rejectsGreenTint) return true;
+  if (!profile.rejectsGreenTint) return true;
 
   final left = _clampInt(candidate.left, 0, source.cols - 1);
   final top = _clampInt(candidate.top, 0, source.rows - 1);
@@ -420,7 +429,7 @@ bool _matchesVisualProfile(
     final greenDominance = green - ((red + blue) / 2);
     final isGreenHousingCard =
         greenDominance >= 8 && green >= red * 1.04 && green >= blue * 1.04;
-    return profile.requiresGreenTint ? isGreenHousingCard : !isGreenHousingCard;
+    return !isGreenHousingCard;
   } finally {
     average?.dispose();
     roi?.dispose();
@@ -517,6 +526,183 @@ bool _isDuplicateCandidate(
   _DocumentCandidate accepted,
 ) => _isDuplicateRegion(candidate.region, accepted.region);
 
+/// Expands a rectangle outward by [fraction] of its own size, clamped to the
+/// image bounds and never exceeding [maxFraction] in a single direction. This
+/// keeps the stamp-based housing-card expansion predictable when the green
+/// seal sits close to the card border.
+(int x, int y, int w, int h) _expandRect({
+  required int x,
+  required int y,
+  required int w,
+  required int h,
+  required int rows,
+  required int cols,
+  required double fraction,
+  double maxFraction = 0.35,
+}) {
+  final clampedFraction = math.min(fraction, maxFraction);
+  final dx = (w * clampedFraction).round();
+  final dy = (h * clampedFraction).round();
+  final nx = math.max(0, x - dx);
+  final ny = math.max(0, y - dy);
+  final nx2 = math.min(cols, nx + w + 2 * dx);
+  final ny2 = math.min(rows, ny + h + 2 * dy);
+  return (nx, ny, nx2 - nx, ny2 - ny);
+}
+
+/// Measures how much of its convex hull a contour fills. A low value means the
+/// blob is a sparse stroke collection rather than a solid stamp region.
+double _contourSolidity(cv.VecPoint contour) {
+  // cv.convexHull returns a Mat of type CV_32SC2 holding the hull points;
+  // toList() exposes one row per point with [x, y], from which we build an
+  // owned VecPoint for the area measurement.
+  cv.Mat? hullMat;
+  cv.VecPoint? hull;
+  try {
+    hullMat = cv.convexHull(contour);
+    final hullPoints = hullMat.toList().cast<List<double>>();
+    if (hullPoints.length < 3) return 0;
+    hull = cv.VecPoint.fromList(
+      hullPoints
+          .map((point) => cv.Point(point[0].round(), point[1].round()))
+          .toList(growable: false),
+    );
+    final hullArea = cv.contourArea(hull);
+    return hullArea > 0 ? cv.contourArea(contour) / hullArea : 0;
+  } finally {
+    hull?.dispose();
+    hullMat?.dispose();
+  }
+}
+
+/// Stamp-based housing-card detection.
+///
+/// Classical edge masks fail on housing-card photos: the card rides in a
+/// glossy plastic sleeve on a low-contrast surface, so only high-contrast
+/// inner details (the portrait, text panels) ever become real contours —
+/// which is exactly how the detector cropped a face instead of the card.
+/// The round green ministry seal in the middle of every housing form is the
+/// most reliable anchor. This builds a strict green mask, closes the seal
+/// into a single blob with a large elliptical kernel, then expands the seal
+/// bounding box outward (18%) to recover the full card around it.
+Future<List<_DocumentCandidate>> _housingCardStampCandidates({
+  required cv.Mat source,
+  required double imageArea,
+  required _DocumentDetectionProfile profile,
+  required bool Function() isCancelled,
+}) async {
+  cv.Mat? hsv;
+  cv.Mat? sealMask;
+  cv.Mat? sealKernel;
+  cv.Mat? sealClosed;
+  cv.VecVecPoint? contours;
+  cv.VecVec4i? hierarchy;
+  final candidates = <_DocumentCandidate>[];
+  try {
+    hsv = cv.cvtColor(source, cv.COLOR_BGR2HSV);
+    sealMask = cv.inRangebyScalar(hsv, cv.Scalar(35, 30, 30), cv.Scalar(80, 255, 255));
+    sealKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (51, 51));
+    sealClosed = cv.morphologyEx(sealMask, cv.MORPH_CLOSE, sealKernel);
+    final result = cv.findContours(sealClosed, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    contours = result.$1;
+    hierarchy = result.$2;
+    var inspected = 0;
+    for (final contour in contours) {
+      if (isCancelled()) return candidates;
+      if (inspected++ % 24 == 0) await Future<void>.delayed(Duration.zero);
+      final contourArea = cv.contourArea(contour);
+      if (contourArea < imageArea * 0.04) continue;
+      if (_contourSolidity(contour) < 0.55) continue;
+      final bounds = cv.boundingRect(contour);
+      try {
+        final (bx, by, bw, bh) = _expandRect(
+          x: bounds.x,
+          y: bounds.y,
+          w: bounds.width,
+          h: bounds.height,
+          rows: source.rows,
+          cols: source.cols,
+          fraction: 0.18,
+        );
+        final width = bw.toDouble();
+        final height = bh.toDouble();
+        if (width < 64 || height < 64) continue;
+        if (!profile.acceptsAspectRatio(width, height)) continue;
+        final boundingArea = width * height;
+        if (!profile.acceptsArea(boundingArea, imageArea)) continue;
+        candidates.add(_DocumentCandidate(
+          points: <cv.Point>[
+            cv.Point(bx.toInt(), by.toInt()),
+            cv.Point(bx.toInt() + width.toInt(), by.toInt()),
+            cv.Point(bx.toInt() + width.toInt(), by.toInt() + height.toInt()),
+            cv.Point(bx.toInt(), by.toInt() + height.toInt()),
+          ],
+          area: boundingArea,
+          width: width.toDouble(),
+          height: height.toDouble(),
+          left: bx.toInt(),
+          top: by.toInt(),
+          right: bx.toInt() + width.toInt(),
+          bottom: by.toInt() + height.toInt(),
+        ));
+      } finally {
+        bounds.dispose();
+      }
+    }
+  } finally {
+    contours?.dispose();
+    hierarchy?.dispose();
+    sealClosed?.dispose();
+    sealKernel?.dispose();
+    sealMask?.dispose();
+    hsv?.dispose();
+  }
+  return candidates;
+}
+
+/// Full-frame passport fallback.
+///
+/// Some passport captures are flat scans with the page covering almost the
+/// entire frame and no detectable outer border at all. When every geometric
+/// mask fails to produce a candidate, the only faithful crop is the frame
+/// itself, trimmed inward by a small margin to avoid scan edge artefacts.
+_DocumentCandidate? _fullFrameCandidateForPassport({
+  required cv.Mat source,
+  required _DocumentDetectionProfile profile,
+}) {
+  const marginFraction = 0.02;
+  final rows = source.rows.toDouble();
+  final cols = source.cols.toDouble();
+  final margin = math.min(cols, rows) * marginFraction;
+  final left = margin;
+  final top = margin;
+  final width = cols - 2 * margin;
+  final height = rows - 2 * margin;
+  if (width < 64 || height < 64) return null;
+  if (!profile.acceptsAspectRatio(width, height)) return null;
+  final boundingArea = width * height;
+  if (!profile.acceptsArea(boundingArea, rows * cols)) return null;
+  final leftInt = left.round();
+  final topInt = top.round();
+  final widthInt = width.round();
+  final heightInt = height.round();
+  return _DocumentCandidate(
+    points: <cv.Point>[
+      cv.Point(leftInt, topInt),
+      cv.Point(leftInt + widthInt, topInt),
+      cv.Point(leftInt + widthInt, topInt + heightInt),
+      cv.Point(leftInt, topInt + heightInt),
+    ],
+    area: boundingArea,
+    width: widthInt.toDouble(),
+    height: heightInt.toDouble(),
+    left: leftInt,
+    top: topInt,
+    right: leftInt + widthInt,
+    bottom: topInt + heightInt,
+  );
+}
+
 Future<List<String>> _detectAndCropInIsolate(
   Map<String, dynamic> args, {
   bool Function()? isCancelled,
@@ -543,13 +729,9 @@ Future<List<String>> _detectAndCropInIsolate(
   cv.Mat? sensitiveThresholdClosed;
   cv.Mat? foreground;
   cv.Mat? foregroundClosed;
-  cv.Mat? hsv;
-  cv.Mat? greenMask;
-  cv.Mat? greenClosed;
   cv.Mat? kernel;
   cv.Mat? broadKernel;
   cv.Mat? foregroundKernel;
-  cv.Mat? greenKernel;
   var candidates = <_DocumentCandidate>[];
   final results = <String>[];
 
@@ -616,17 +798,20 @@ Future<List<String>> _detectAndCropInIsolate(
     kernel = cv.getStructuringElement(cv.MORPH_RECT, (7, 7));
     broadKernel = cv.getStructuringElement(cv.MORPH_RECT, (11, 11));
     foregroundKernel = cv.getStructuringElement(cv.MORPH_RECT, (5, 5));
+    // Housing cards are handled through a dedicated stamp-anchored path.
+    // Their glossy plastic sleeves suppress every outer edge, so the round
+    // green ministry seal is used as the reliable anchor and expanded into
+    // the full card extent instead of proposing geometric quadrilaterals.
     if (requestedType == DocumentType.housingCard) {
-      hsv = cv.cvtColor(source, cv.COLOR_BGR2HSV);
-      greenMask = cv.inRangebyScalar(
-        hsv,
-        cv.Scalar(25, 25, 30),
-        cv.Scalar(95, 255, 255),
+      final stampCandidates = await _housingCardStampCandidates(
+        source: source,
+        imageArea: (source.rows * source.cols).toDouble(),
+        profile: profile,
+        isCancelled: isCancelled ?? (() => false),
       );
-      greenKernel = cv.getStructuringElement(cv.MORPH_RECT, (9, 9));
-      greenClosed = cv.morphologyEx(greenMask, cv.MORPH_CLOSE, greenKernel);
-    }
-
+      if (stampCandidates.isEmpty) return results;
+      candidates.addAll(stampCandidates);
+    } else {
     // Multiple complementary proposal masks are required for a sheet that
     // contains several cards: some card borders are sharp while others have
     // low contrast against the sheet. Every proposal still has to pass the
@@ -683,15 +868,19 @@ Future<List<String>> _detectAndCropInIsolate(
           imageArea,
           retrievalMode: cv.RETR_EXTERNAL,
           allowAxisAlignedFallback: true,
-        ) ||
-        (greenClosed != null &&
-            !await collectCandidates(
-              greenClosed,
-              imageArea,
-              retrievalMode: cv.RETR_EXTERNAL,
-              allowAxisAlignedFallback: true,
-            ))) {
+        )) {
       return results;
+    }
+
+    // A flat passport scan with no visible outer border produces no geometric
+    // candidate at all. The full-frame fallback is the faithful crop in that
+    // case: the document genuinely covers the whole frame.
+    if (requestedType == DocumentType.passport && candidates.isEmpty) {
+      final fullFrame = _fullFrameCandidateForPassport(
+        source: source,
+        profile: profile,
+      );
+      if (fullFrame != null) candidates.add(fullFrame);
     }
 
     final regions = selectDistinctDocumentRegions(
@@ -761,6 +950,7 @@ Future<List<String>> _detectAndCropInIsolate(
         warped?.dispose();
       }
     }
+    }
   } catch (_) {
     return <String>[];
   } finally {
@@ -777,13 +967,9 @@ Future<List<String>> _detectAndCropInIsolate(
     sensitiveThresholdClosed?.dispose();
     foreground?.dispose();
     foregroundClosed?.dispose();
-    hsv?.dispose();
-    greenMask?.dispose();
-    greenClosed?.dispose();
     kernel?.dispose();
     broadKernel?.dispose();
     foregroundKernel?.dispose();
-    greenKernel?.dispose();
   }
   return results;
 }
