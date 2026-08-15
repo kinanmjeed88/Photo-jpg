@@ -74,7 +74,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
   }) async {
     setState(() => _isProcessing = true);
     try {
-      final smartRecognition = ref.read(appStateProvider).smartRecognition;
+      final appState = ref.read(appStateProvider);
+      final smartRecognition = appState.smartRecognition;
       if (!smartRecognition) {
         final inputs = await _manuallyCropSources(sourceFiles);
         await _placeInputs(inputs);
@@ -138,6 +139,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
         await Future<void>.delayed(Duration.zero);
         smartResult = await _scannerService.processBatchSmartRecognition(
           sourceFiles,
+          documentType: appState.selectedDocumentType,
           cancellationToken: cancellation,
           onProgress: (current, total) {
             if (!cancellation.isCancelled) progress.value = current;

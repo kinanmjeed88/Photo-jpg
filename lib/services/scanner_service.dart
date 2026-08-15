@@ -157,6 +157,82 @@ List<DocumentRegion> selectDistinctDocumentRegions(
   return selected;
 }
 
+class _DocumentDetectionProfile {
+  const _DocumentDetectionProfile({
+    required this.type,
+    required this.minimumLongToShortRatio,
+    required this.maximumLongToShortRatio,
+    required this.minimumAreaRatio,
+    required this.maximumAreaRatio,
+  });
+
+  final DocumentType type;
+  final double minimumLongToShortRatio;
+  final double maximumLongToShortRatio;
+  final double minimumAreaRatio;
+  final double maximumAreaRatio;
+
+  bool acceptsAspectRatio(double width, double height) {
+    if (width <= 0 || height <= 0) return false;
+    final ratio = math.max(width, height) / math.min(width, height);
+    return ratio >= minimumLongToShortRatio && ratio <= maximumLongToShortRatio;
+  }
+
+  bool acceptsArea(double area, double imageArea) {
+    if (imageArea <= 0) return false;
+    final ratio = area / imageArea;
+    return ratio >= minimumAreaRatio && ratio <= maximumAreaRatio;
+  }
+}
+
+_DocumentDetectionProfile _detectionProfileFor(DocumentType type) {
+  switch (type) {
+    case DocumentType.passport:
+      // The passport is commonly captured either portrait (~0.7 W/H) or
+      // rotated landscape. The comparison is therefore orientation agnostic.
+      return const _DocumentDetectionProfile(
+        type: DocumentType.passport,
+        minimumLongToShortRatio: 1.33,
+        maximumLongToShortRatio: 1.55,
+        minimumAreaRatio: 0.008,
+        maximumAreaRatio: 0.96,
+      );
+    case DocumentType.nationalId:
+    case DocumentType.housingCard:
+    case DocumentType.rationCard:
+      return _DocumentDetectionProfile(
+        type: type,
+        minimumLongToShortRatio: 1.4,
+        maximumLongToShortRatio: 1.7,
+        minimumAreaRatio: 0.008,
+        maximumAreaRatio: 0.96,
+      );
+    case DocumentType.unknown:
+      return const _DocumentDetectionProfile(
+        type: DocumentType.unknown,
+        minimumLongToShortRatio: 1.0,
+        maximumLongToShortRatio: 3.5,
+        minimumAreaRatio: 0.008,
+        maximumAreaRatio: 0.96,
+      );
+    case DocumentType.a4Document:
+      return const _DocumentDetectionProfile(
+        type: DocumentType.a4Document,
+        minimumLongToShortRatio: 1.0,
+        maximumLongToShortRatio: 3.5,
+        minimumAreaRatio: 0,
+        maximumAreaRatio: 1,
+      );
+  }
+}
+
+DocumentType _documentTypeFromIndex(Object? value) {
+  if (value is! int || value < 0 || value >= DocumentType.values.length) {
+    return DocumentType.unknown;
+  }
+  return DocumentType.values[value];
+}
+
 class _DocumentCandidate {
   const _DocumentCandidate({
     required this.points,
@@ -222,12 +298,11 @@ double _polygonArea(List<cv.Point> points) {
 _DocumentCandidate? _candidateFromContour(
   cv.VecPoint contour, {
   required double imageArea,
+  required _DocumentDetectionProfile profile,
   bool allowAxisAlignedFallback = false,
 }) {
   final contourArea = cv.contourArea(contour);
-  if (contourArea < imageArea * 0.03 || contourArea > imageArea * 0.9) {
-    return null;
-  }
+  if (!profile.acceptsArea(contourArea, imageArea)) return null;
 
   cv.VecPoint? approximation;
   try {
@@ -245,6 +320,7 @@ _DocumentCandidate? _candidateFromContour(
         contour,
         contourArea: contourArea,
         imageArea: imageArea,
+        profile: profile,
       );
     }
     final points = _orderPoints(
@@ -264,8 +340,7 @@ _DocumentCandidate? _candidateFromContour(
       _distance(points[3], points[0]),
     );
     if (width < 48 || height < 48) return null;
-    final aspectRatio = width > height ? width / height : height / width;
-    if (aspectRatio > 3.5) return null;
+    if (!profile.acceptsAspectRatio(width, height)) return null;
 
     final horizontal = points.map((point) => point.x).toList();
     final vertical = points.map((point) => point.y).toList();
@@ -288,23 +363,25 @@ _DocumentCandidate? _axisAlignedCandidateFromContour(
   cv.VecPoint contour, {
   required double contourArea,
   required double imageArea,
+  required _DocumentDetectionProfile profile,
 }) {
   final bounds = cv.boundingRect(contour);
   try {
     final boundingArea = (bounds.width * bounds.height).toDouble();
-    if (bounds.width < 96 ||
-        bounds.height < 96 ||
-        boundingArea < imageArea * 0.045 ||
-        boundingArea > imageArea * 0.4) {
+    if (bounds.width < 64 ||
+        bounds.height < 64 ||
+        !profile.acceptsArea(boundingArea, imageArea)) {
       return null;
     }
 
     final fillRatio = contourArea / boundingArea;
     if (fillRatio < 0.55 || fillRatio > 1.15) return null;
-    final aspectRatio = bounds.width > bounds.height
-        ? bounds.width / bounds.height
-        : bounds.height / bounds.width;
-    if (aspectRatio > 2.75) return null;
+    if (!profile.acceptsAspectRatio(
+      bounds.width.toDouble(),
+      bounds.height.toDouble(),
+    )) {
+      return null;
+    }
 
     final left = bounds.x;
     final top = bounds.y;
@@ -378,6 +455,12 @@ Future<List<String>> _detectAndCropInIsolate(
   final imagePath = args['imagePath'] as String;
   final tempPath = args['tempPath'] as String;
   final jobId = args['jobId'] as String? ?? 'legacy';
+  final requestedType = _documentTypeFromIndex(args['documentTypeIndex']);
+  final profile = _detectionProfileFor(requestedType);
+  if (isCancelled?.call() ?? false) return <String>[];
+  if (requestedType == DocumentType.a4Document) {
+    return <String>[imagePath];
+  }
   cv.Mat? source;
   cv.Mat? gray;
   cv.Mat? blurred;
@@ -420,6 +503,7 @@ Future<List<String>> _detectAndCropInIsolate(
         final candidate = _candidateFromContour(
           contour,
           imageArea: imageArea,
+          profile: profile,
           allowAxisAlignedFallback: allowAxisAlignedFallback,
         );
         if (candidate == null ||
@@ -457,7 +541,7 @@ Future<List<String>> _detectAndCropInIsolate(
     blurred = cv.gaussianBlur(gray, (5, 5), 0);
     kernel = cv.getStructuringElement(cv.MORPH_RECT, (7, 7));
     broadKernel = cv.getStructuringElement(cv.MORPH_RECT, (11, 11));
-    foregroundKernel = cv.getStructuringElement(cv.MORPH_RECT, (15, 15));
+    foregroundKernel = cv.getStructuringElement(cv.MORPH_RECT, (5, 5));
 
     // Multiple complementary proposal masks are required for a sheet that
     // contains several cards: some card borders are sharp while others have
@@ -830,6 +914,7 @@ class ScannerService {
     required File imageFile,
     required String tempPath,
     required String jobId,
+    required DocumentType documentType,
     required ScanCancellationToken token,
   }) async {
     if (token.isCancelled) throw const _ScanWorkerCancelled();
@@ -886,6 +971,7 @@ class ScannerService {
           'imagePath': imageFile.path,
           'tempPath': tempPath,
           'jobId': jobId,
+          'documentTypeIndex': documentType.index,
           'resultPort': resultPort.sendPort,
         },
         errorsAreFatal: false,
@@ -903,8 +989,19 @@ class ScannerService {
     }
   }
 
+  DocumentClassification _classificationForRequestedType(DocumentType type) {
+    return DocumentClassification(
+      type: type,
+      normalizedText: '',
+      confidence: 1,
+      reason: 'تم اعتماد نوع المستند المحدد من إعدادات المستخدم.',
+      requiresManualReview: false,
+    );
+  }
+
   Future<SmartScanResult> processSmartRecognition(
     File imageFile, {
+    DocumentType? documentType,
     ScanCancellationToken? cancellationToken,
   }) async {
     if (cancellationToken?.isCancelled ?? false) {
@@ -917,6 +1014,35 @@ class ScannerService {
       );
     }
 
+    final requestedType = documentType ?? DocumentType.unknown;
+    if (requestedType == DocumentType.a4Document) {
+      if (!await imageFile.exists()) {
+        return SmartScanResult(
+          source: imageFile,
+          files: const <File>[],
+          classification: DocumentClassification.unknown,
+          status: SmartScanStatus.manualReviewRequired,
+          message: 'ملف ورقة A4 غير موجود؛ يُرجى اختيار الصورة من جديد.',
+        );
+      }
+      if (cancellationToken?.isCancelled ?? false) {
+        return SmartScanResult(
+          source: imageFile,
+          files: const <File>[],
+          classification: DocumentClassification.unknown,
+          status: SmartScanStatus.cancelled,
+          message: 'ألغيت المعالجة.',
+        );
+      }
+      return SmartScanResult(
+        source: imageFile,
+        files: List<File>.unmodifiable(<File>[imageFile]),
+        classification: _classificationForRequestedType(requestedType),
+        status: SmartScanStatus.succeeded,
+        message: 'تم اعتماد الصورة كاملة كورقة A4.',
+      );
+    }
+
     await TemporaryImageStore.cleanupStale();
     final tempDirectory = await getTemporaryDirectory();
     final jobId = DateTime.now().microsecondsSinceEpoch.toString();
@@ -926,6 +1052,7 @@ class ScannerService {
         imageFile: imageFile,
         tempPath: tempDirectory.path,
         jobId: jobId,
+        documentType: requestedType,
         token: cancellationToken ?? ScanCancellationToken(),
       );
     } on _ScanWorkerCancelled {
@@ -996,20 +1123,21 @@ class ScannerService {
 
     DocumentClassification classification;
     try {
-      classification =
-          await classifyDocument(
-            files.first,
-            cancellationToken: cancellationToken,
-          ).timeout(
-            _classificationTimeout,
-            onTimeout: () => const DocumentClassification(
-              type: DocumentType.unknown,
-              normalizedText: '',
-              confidence: 0,
-              reason: 'تجاوز التعرف النصي المهلة؛ راجع نوع المستند يدوياً.',
-              requiresManualReview: true,
-            ),
-          );
+      classification = requestedType == DocumentType.unknown
+          ? await classifyDocument(
+              files.first,
+              cancellationToken: cancellationToken,
+            ).timeout(
+              _classificationTimeout,
+              onTimeout: () => const DocumentClassification(
+                type: DocumentType.unknown,
+                normalizedText: '',
+                confidence: 0,
+                reason: 'تجاوز التعرف النصي المهلة؛ راجع نوع المستند يدوياً.',
+                requiresManualReview: true,
+              ),
+            )
+          : _classificationForRequestedType(requestedType);
     } on _ScanWorkerCancelled {
       for (final file in files) {
         await TemporaryImageStore.deleteIfManaged(file);
@@ -1038,6 +1166,7 @@ class ScannerService {
 
   Future<SmartScanBatchResult> processBatchSmartRecognition(
     List<File> imageFiles, {
+    DocumentType? documentType,
     void Function(int current, int total)? onProgress,
     ScanCancellationToken? cancellationToken,
   }) async {
@@ -1054,6 +1183,7 @@ class ScannerService {
       try {
         final result = await processSmartRecognition(
           source,
+          documentType: documentType,
           cancellationToken: activeToken,
         );
         results[source] = result;

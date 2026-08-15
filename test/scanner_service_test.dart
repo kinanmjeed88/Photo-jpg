@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:doc_scanner_app/providers/app_state.dart';
 import 'package:doc_scanner_app/services/scanner_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -48,4 +49,67 @@ void main() {
       expect(progressCalls, 0);
     },
   );
+
+  test('A4 smart processing keeps one complete source image', () async {
+    final directory = await Directory.systemTemp.createTemp('a4_smart_scan_');
+    addTearDown(() => directory.delete(recursive: true));
+    final source = File('${directory.path}/source.jpg');
+    await source.writeAsBytes(<int>[1, 2, 3]);
+
+    final result = await ScannerService().processSmartRecognition(
+      source,
+      documentType: DocumentType.a4Document,
+    );
+
+    expect(result.status, SmartScanStatus.succeeded);
+    expect(result.files, hasLength(1));
+    expect(result.files.single.path, source.path);
+    expect(result.classification.type, DocumentType.a4Document);
+    expect(result.classification.requiresManualReview, isFalse);
+  });
+
+  test(
+    'A4 processing requests manual review when the source is missing',
+    () async {
+      final source = File(
+        '${Directory.systemTemp.path}/missing_a4_${DateTime.now().microsecondsSinceEpoch}.jpg',
+      );
+
+      final result = await ScannerService().processSmartRecognition(
+        source,
+        documentType: DocumentType.a4Document,
+      );
+
+      expect(result.status, SmartScanStatus.manualReviewRequired);
+      expect(result.files, isEmpty);
+      expect(result.classification.type, DocumentType.unknown);
+    },
+  );
+
+  test('A4 batch processing returns one complete source per input', () async {
+    final directory = await Directory.systemTemp.createTemp('a4_batch_scan_');
+    addTearDown(() => directory.delete(recursive: true));
+    final first = File('${directory.path}/first.jpg');
+    final second = File('${directory.path}/second.jpg');
+    await first.writeAsBytes(<int>[1]);
+    await second.writeAsBytes(<int>[2]);
+    var progressCalls = 0;
+
+    final result = await ScannerService().processBatchSmartRecognition(
+      <File>[first, second],
+      documentType: DocumentType.a4Document,
+      onProgress: (current, total) => progressCalls++,
+    );
+
+    expect(result.wasCancelled, isFalse);
+    expect(result.results, hasLength(2));
+    expect(progressCalls, 2);
+    for (final source in <File>[first, second]) {
+      final scan = result.results[source]!;
+      expect(scan.status, SmartScanStatus.succeeded);
+      expect(scan.files, hasLength(1));
+      expect(scan.files.single.path, source.path);
+      expect(scan.classification.type, DocumentType.a4Document);
+    }
+  });
 }

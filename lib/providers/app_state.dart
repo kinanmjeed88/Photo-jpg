@@ -500,12 +500,8 @@ class ScannedDocumentsNotifier
     );
   }
 
-  DocumentType _guessDocumentType(AppState appState) {
-    if (appState.hasRationCard) return DocumentType.rationCard;
-    if (appState.hasPassport) return DocumentType.passport;
-    if (appState.hasHousingCard) return DocumentType.housingCard;
-    return DocumentType.nationalId;
-  }
+  DocumentType _guessDocumentType(AppState appState) =>
+      appState.selectedDocumentType;
 
   @visibleForTesting
   void seedDocuments(Map<int, List<ScannedDocument>> documents) {
@@ -568,6 +564,7 @@ class AppState {
     this.hasHousingCard = false,
     this.hasRationCard = false,
     this.hasPassport = false,
+    this.hasA4Document = false,
     this.displayMethod = DisplayMethod.onePage,
     this.addFrame = false,
     this.fileName = 'مستمسكاتي',
@@ -578,6 +575,7 @@ class AppState {
   final bool hasHousingCard;
   final bool hasRationCard;
   final bool hasPassport;
+  final bool hasA4Document;
   final DisplayMethod displayMethod;
   final bool addFrame;
   final String fileName;
@@ -588,6 +586,7 @@ class AppState {
     bool? hasHousingCard,
     bool? hasRationCard,
     bool? hasPassport,
+    bool? hasA4Document,
     DisplayMethod? displayMethod,
     bool? addFrame,
     String? fileName,
@@ -598,6 +597,7 @@ class AppState {
       hasHousingCard: hasHousingCard ?? this.hasHousingCard,
       hasRationCard: hasRationCard ?? this.hasRationCard,
       hasPassport: hasPassport ?? this.hasPassport,
+      hasA4Document: hasA4Document ?? this.hasA4Document,
       displayMethod: displayMethod ?? this.displayMethod,
       addFrame: addFrame ?? this.addFrame,
       fileName: fileName ?? this.fileName,
@@ -605,8 +605,20 @@ class AppState {
     );
   }
 
+  DocumentType get selectedDocumentType {
+    if (hasA4Document) return DocumentType.a4Document;
+    if (hasRationCard) return DocumentType.rationCard;
+    if (hasPassport) return DocumentType.passport;
+    if (hasHousingCard) return DocumentType.housingCard;
+    return DocumentType.nationalId;
+  }
+
   bool get hasAtLeastOneDocument =>
-      hasNationalId || hasHousingCard || hasRationCard || hasPassport;
+      hasNationalId ||
+      hasHousingCard ||
+      hasRationCard ||
+      hasPassport ||
+      hasA4Document;
 }
 
 class AppStateNotifier extends Notifier<AppState> {
@@ -621,6 +633,8 @@ class AppStateNotifier extends Notifier<AppState> {
       state = state.copyWith(hasRationCard: value ?? false);
   void togglePassport(bool? value) =>
       state = state.copyWith(hasPassport: value ?? false);
+  void toggleA4Document(bool? value) =>
+      state = state.copyWith(hasA4Document: value ?? false);
 
   void updateDisplayMethod(DisplayMethod method) =>
       state = state.copyWith(displayMethod: method);

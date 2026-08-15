@@ -61,6 +61,12 @@ class SettingsScreen extends ConsumerWidget {
               onChanged: notifier.togglePassport,
               activeColor: const Color(0xFF4F46E5),
             ),
+            CheckboxListTile(
+              title: const Text('ورقة مستمسك A4 كامل'),
+              value: state.hasA4Document,
+              onChanged: notifier.toggleA4Document,
+              activeColor: const Color(0xFF4F46E5),
+            ),
             const Divider(),
             _sectionTitle('طريقة العرض:'),
             RadioGroup<DisplayMethod>(

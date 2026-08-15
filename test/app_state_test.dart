@@ -151,6 +151,41 @@ void main() {
     );
     expect(identical(initial, container.read(appStateProvider)), isFalse);
   });
+  test(
+    'selects A4 as the explicit document type and counts it as selected',
+    () {
+      const state = AppState(hasA4Document: true);
+
+      expect(state.selectedDocumentType, DocumentType.a4Document);
+      expect(state.hasAtLeastOneDocument, isTrue);
+    },
+  );
+
+  test('A4 has priority when multiple document types are enabled', () {
+    const state = AppState(
+      hasNationalId: true,
+      hasHousingCard: true,
+      hasRationCard: true,
+      hasPassport: true,
+      hasA4Document: true,
+    );
+
+    expect(state.selectedDocumentType, DocumentType.a4Document);
+  });
+
+  test('toggles A4 through AppStateNotifier immutably', () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    final initial = container.read(appStateProvider);
+
+    container.read(appStateProvider.notifier).toggleA4Document(true);
+
+    final updated = container.read(appStateProvider);
+    expect(updated.hasA4Document, isTrue);
+    expect(updated.selectedDocumentType, DocumentType.a4Document);
+    expect(identical(initial, updated), isFalse);
+  });
+
   test('returns the created page index without exposing protected state', () {
     final container = ProviderContainer();
     addTearDown(container.dispose);
