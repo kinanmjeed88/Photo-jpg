@@ -315,10 +315,12 @@ _DocumentDetectionProfile _detectionProfileFor(DocumentType type) {
         type: DocumentType.allDocuments,
         minimumLongToShortRatio: 1.15,
         maximumLongToShortRatio: 2.05,
-        // Very small contours are usually portraits, seals, logos, or text
-        // panels. A real card in the supported multi-document capture layout
-        // must occupy a meaningful portion of the frame.
-        minimumAreaRatio: 0.05,
+        // Four cards can legitimately occupy only 2–4% each of a portrait
+        // capture. The old 5% floor discarded every real card in a layout like
+        // 1000310134.jpg before deduplication or manual review could see it.
+        // Inner portraits and seals are still rejected by the quadrilateral,
+        // aspect-ratio, frame-contact, and confidence gates below.
+        minimumAreaRatio: 0.012,
         // A contour covering most of the light capture sheet is a background
         // boundary, not one of the four cards placed on it. A4 has its own
         // explicit passthrough mode and does not use this profile.
@@ -345,6 +347,9 @@ _DocumentDetectionProfile _detectionProfileFor(DocumentType type) {
         maximumLongToShortRatio: 1.7,
         minimumAreaRatio: 0.008,
         maximumAreaRatio: 0.65,
+        // The national/unified card is blue-lilac in the supported capture
+        // layout. Do not let the green housing form satisfy this profile.
+        rejectsGreenTint: true,
       );
     case DocumentType.housingCard:
       // The housing card is detected exclusively through its dedicated
@@ -617,13 +622,7 @@ double _passportMrzEvidence({
   }
 }
 
-bool _matchesVisualProfile(
-  cv.Mat source,
-  _DocumentCandidate candidate,
-  _DocumentDetectionProfile profile,
-) {
-  if (!profile.rejectsGreenTint) return true;
-
+bool _candidateHasGreenTint(cv.Mat source, _DocumentCandidate candidate) {
   final left = _clampInt(candidate.left, 0, source.cols - 1);
   final top = _clampInt(candidate.top, 0, source.rows - 1);
   final right = _clampInt(candidate.right, left + 1, source.cols);
@@ -645,14 +644,23 @@ bool _matchesVisualProfile(
     final green = average.val2;
     final red = average.val3;
     final greenDominance = green - ((red + blue) / 2);
-    final isGreenHousingCard =
-        greenDominance >= 8 && green >= red * 1.04 && green >= blue * 1.04;
-    return !isGreenHousingCard;
+    return greenDominance >= 8 && green >= red * 1.04 && green >= blue * 1.04;
   } finally {
     average?.dispose();
     roi?.dispose();
     rect?.dispose();
   }
+}
+
+bool _matchesVisualProfile(
+  cv.Mat source,
+  _DocumentCandidate candidate,
+  _DocumentDetectionProfile profile,
+) {
+  final hasGreenTint = _candidateHasGreenTint(source, candidate);
+  if (profile.requiresGreenTint) return hasGreenTint;
+  if (profile.rejectsGreenTint) return !hasGreenTint;
+  return true;
 }
 
 _DocumentCandidate? _axisAlignedCandidateFromContour(
@@ -724,9 +732,10 @@ bool _isDuplicateRegion(DocumentRegion candidate, DocumentRegion accepted) {
   final unionArea = candidate.area + accepted.area - intersectionArea;
   if (unionArea > 0 && intersectionArea / unionArea >= 0.7) return true;
 
-  // A small portrait or text panel inside an accepted document must never be
-  // emitted as another document. The candidates are ordered by area, so this
-  // containment rule keeps the outer credential and rejects its inner region.
+  // A portrait or text panel inside an accepted document must never be
+  // emitted as another document. The independent saturation proposal creates
+  // the four real cards before this pass, while this containment rule removes
+  // only inner regions from any broader contour.
   final candidateCoverage = intersectionArea / math.max(candidate.area, 1);
   final acceptedCoverage = intersectionArea / math.max(accepted.area, 1);
   if (candidateCoverage >= 0.82 || acceptedCoverage >= 0.82) return true;
@@ -807,8 +816,12 @@ double _automaticAcceptanceThreshold(_DocumentDetectionProfile profile) {
       // the stamp specialist path supplies the additional evidence.
       return 0.58;
     case DocumentType.allDocuments:
-      return 0.60;
+      // Multi-document captures often produce a valid rectangle from a single
+      // complementary mask. Do not force five independent masks for a card
+      // that already has strong geometry and a valid area prior.
+      return 0.54;
     case DocumentType.nationalId:
+      return 0.54;
     case DocumentType.rationCard:
     case DocumentType.a4Document:
     case DocumentType.unknown:
@@ -967,6 +980,35 @@ double _contourSolidity(cv.VecPoint contour) {
   }
 }
 
+double _housingAnchorEvidence({
+  required cv.Mat source,
+  required cv.Rect bounds,
+  required double contourArea,
+}) {
+  cv.Mat? roi;
+  cv.Scalar? average;
+  try {
+    final boundingArea = math.max(1, bounds.width * bounds.height).toDouble();
+    final fillRatio = (contourArea / boundingArea).clamp(0.0, 1.0).toDouble();
+    roi = source.region(bounds);
+    average = roi.mean();
+    // The source is BGR. A valid housing seal has both measurable green
+    // dominance and a compact, filled component; isolated green text strokes
+    // or background noise score low on one or both signals.
+    final greenDominance = average.val2 - ((average.val1 + average.val3) / 2);
+    final dominanceScore = ((greenDominance - 8) / 18)
+        .clamp(0.0, 1.0)
+        .toDouble();
+    final fillScore = ((fillRatio - 0.24) / 0.46).clamp(0.0, 1.0).toDouble();
+    return (dominanceScore * 0.70 + fillScore * 0.30)
+        .clamp(0.0, 1.0)
+        .toDouble();
+  } finally {
+    average?.dispose();
+    roi?.dispose();
+  }
+}
+
 /// Stamp-based housing-card detection.
 ///
 /// Classical edge masks fail on housing-card photos: the card rides in a
@@ -976,7 +1018,7 @@ double _contourSolidity(cv.VecPoint contour) {
 /// The round green ministry seal in the middle of every housing form is the
 /// most reliable anchor. This builds a strict green mask, closes the seal
 /// into a single blob with a large elliptical kernel, then expands the seal
-/// bounding box outward (18%) to recover the full card around it.
+/// bounding box outward using boundary evidence to recover the full card.
 Future<List<_DocumentCandidate>> _housingCardStampCandidates({
   required cv.Mat source,
   required double imageArea,
@@ -1011,14 +1053,12 @@ Future<List<_DocumentCandidate>> _housingCardStampCandidates({
       if (isCancelled()) return candidates;
       if (inspected++ % 24 == 0) await Future<void>.delayed(Duration.zero);
       final contourArea = cv.contourArea(contour);
-      // A housing page may occupy a small fraction of a multi-page frame;
-      // the seal is the anchor, not the final document area.
-      if (contourArea < imageArea * 0.008) continue;
-      // Low-contrast scans can fragment a valid seal and reduce solidity.
-      // The area, aspect-ratio, boundary, and content checks below remain
-      // active, so lowering this anchor-only gate does not accept the blob as
-      // a document by itself.
-      if (_contourSolidity(contour) < 0.35) continue;
+      // A housing page can occupy only a few percent of a multi-document
+      // frame, and the green seal may be fragmented by glare. This is an
+      // anchor gate, never a final crop gate: the expanded candidate still
+      // has to pass page geometry and boundary/content scoring.
+      if (contourArea < imageArea * 0.0025) continue;
+      if (_contourSolidity(contour) < 0.24) continue;
       final bounds = cv.boundingRect(contour);
       try {
         final (bx, by, bw, bh) = _expandRect(
@@ -1038,6 +1078,12 @@ Future<List<_DocumentCandidate>> _housingCardStampCandidates({
         final boundingArea = width * height;
         final areaRatio = boundingArea / imageArea;
         if (areaRatio < 0.01 || areaRatio > 0.98) continue;
+        final anchorEvidence = _housingAnchorEvidence(
+          source: source,
+          bounds: bounds,
+          contourArea: contourArea,
+        );
+        if (anchorEvidence < 0.35 && areaRatio < 0.02) continue;
         final anchor = _DocumentCandidate(
           points: <cv.Point>[
             cv.Point(bx.toInt(), by.toInt()),
@@ -1052,7 +1098,8 @@ Future<List<_DocumentCandidate>> _housingCardStampCandidates({
           top: by.toInt(),
           right: bx.toInt() + width.toInt(),
           bottom: by.toInt() + height.toInt(),
-          confidence: 0.9,
+          confidence: 0.84 + anchorEvidence * 0.11,
+          documentEvidence: anchorEvidence,
         );
         // When one large green anchor occupies the centre of the frame, the
         // page itself is usually the complete capture and its outer border is
@@ -1381,8 +1428,34 @@ _DocumentCandidate? _housingPageCandidateAroundAnchor({
   final centerY = anchor.centerY;
   final anchorWidth = math.max(1.0, anchor.width);
   final anchorHeight = math.max(1.0, anchor.height);
-  const widthFactors = <double>[1.3, 1.5, 1.7, 2.0, 2.3, 2.6, 3.0];
-  const heightFactors = <double>[1.15, 1.3, 1.5, 1.7, 1.9, 2.15, 2.4];
+  // The first factors preserve a close-up seal candidate; the larger factors
+  // recover a full housing form when only its central seal survives the color
+  // mask. A bounded search is safer than blindly expanding to the frame.
+  const widthFactors = <double>[
+    1.3,
+    1.5,
+    1.7,
+    2.0,
+    2.3,
+    2.6,
+    3.0,
+    3.5,
+    4.0,
+    4.6,
+    5.2,
+  ];
+  const heightFactors = <double>[
+    1.15,
+    1.3,
+    1.5,
+    1.7,
+    1.9,
+    2.15,
+    2.4,
+    2.8,
+    3.2,
+    3.7,
+  ];
   _DocumentCandidate? best;
   var bestScore = 0.0;
 
@@ -1412,7 +1485,7 @@ _DocumentCandidate? _housingPageCandidateAroundAnchor({
       final actualHeight = bottom - top;
       final area = actualWidth * actualHeight.toDouble();
       final areaRatio = area / imageArea;
-      if (areaRatio < 0.02 || areaRatio > 0.96) continue;
+      if (areaRatio < 0.012 || areaRatio > 0.72) continue;
       final ratio =
           math.max(actualWidth, actualHeight) /
           math.max(1, math.min(actualWidth, actualHeight));
@@ -1445,7 +1518,7 @@ _DocumentCandidate? _housingPageCandidateAroundAnchor({
         math.min(topDensity, bottomDensity),
         math.min(leftDensity, rightDensity),
       );
-      if (edgeSupport < 0.006) continue;
+      if (edgeSupport < 0.004) continue;
 
       final innerLeft = _clampInt(left + thickness, left, right - 1);
       final innerTop = _clampInt(top + thickness, top, bottom - 1);
@@ -1594,6 +1667,10 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
   cv.Mat? thresholdClosed;
   cv.Mat? sensitiveThreshold;
   cv.Mat? sensitiveThresholdClosed;
+  cv.Mat? hsv;
+  cv.Mat? saturated;
+  cv.Mat? saturatedClosed;
+  cv.Mat? saturatedOpen;
   cv.Mat? foreground;
   cv.Mat? foregroundClosed;
   cv.Mat? kernel;
@@ -1793,6 +1870,62 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
       );
       final imageArea = (analysisSource.rows * analysisSource.cols).toDouble();
 
+      // A saturation proposal is the reliable multi-document path for the
+      // blue/lilac unified cards in a light sheet. It produces one external
+      // component per card in both portrait and landscape captures, while the
+      // green-tint gate excludes the housing form from the national-ID type.
+      if (requestedType == DocumentType.nationalId ||
+          requestedType == DocumentType.allDocuments) {
+        hsv = cv.cvtColor(analysisSource, cv.COLOR_BGR2HSV);
+        final saturationLower = cv.Scalar(0, 35, 50);
+        final saturationUpper = cv.Scalar(179, 255, 255);
+        try {
+          saturated = cv.inRangebyScalar(hsv, saturationLower, saturationUpper);
+        } finally {
+          saturationUpper.dispose();
+          saturationLower.dispose();
+        }
+        final saturationKernel = cv.getStructuringElement(cv.MORPH_RECT, (
+          11,
+          11,
+        ));
+        try {
+          saturatedClosed = cv.morphologyEx(
+            saturated,
+            cv.MORPH_CLOSE,
+            saturationKernel,
+          );
+        } finally {
+          saturationKernel.dispose();
+        }
+        final saturationOpenKernel = cv.getStructuringElement(cv.MORPH_RECT, (
+          5,
+          5,
+        ));
+        try {
+          saturatedOpen = cv.morphologyEx(
+            saturatedClosed,
+            cv.MORPH_OPEN,
+            saturationOpenKernel,
+          );
+        } finally {
+          saturationOpenKernel.dispose();
+        }
+        if (!await collectCandidates(
+          saturatedOpen,
+          imageArea,
+          retrievalMode: cv.RETR_EXTERNAL,
+          allowAxisAlignedFallback: true,
+        )) {
+          return const _SmartCropOutput(
+            paths: <String>[],
+            confidence: 0,
+            detectedDocumentCount: 0,
+            reviewReason: 'ألغيت المعالجة أثناء فصل البطاقات الملونة.',
+          );
+        }
+      }
+
       if (!await collectCandidates(edgeClosed, imageArea) ||
           !await collectCandidates(sensitiveEdgeClosed, imageArea) ||
           !await collectCandidates(thresholdClosed, imageArea) ||
@@ -1976,6 +2109,10 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
     sensitiveThresholdClosed?.dispose();
     foreground?.dispose();
     foregroundClosed?.dispose();
+    saturatedOpen?.dispose();
+    saturatedClosed?.dispose();
+    saturated?.dispose();
+    hsv?.dispose();
     kernel?.dispose();
     broadKernel?.dispose();
     foregroundKernel?.dispose();
