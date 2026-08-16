@@ -79,6 +79,7 @@ class SmartScanResult {
     this.cropConfidence = 0,
     this.detectedDocumentCount = 0,
     this.cropReviewReason = '',
+    this.manualReviewRegions = const <DocumentRegion>[],
   });
 
   final File source;
@@ -87,17 +88,26 @@ class SmartScanResult {
   final SmartScanStatus status;
   final String message;
 
-  /// Confidence of the document boundary, independent from OCR/type
-  /// confidence. A correctly classified image can still have a bad crop.
+  /// Aggregate boundary confidence retained for compatibility and diagnostics.
+  /// It is no longer used to discard every crop in a source image.
   final double cropConfidence;
   final int detectedDocumentCount;
   final String cropReviewReason;
 
+  /// Regions that need a human boundary decision. Accepted crops remain in
+  /// [files] and are never discarded because this list is non-empty.
+  final List<DocumentRegion> manualReviewRegions;
+
+  bool get requiresCropReview => manualReviewRegions.isNotEmpty;
+
+  /// True only when the source has no safe automatic output, or processing
+  /// failed. A low-confidence crop with other accepted crops is a partial
+  /// review, not a full-image fallback.
   bool get requiresManualFallback =>
-      status == SmartScanStatus.manualReviewRequired ||
-      status == SmartScanStatus.failed ||
-      classification.requiresManualReview ||
-      (cropConfidence > 0 && cropConfidence < 0.65);
+      files.isEmpty &&
+      (status == SmartScanStatus.manualReviewRequired ||
+          status == SmartScanStatus.failed ||
+          classification.requiresManualReview);
 }
 
 class _SmartCropOutput {
@@ -106,12 +116,47 @@ class _SmartCropOutput {
     required this.confidence,
     required this.detectedDocumentCount,
     required this.reviewReason,
+    this.reviewRegions = const <DocumentRegion>[],
   });
 
   final List<String> paths;
   final double confidence;
   final int detectedDocumentCount;
   final String reviewReason;
+  final List<DocumentRegion> reviewRegions;
+}
+
+Map<String, Object> _documentRegionToMessage(DocumentRegion region) =>
+    <String, Object>{
+      'left': region.left,
+      'top': region.top,
+      'right': region.right,
+      'bottom': region.bottom,
+      'area': region.area,
+    };
+
+DocumentRegion? _documentRegionFromMessage(Object? value) {
+  if (value is! Map) return null;
+  final left = (value['left'] as num?)?.toInt();
+  final top = (value['top'] as num?)?.toInt();
+  final right = (value['right'] as num?)?.toInt();
+  final bottom = (value['bottom'] as num?)?.toInt();
+  final area = (value['area'] as num?)?.toDouble();
+  if (left == null ||
+      top == null ||
+      right == null ||
+      bottom == null ||
+      area == null) {
+    return null;
+  }
+  if (right <= left || bottom <= top || area <= 0) return null;
+  return DocumentRegion(
+    left: left,
+    top: top,
+    right: right,
+    bottom: bottom,
+    area: area,
+  );
 }
 
 class SmartScanBatchResult {
@@ -313,6 +358,8 @@ class _DocumentCandidate {
     required this.right,
     required this.bottom,
     this.confidence = 0,
+    this.evidenceCount = 1,
+    this.documentEvidence = 0,
   });
 
   final List<cv.Point> points;
@@ -328,6 +375,36 @@ class _DocumentCandidate {
   /// confidence because a correctly classified image can still have a bad
   /// crop boundary.
   final double confidence;
+
+  /// Number of independent proposal masks or specialist detectors supporting
+  /// this same region. It is used as a stability signal, not as a replacement
+  /// for geometry validation.
+  final int evidenceCount;
+
+  /// Optional type-specific visual evidence, such as a passport MRZ-like
+  /// lower-band pattern. It is deliberately bounded and never bypasses the
+  /// geometric profile.
+  final double documentEvidence;
+
+  _DocumentCandidate copyWith({
+    double? confidence,
+    int? evidenceCount,
+    double? documentEvidence,
+  }) {
+    return _DocumentCandidate(
+      points: points,
+      area: area,
+      width: width,
+      height: height,
+      left: left,
+      top: top,
+      right: right,
+      bottom: bottom,
+      confidence: confidence ?? this.confidence,
+      evidenceCount: evidenceCount ?? this.evidenceCount,
+      documentEvidence: documentEvidence ?? this.documentEvidence,
+    );
+  }
 
   double get centerX => (left + right) / 2;
   double get centerY => (top + bottom) / 2;
@@ -455,6 +532,37 @@ _DocumentCandidate? _candidateFromContour(
     );
   } finally {
     approximation?.dispose();
+  }
+}
+
+double _passportMrzEvidence({
+  required cv.Mat gray,
+  required _DocumentCandidate candidate,
+}) {
+  final left = _clampInt(candidate.left, 0, gray.cols - 1);
+  final top = _clampInt(candidate.top, 0, gray.rows - 1);
+  final right = _clampInt(candidate.right, left + 1, gray.cols);
+  final bottom = _clampInt(candidate.bottom, top + 1, gray.rows);
+  final width = right - left;
+  final height = bottom - top;
+  if (width < 64 || height < 64) return 0;
+
+  final bandTop = _clampInt(top + (height * 0.68).round(), top, bottom - 1);
+  final bandHeight = math.max(1, bottom - bandTop);
+  cv.Mat? band;
+  cv.Mat? bandEdges;
+  try {
+    band = gray.region(cv.Rect(left, bandTop, width, bandHeight));
+    bandEdges = cv.canny(band, 30, 110);
+    final density =
+        cv.countNonZero(bandEdges) / math.max(1, width * bandHeight);
+    // MRZ-like lower bands contain dense, repeated dark glyph strokes. The
+    // score is only an additional signal; geometry and page coverage remain
+    // mandatory, so a random text block cannot pass by itself.
+    return ((density - 0.015) / 0.12).clamp(0.0, 1.0).toDouble();
+  } finally {
+    bandEdges?.dispose();
+    band?.dispose();
   }
 }
 
@@ -591,6 +699,65 @@ bool _isDuplicateCandidate(
   _DocumentCandidate accepted,
 ) => _isDuplicateRegion(candidate.region, accepted.region);
 
+double _candidateQuality(_DocumentCandidate candidate) {
+  final stability = (candidate.evidenceCount / 3).clamp(0.0, 1.0).toDouble();
+  return (candidate.confidence * 0.65 +
+          stability * 0.15 +
+          candidate.documentEvidence * 0.20)
+      .clamp(0.0, 1.0)
+      .toDouble();
+}
+
+void _mergeCandidate(
+  List<_DocumentCandidate> candidates,
+  _DocumentCandidate candidate,
+) {
+  final duplicateIndex = candidates.indexWhere(
+    (existing) => _isDuplicateCandidate(candidate, existing),
+  );
+  if (duplicateIndex < 0) {
+    candidates.add(candidate);
+    return;
+  }
+  final existing = candidates[duplicateIndex];
+  final stronger = _candidateQuality(candidate) > _candidateQuality(existing)
+      ? candidate
+      : existing;
+  candidates[duplicateIndex] = stronger.copyWith(
+    confidence: math.max(existing.confidence, candidate.confidence),
+    evidenceCount: existing.evidenceCount + candidate.evidenceCount,
+    documentEvidence: math.max(
+      existing.documentEvidence,
+      candidate.documentEvidence,
+    ),
+  );
+}
+
+List<_DocumentCandidate> _selectDistinctCandidates(
+  Iterable<_DocumentCandidate> candidates,
+) {
+  final ordered = List<_DocumentCandidate>.of(candidates)
+    ..sort((first, second) {
+      final quality = _candidateQuality(
+        second,
+      ).compareTo(_candidateQuality(first));
+      return quality != 0 ? quality : second.area.compareTo(first.area);
+    });
+  final selected = <_DocumentCandidate>[];
+  for (final candidate in ordered) {
+    if (selected.every(
+      (accepted) => !_isDuplicateCandidate(candidate, accepted),
+    )) {
+      selected.add(candidate);
+    }
+  }
+  selected.sort((first, second) {
+    final vertical = first.top.compareTo(second.top);
+    return vertical != 0 ? vertical : first.left.compareTo(second.left);
+  });
+  return selected;
+}
+
 bool _isLikelyDocumentCandidate({
   required cv.Mat source,
   required _DocumentCandidate candidate,
@@ -626,13 +793,18 @@ bool _isLikelyDocumentCandidate({
     // Specialist housing candidates are inserted separately and do not pass
     // through this generic geometric filter.
     if (areaRatio > 0.30 && touchedEdges >= 2) return false;
-    if (candidate.confidence < 0.58) return false;
+    // Keep borderline regions alive for manual review. The final automatic
+    // acceptance decision is made per candidate by _candidateQuality.
+    if (candidate.confidence < 0.42) return false;
   }
 
   if (profile.type == DocumentType.passport) {
     // A passport page should not be accepted as a tiny inner rectangle. The
     // full-frame fallback is considered later when only such candidates exist.
-    if (areaRatio < 0.12) return false;
+    // A face/photo rectangle is usually much smaller than the complete page.
+    // Requiring meaningful page coverage prevents it from becoming the only
+    // passport crop and allows the full-frame fallback to activate.
+    if (areaRatio < 0.35) return false;
   }
 
   return true;
@@ -1251,6 +1423,9 @@ _DocumentCandidate? _fullFrameCandidateForPassport({
     top: topInt,
     right: leftInt + widthInt,
     bottom: topInt + heightInt,
+    confidence: 0.90,
+    evidenceCount: 2,
+    documentEvidence: 1.0,
   );
 }
 
@@ -1297,6 +1472,7 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
   cv.Mat? foregroundKernel;
   var candidates = <_DocumentCandidate>[];
   final results = <String>[];
+  var reviewCandidates = const <_DocumentCandidate>[];
 
   Future<bool> collectCandidates(
     cv.Mat image,
@@ -1318,25 +1494,30 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
         // Let the worker control port process a cancellation while scanning a
         // noisy camera frame without sacrificing all candidate contours.
         if (inspected++ % 24 == 0) await Future<void>.delayed(Duration.zero);
-        final candidate = _candidateFromContour(
+        final rawCandidate = _candidateFromContour(
           contour,
           imageArea: imageArea,
           profile: profile,
           allowAxisAlignedFallback: allowAxisAlignedFallback,
         );
-        if (candidate == null ||
-            !_isLikelyDocumentCandidate(
+        if (rawCandidate == null) continue;
+        final candidate = profile.type == DocumentType.passport && gray != null
+            ? rawCandidate.copyWith(
+                documentEvidence: _passportMrzEvidence(
+                  gray: gray,
+                  candidate: rawCandidate,
+                ),
+              )
+            : rawCandidate;
+        if (!_isLikelyDocumentCandidate(
               source: image,
               candidate: candidate,
               profile: profile,
             ) ||
-            !_matchesVisualProfile(source!, candidate, profile) ||
-            candidates.any(
-              (accepted) => _isDuplicateCandidate(candidate, accepted),
-            )) {
+            !_matchesVisualProfile(source!, candidate, profile)) {
           continue;
         }
-        candidates.add(candidate);
+        _mergeCandidate(candidates, candidate);
       }
       return !(isCancelled?.call() ?? false);
     } finally {
@@ -1405,9 +1586,13 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
             reviewReason: 'لم يُعثر على مرساة موثوقة لبطاقة السكن.',
           );
         }
-        candidates.addAll(stampCandidates);
+        for (final candidate in stampCandidates) {
+          _mergeCandidate(candidates, candidate);
+        }
       } else {
-        candidates.addAll(stampCandidates);
+        for (final candidate in stampCandidates) {
+          _mergeCandidate(candidates, candidate);
+        }
       }
     }
     if (requestedType != DocumentType.housingCard) {
@@ -1488,18 +1673,23 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
       if (fullFrame != null) candidates.add(fullFrame);
     }
 
-    final regions = selectDistinctDocumentRegions(
-      candidates.map((candidate) => candidate.region),
-    );
-    final candidatesByRegion = <DocumentRegion, _DocumentCandidate>{
-      for (final candidate in candidates) candidate.region: candidate,
-    };
-    candidates = regions
-        .map((region) => candidatesByRegion[region])
-        .whereType<_DocumentCandidate>()
+    candidates = _selectDistinctCandidates(candidates);
+
+    const automaticAcceptanceThreshold = 0.60;
+    reviewCandidates = candidates
+        .where(
+          (candidate) =>
+              _candidateQuality(candidate) < automaticAcceptanceThreshold,
+        )
+        .toList(growable: false);
+    final acceptedCandidates = candidates
+        .where(
+          (candidate) =>
+              _candidateQuality(candidate) >= automaticAcceptanceThreshold,
+        )
         .toList(growable: false);
 
-    for (final candidate in candidates) {
+    for (final candidate in acceptedCandidates) {
       if (isCancelled?.call() ?? false) {
         return const _SmartCropOutput(
           paths: <String>[],
@@ -1587,21 +1777,27 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
     broadKernel?.dispose();
     foregroundKernel?.dispose();
   }
-  var cropConfidence = candidates.isEmpty ? 0.0 : 1.0;
-  for (final candidate in candidates) {
-    if (candidate.confidence < cropConfidence) {
-      cropConfidence = candidate.confidence;
-    }
-  }
-  cropConfidence = cropConfidence.clamp(0.0, 1.0).toDouble();
-  final reviewReason = cropConfidence < 0.65
-      ? 'حدود المستند غير مؤكدة بما يكفي؛ يلزم التحقق اليدوي.'
-      : '';
+  final qualityScores = candidates
+      .map(_candidateQuality)
+      .toList(growable: false);
+  final cropConfidence = qualityScores.isEmpty
+      ? 0.0
+      : (qualityScores.reduce((first, second) => first + second) /
+                qualityScores.length)
+            .clamp(0.0, 1.0)
+            .toDouble();
+  final reviewRegions = List<DocumentRegion>.unmodifiable(
+    reviewCandidates.map((candidate) => candidate.region),
+  );
+  final reviewReason = reviewRegions.isEmpty
+      ? ''
+      : 'تم قبول ${results.length} قص تلقائياً، وتحتاج ${reviewRegions.length} منطقة إلى مراجعة يدوية.';
   return _SmartCropOutput(
     paths: List<String>.unmodifiable(results),
     confidence: cropConfidence,
-    detectedDocumentCount: results.length,
+    detectedDocumentCount: candidates.length,
     reviewReason: reviewReason,
+    reviewRegions: reviewRegions,
   );
 }
 
@@ -1695,6 +1891,9 @@ void _smartCropWorkerEntry(Map<String, dynamic> args) async {
       'cropConfidence': output.confidence,
       'detectedDocumentCount': output.detectedDocumentCount,
       'cropReviewReason': output.reviewReason,
+      'reviewRegions': output.reviewRegions
+          .map(_documentRegionToMessage)
+          .toList(growable: false),
     });
   } catch (error) {
     resultPort.send(<String, Object?>{
@@ -1872,6 +2071,12 @@ class ScannerService {
               (message['detectedDocumentCount'] as num?)?.toInt() ??
               paths.length;
           final reviewReason = message['cropReviewReason'] as String? ?? '';
+          final reviewRegions =
+              ((message['reviewRegions'] as List<Object?>?) ??
+                      const <Object?>[])
+                  .map(_documentRegionFromMessage)
+                  .whereType<DocumentRegion>()
+                  .toList(growable: false);
           if (!completed.isCompleted) {
             completed.complete(
               _SmartCropOutput(
@@ -1879,6 +2084,7 @@ class ScannerService {
                 confidence: confidence.clamp(0.0, 1.0).toDouble(),
                 detectedDocumentCount: detectedDocumentCount,
                 reviewReason: reviewReason,
+                reviewRegions: List<DocumentRegion>.unmodifiable(reviewRegions),
               ),
             );
           }
@@ -2058,6 +2264,7 @@ class ScannerService {
         cropConfidence: cropOutput.confidence,
         detectedDocumentCount: cropOutput.detectedDocumentCount,
         cropReviewReason: cropOutput.reviewReason,
+        manualReviewRegions: cropOutput.reviewRegions,
       );
     }
 
@@ -2108,13 +2315,13 @@ class ScannerService {
         message: 'ألغيت المعالجة.',
       );
     }
-    final cropNeedsReview = cropOutput.confidence < 0.65;
+    final cropNeedsReview = cropOutput.reviewRegions.isNotEmpty;
     final status = classification.requiresManualReview || cropNeedsReview
         ? SmartScanStatus.manualReviewRequired
         : SmartScanStatus.succeeded;
     final reviewReason = cropNeedsReview
         ? (cropOutput.reviewReason.isEmpty
-              ? 'حدود المستند غير مؤكدة بما يكفي؛ راجع القص قبل الحفظ.'
+              ? 'تم قبول القصوص المؤكدة؛ راجع المناطق المحددة يدوياً.'
               : cropOutput.reviewReason)
         : '';
     return SmartScanResult(
@@ -2123,11 +2330,12 @@ class ScannerService {
       classification: classification,
       status: status,
       message: classification.requiresManualReview || cropNeedsReview
-          ? 'اكتمل القص، لكن يجب مراجعة المعاينة قبل الحفظ.'
+          ? 'تم حفظ القصوص المؤكدة، وتحتاج بعض المناطق إلى مراجعة.'
           : 'اكتمل القص والتصنيف بثقة مناسبة.',
       cropConfidence: cropOutput.confidence,
       detectedDocumentCount: cropOutput.detectedDocumentCount,
       cropReviewReason: reviewReason,
+      manualReviewRegions: cropOutput.reviewRegions,
     );
   }
 

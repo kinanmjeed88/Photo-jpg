@@ -90,7 +90,7 @@ void main() {
   );
 
   test(
-    'low crop confidence requires manual fallback independently of type confidence',
+    'low-confidence region triggers partial review without discarding accepted crops',
     () {
       final result = SmartScanResult(
         source: File('/tmp/source.jpg'),
@@ -105,15 +105,39 @@ void main() {
         status: SmartScanStatus.manualReviewRequired,
         message: 'Boundary review required',
         cropConfidence: 0.54,
-        detectedDocumentCount: 1,
+        detectedDocumentCount: 2,
         cropReviewReason: 'Boundary support is insufficient',
+        manualReviewRegions: <DocumentRegion>[
+          DocumentRegion(
+            left: 10,
+            top: 20,
+            right: 210,
+            bottom: 120,
+            area: 20000,
+          ),
+        ],
       );
 
-      expect(result.requiresManualFallback, isTrue);
+      expect(result.requiresManualFallback, isFalse);
+      expect(result.requiresCropReview, isTrue);
+      expect(result.manualReviewRegions, hasLength(1));
       expect(result.classification.requiresManualReview, isFalse);
       expect(result.cropReviewReason, isNotEmpty);
     },
   );
+
+  test('an empty result still requires full manual fallback', () {
+    final result = SmartScanResult(
+      source: File('/tmp/source.jpg'),
+      files: const <File>[],
+      classification: DocumentClassification.unknown,
+      status: SmartScanStatus.manualReviewRequired,
+      message: 'No safe crop',
+    );
+
+    expect(result.requiresManualFallback, isTrue);
+    expect(result.requiresCropReview, isFalse);
+  });
 
   test(
     'A successful high-confidence crop does not require manual fallback',

@@ -156,17 +156,14 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
       final inputs = <DocumentInput>[];
       final manualFallbackSources = <File>[];
+      final partialReviewSources = <File, List<DocumentRegion>>{};
       var requiresClassificationReview = false;
       var requiresCropReview = false;
       for (final sourceFile in sourceFiles) {
         final result = smartResult.results[sourceFile];
-        if (result == null ||
-            result.files.isEmpty ||
-            result.requiresManualFallback) {
-          if (!smartResult.wasCancelled) {
-            manualFallbackSources.add(sourceFile);
-          }
-          requiresCropReview |= result?.requiresManualFallback ?? false;
+        if (result == null || result.files.isEmpty) {
+          if (!smartResult.wasCancelled) manualFallbackSources.add(sourceFile);
+          requiresCropReview |= result?.requiresManualFallback ?? true;
           continue;
         }
         requiresClassificationReview |=
@@ -180,9 +177,21 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
             ),
           );
         }
+        if (result.requiresCropReview && !smartResult.wasCancelled) {
+          partialReviewSources[sourceFile] = result.manualReviewRegions;
+          requiresCropReview = true;
+        }
       }
       if (manualFallbackSources.isNotEmpty) {
         inputs.addAll(await _manuallyCropSources(manualFallbackSources));
+      }
+      if (partialReviewSources.isNotEmpty) {
+        inputs.addAll(
+          await _manuallyCropSources(
+            partialReviewSources.keys.toList(growable: false),
+            suggestedRegions: partialReviewSources,
+          ),
+        );
       }
       await _placeInputs(inputs);
       if (!mounted) return;
@@ -199,17 +208,27 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
   }
 
   Future<List<DocumentInput>> _manuallyCropSources(
-    List<File> sourceFiles,
-  ) async {
+    List<File> sourceFiles, {
+    Map<File, List<DocumentRegion>> suggestedRegions =
+        const <File, List<DocumentRegion>>{},
+  }) async {
     final inputs = <DocumentInput>[];
     for (final sourceFile in sourceFiles) {
       if (!mounted) break;
       final result = await Navigator.of(context).push<List<File>>(
         MaterialPageRoute<List<File>>(
-          builder: (context) => MultiCropScreen(imageFile: sourceFile),
+          builder: (context) => MultiCropScreen(
+            imageFile: sourceFile,
+            suggestedRegions:
+                suggestedRegions[sourceFile] ?? const <DocumentRegion>[],
+          ),
         ),
       );
-      final files = result ?? <File>[sourceFile];
+      final files =
+          result ??
+          (suggestedRegions.containsKey(sourceFile)
+              ? const <File>[]
+              : <File>[sourceFile]);
       inputs.addAll(
         files.map(
           (file) =>

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:opencv_dart/opencv_dart.dart' as cv;
 import 'dart:math' as math;
 
+import '../services/scanner_service.dart';
 import '../services/temporary_image_store.dart';
 
 class CropRect {
@@ -62,8 +63,13 @@ List<File> _processMultiCrop(Map<String, dynamic> args) {
 
 class MultiCropScreen extends StatefulWidget {
   final File imageFile;
+  final List<DocumentRegion> suggestedRegions;
 
-  const MultiCropScreen({super.key, required this.imageFile});
+  const MultiCropScreen({
+    super.key,
+    required this.imageFile,
+    this.suggestedRegions = const <DocumentRegion>[],
+  });
 
   @override
   State<MultiCropScreen> createState() => _MultiCropScreenState();
@@ -87,12 +93,49 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
     final decodedImage = await decodeImageFromList(
       await widget.imageFile.readAsBytes(),
     );
+    if (!mounted) return;
     setState(() {
       _imageSize = Size(
         decodedImage.width.toDouble(),
         decodedImage.height.toDouble(),
       );
     });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _seedSuggestedRegions();
+    });
+  }
+
+  void _seedSuggestedRegions() {
+    if (_cropRects.isNotEmpty ||
+        widget.suggestedRegions.isEmpty ||
+        _imageSize == null) {
+      return;
+    }
+    final imageBox = _imageKey.currentContext?.findRenderObject() as RenderBox?;
+    if (imageBox == null ||
+        imageBox.size.width <= 0 ||
+        imageBox.size.height <= 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _seedSuggestedRegions();
+      });
+      return;
+    }
+    final scaleX = imageBox.size.width / _imageSize!.width;
+    final scaleY = imageBox.size.height / _imageSize!.height;
+    final seeded = widget.suggestedRegions
+        .take(5)
+        .map((region) {
+          return CropRect(
+            region.left * scaleX,
+            region.top * scaleY,
+            region.width * scaleX,
+            region.height * scaleY,
+          );
+        })
+        .toList(growable: false);
+    if (mounted && seeded.isNotEmpty) {
+      setState(() => _cropRects.addAll(seeded));
+    }
   }
 
   void _addCropBox() {
@@ -116,7 +159,12 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
 
   Future<void> _finishCropping() async {
     if (_cropRects.isEmpty) {
-      Navigator.pop(context, <File>[widget.imageFile]); // fallback to raw
+      Navigator.pop(
+        context,
+        widget.suggestedRegions.isEmpty
+            ? <File>[widget.imageFile]
+            : const <File>[],
+      );
       return;
     }
 
@@ -134,11 +182,19 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
       final double scaleY = _imageSize!.height / widgetSize.height;
 
       final mappedRects = _cropRects.map((rect) {
+        final left = rect.left.clamp(0.0, widgetSize.width - 1).toDouble();
+        final top = rect.top.clamp(0.0, widgetSize.height - 1).toDouble();
+        final right = (rect.left + rect.width)
+            .clamp(left + 1, widgetSize.width)
+            .toDouble();
+        final bottom = (rect.top + rect.height)
+            .clamp(top + 1, widgetSize.height)
+            .toDouble();
         return {
-          'left': rect.left * scaleX,
-          'top': rect.top * scaleY,
-          'width': rect.width * scaleX,
-          'height': rect.height * scaleY,
+          'left': left * scaleX,
+          'top': top * scaleY,
+          'width': (right - left) * scaleX,
+          'height': (bottom - top) * scaleY,
         };
       }).toList();
 
@@ -160,7 +216,9 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
       if (mounted) {
         Navigator.pop(
           context,
-          croppedFiles.isEmpty ? [widget.imageFile] : croppedFiles,
+          croppedFiles.isEmpty && widget.suggestedRegions.isEmpty
+              ? <File>[widget.imageFile]
+              : croppedFiles,
         );
       }
     } catch (_) {
@@ -194,7 +252,9 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
                 Padding(
                   padding: const EdgeInsets.all(8.0),
                   child: Text(
-                    'حدد إطارات حول المستندات. يمكنك إضافة حتى 5 إطارات.',
+                    widget.suggestedRegions.isEmpty
+                        ? 'حدد إطارات حول المستندات. يمكنك إضافة حتى 5 إطارات.'
+                        : 'تم تحديد المناطق غير المؤكدة تلقائياً. راجعها ثم اضغط تأكيد.',
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                 ),
