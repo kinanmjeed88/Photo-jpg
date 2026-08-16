@@ -76,6 +76,9 @@ class SmartScanResult {
     required this.classification,
     required this.status,
     required this.message,
+    this.cropConfidence = 0,
+    this.detectedDocumentCount = 0,
+    this.cropReviewReason = '',
   });
 
   final File source;
@@ -84,10 +87,31 @@ class SmartScanResult {
   final SmartScanStatus status;
   final String message;
 
+  /// Confidence of the document boundary, independent from OCR/type
+  /// confidence. A correctly classified image can still have a bad crop.
+  final double cropConfidence;
+  final int detectedDocumentCount;
+  final String cropReviewReason;
+
   bool get requiresManualFallback =>
       status == SmartScanStatus.manualReviewRequired ||
       status == SmartScanStatus.failed ||
-      classification.requiresManualReview;
+      classification.requiresManualReview ||
+      (cropConfidence > 0 && cropConfidence < 0.65);
+}
+
+class _SmartCropOutput {
+  const _SmartCropOutput({
+    required this.paths,
+    required this.confidence,
+    required this.detectedDocumentCount,
+    required this.reviewReason,
+  });
+
+  final List<String> paths;
+  final double confidence;
+  final int detectedDocumentCount;
+  final String reviewReason;
 }
 
 class SmartScanBatchResult {
@@ -196,7 +220,10 @@ _DocumentDetectionProfile _detectionProfileFor(DocumentType type) {
         type: DocumentType.allDocuments,
         minimumLongToShortRatio: 1.15,
         maximumLongToShortRatio: 2.05,
-        minimumAreaRatio: 0.008,
+        // Very small contours are usually portraits, seals, logos, or text
+        // panels. A real card in the supported multi-document capture layout
+        // must occupy a meaningful portion of the frame.
+        minimumAreaRatio: 0.05,
         // A contour covering most of the light capture sheet is a background
         // boundary, not one of the four cards placed on it. A4 has its own
         // explicit passthrough mode and does not use this profile.
@@ -235,8 +262,10 @@ _DocumentDetectionProfile _detectionProfileFor(DocumentType type) {
         type: DocumentType.housingCard,
         minimumLongToShortRatio: 1.15,
         maximumLongToShortRatio: 2.05,
-        minimumAreaRatio: 0.008,
-        maximumAreaRatio: 0.65,
+        // The expanded stamp box can legitimately be larger than the generic
+        // geometric-card ceiling, especially in a close-up single-card photo.
+        minimumAreaRatio: 0.01,
+        maximumAreaRatio: 0.95,
         requiresGreenTint: true,
       );
     case DocumentType.rationCard:
@@ -283,6 +312,7 @@ class _DocumentCandidate {
     required this.top,
     required this.right,
     required this.bottom,
+    this.confidence = 0,
   });
 
   final List<cv.Point> points;
@@ -293,6 +323,11 @@ class _DocumentCandidate {
   final int top;
   final int right;
   final int bottom;
+
+  /// Geometry-only confidence. It is intentionally separate from OCR/type
+  /// confidence because a correctly classified image can still have a bad
+  /// crop boundary.
+  final double confidence;
 
   double get centerX => (left + right) / 2;
   double get centerY => (top + bottom) / 2;
@@ -333,6 +368,24 @@ double _polygonArea(List<cv.Point> points) {
     total += (current.x * next.y) - (next.x * current.y);
   }
   return total.abs() / 2;
+}
+
+double _geometryConfidence({
+  required double rectangularity,
+  required double width,
+  required double height,
+  required _DocumentDetectionProfile profile,
+}) {
+  final ratio = math.max(width, height) / math.max(1, math.min(width, height));
+  final ratioCenter =
+      (profile.minimumLongToShortRatio + profile.maximumLongToShortRatio) / 2;
+  final ratioHalfRange =
+      (profile.maximumLongToShortRatio - profile.minimumLongToShortRatio) / 2;
+  final ratioScore = ratioHalfRange <= 0
+      ? 0.0
+      : (1 - ((ratio - ratioCenter).abs() / ratioHalfRange)).clamp(0.0, 1.0);
+  final shapeScore = ((rectangularity - 0.72) / 0.28).clamp(0.0, 1.0);
+  return (shapeScore * 0.65) + (ratioScore * 0.35);
 }
 
 _DocumentCandidate? _candidateFromContour(
@@ -393,6 +446,12 @@ _DocumentCandidate? _candidateFromContour(
       top: vertical.reduce(math.min),
       right: horizontal.reduce(math.max),
       bottom: vertical.reduce(math.max),
+      confidence: _geometryConfidence(
+        rectangularity: rectangularity,
+        width: width,
+        height: height,
+        profile: profile,
+      ),
     );
   } finally {
     approximation?.dispose();
@@ -479,6 +538,12 @@ _DocumentCandidate? _axisAlignedCandidateFromContour(
       top: top,
       right: right,
       bottom: bottom,
+      confidence: _geometryConfidence(
+        rectangularity: fillRatio,
+        width: bounds.width.toDouble(),
+        height: bounds.height.toDouble(),
+        profile: profile,
+      ),
     );
   } finally {
     bounds.dispose();
@@ -525,6 +590,53 @@ bool _isDuplicateCandidate(
   _DocumentCandidate candidate,
   _DocumentCandidate accepted,
 ) => _isDuplicateRegion(candidate.region, accepted.region);
+
+bool _isLikelyDocumentCandidate({
+  required cv.Mat source,
+  required _DocumentCandidate candidate,
+  required _DocumentDetectionProfile profile,
+}) {
+  final imageArea = (source.rows * source.cols).toDouble();
+  if (imageArea <= 0) return false;
+  final areaRatio = candidate.area / imageArea;
+
+  if (profile.type == DocumentType.allDocuments) {
+    // Reject small internal objects that previously became face/logo crops.
+    if (areaRatio < profile.minimumAreaRatio) return false;
+
+    // Use a proportional frame margin. Resized images rarely land exactly on
+    // the last pixel, so a one-pixel test misses large background contours.
+    final frameMarginX = math.max(2, (source.cols * 0.03).round());
+    final frameMarginY = math.max(2, (source.rows * 0.03).round());
+    final touchesLeft = candidate.left <= frameMarginX;
+    final touchesTop = candidate.top <= frameMarginY;
+    final touchesRight = candidate.right >= source.cols - frameMarginX;
+    final touchesBottom = candidate.bottom >= source.rows - frameMarginY;
+    final touchedEdges = <bool>[
+      touchesLeft,
+      touchesTop,
+      touchesRight,
+      touchesBottom,
+    ].where((value) => value).length;
+
+    // A large contour touching multiple frame edges is normally the capture
+    // sheet/background, not a credential. A4 bypasses this entire profile.
+    // In multi-document mode a large contour touching two or more frame
+    // edges is a sheet/background proposal, never an individual credential.
+    // Specialist housing candidates are inserted separately and do not pass
+    // through this generic geometric filter.
+    if (areaRatio > 0.30 && touchedEdges >= 2) return false;
+    if (candidate.confidence < 0.58) return false;
+  }
+
+  if (profile.type == DocumentType.passport) {
+    // A passport page should not be accepted as a tiny inner rectangle. The
+    // full-frame fallback is considered later when only such candidates exist.
+    if (areaRatio < 0.12) return false;
+  }
+
+  return true;
+}
 
 /// Expands a rectangle outward by [fraction] of its own size, clamped to the
 /// image bounds and never exceeding [maxFraction] in a single direction. This
@@ -600,10 +712,18 @@ Future<List<_DocumentCandidate>> _housingCardStampCandidates({
   final candidates = <_DocumentCandidate>[];
   try {
     hsv = cv.cvtColor(source, cv.COLOR_BGR2HSV);
-    sealMask = cv.inRangebyScalar(hsv, cv.Scalar(35, 30, 30), cv.Scalar(80, 255, 255));
+    sealMask = cv.inRangebyScalar(
+      hsv,
+      cv.Scalar(35, 30, 30),
+      cv.Scalar(80, 255, 255),
+    );
     sealKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (51, 51));
     sealClosed = cv.morphologyEx(sealMask, cv.MORPH_CLOSE, sealKernel);
-    final result = cv.findContours(sealClosed, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    final result = cv.findContours(
+      sealClosed,
+      cv.RETR_EXTERNAL,
+      cv.CHAIN_APPROX_SIMPLE,
+    );
     contours = result.$1;
     hierarchy = result.$2;
     var inspected = 0;
@@ -611,8 +731,14 @@ Future<List<_DocumentCandidate>> _housingCardStampCandidates({
       if (isCancelled()) return candidates;
       if (inspected++ % 24 == 0) await Future<void>.delayed(Duration.zero);
       final contourArea = cv.contourArea(contour);
-      if (contourArea < imageArea * 0.04) continue;
-      if (_contourSolidity(contour) < 0.55) continue;
+      // A housing page may occupy a small fraction of a multi-page frame;
+      // the seal is the anchor, not the final document area.
+      if (contourArea < imageArea * 0.008) continue;
+      // Low-contrast scans can fragment a valid seal and reduce solidity.
+      // The area, aspect-ratio, boundary, and content checks below remain
+      // active, so lowering this anchor-only gate does not accept the blob as
+      // a document by itself.
+      if (_contourSolidity(contour) < 0.35) continue;
       final bounds = cv.boundingRect(contour);
       try {
         final (bx, by, bw, bh) = _expandRect(
@@ -627,10 +753,12 @@ Future<List<_DocumentCandidate>> _housingCardStampCandidates({
         final width = bw.toDouble();
         final height = bh.toDouble();
         if (width < 64 || height < 64) continue;
-        if (!profile.acceptsAspectRatio(width, height)) continue;
+        final anchorRatio = math.max(width, height) / math.min(width, height);
+        if (anchorRatio < 1.0 || anchorRatio > 2.4) continue;
         final boundingArea = width * height;
-        if (!profile.acceptsArea(boundingArea, imageArea)) continue;
-        candidates.add(_DocumentCandidate(
+        final areaRatio = boundingArea / imageArea;
+        if (areaRatio < 0.01 || areaRatio > 0.98) continue;
+        final anchor = _DocumentCandidate(
           points: <cv.Point>[
             cv.Point(bx.toInt(), by.toInt()),
             cv.Point(bx.toInt() + width.toInt(), by.toInt()),
@@ -644,7 +772,33 @@ Future<List<_DocumentCandidate>> _housingCardStampCandidates({
           top: by.toInt(),
           right: bx.toInt() + width.toInt(),
           bottom: by.toInt() + height.toInt(),
-        ));
+          confidence: 0.9,
+        );
+        // When one large green anchor occupies the centre of the frame, the
+        // page itself is usually the complete capture and its outer border is
+        // intentionally low contrast. In that case, expanding the HSV blob
+        // is unsafe because the blob also contains green printed areas. Use a
+        // conservative full-frame candidate rather than cutting into the page.
+        final singlePageFallback = _fullFrameHousingCandidate(
+          source: source,
+          anchor: anchor,
+          imageArea: imageArea,
+        );
+        if (singlePageFallback != null) {
+          candidates.add(singlePageFallback);
+          continue;
+        }
+
+        final boundaryCandidates = _housingCardBoundaryCandidates(
+          source: source,
+          anchor: anchor,
+          imageArea: imageArea,
+        );
+        if (boundaryCandidates.isNotEmpty) {
+          candidates.addAll(boundaryCandidates);
+        } else {
+          candidates.add(anchor);
+        }
       } finally {
         bounds.dispose();
       }
@@ -658,6 +812,403 @@ Future<List<_DocumentCandidate>> _housingCardStampCandidates({
     hsv?.dispose();
   }
   return candidates;
+}
+
+_DocumentCandidate? _fullFrameHousingCandidate({
+  required cv.Mat source,
+  required _DocumentCandidate anchor,
+  required double imageArea,
+}) {
+  final anchorWidthRatio = anchor.width / math.max(1, source.cols);
+  final anchorHeightRatio = anchor.height / math.max(1, source.rows);
+  if (anchorWidthRatio < 0.50 || anchorHeightRatio < 0.50) return null;
+
+  const marginFraction = 0.01;
+  final margin = (math.min(source.cols, source.rows) * marginFraction).round();
+  final left = margin;
+  final top = margin;
+  final right = math.max(left + 1, source.cols - margin);
+  final bottom = math.max(top + 1, source.rows - margin);
+  final width = right - left;
+  final height = bottom - top;
+  final area = width * height.toDouble();
+  final areaRatio = area / imageArea;
+  final ratio = math.max(width, height) / math.max(1, math.min(width, height));
+  if (areaRatio > 0.99 || ratio > 2.4) return null;
+
+  return _DocumentCandidate(
+    points: <cv.Point>[
+      cv.Point(left, top),
+      cv.Point(right, top),
+      cv.Point(right, bottom),
+      cv.Point(left, bottom),
+    ],
+    area: area,
+    width: width.toDouble(),
+    height: height.toDouble(),
+    left: left,
+    top: top,
+    right: right,
+    bottom: bottom,
+    // This is a deliberate, type-specific fallback supported by a large
+    // unique anchor. It is lower than a verified four-edge rectangle but
+    // high enough to avoid a destructive face/logo crop.
+    confidence: 0.87,
+  );
+}
+
+List<_DocumentCandidate> _housingCardBoundaryCandidates({
+  required cv.Mat source,
+  required _DocumentCandidate anchor,
+  required double imageArea,
+}) {
+  cv.Mat? gray;
+  cv.Mat? blurred;
+  cv.Mat? edges;
+  cv.Mat? kernel;
+  cv.Mat? closed;
+  cv.VecVecPoint? contours;
+  cv.VecVec4i? hierarchy;
+  try {
+    gray = cv.cvtColor(source, cv.COLOR_BGR2GRAY);
+    blurred = cv.gaussianBlur(gray, (5, 5), 0);
+    edges = cv.canny(blurred, 18, 72);
+    kernel = cv.getStructuringElement(cv.MORPH_RECT, (11, 11));
+    closed = cv.morphologyEx(edges, cv.MORPH_CLOSE, kernel);
+    final result = cv.findContours(
+      closed,
+      cv.RETR_LIST,
+      cv.CHAIN_APPROX_SIMPLE,
+    );
+    contours = result.$1;
+    hierarchy = result.$2;
+
+    const boundaryProfile = _DocumentDetectionProfile(
+      type: DocumentType.housingCard,
+      minimumLongToShortRatio: 1.0,
+      maximumLongToShortRatio: 2.4,
+      minimumAreaRatio: 0.02,
+      maximumAreaRatio: 0.98,
+    );
+    final linePage = _housingPageCandidateFromLines(
+      edgeImage: closed,
+      anchor: anchor,
+      imageArea: imageArea,
+    );
+    if (linePage != null && linePage.confidence >= 0.79) {
+      return <_DocumentCandidate>[linePage];
+    }
+
+    final anchorPage = _housingPageCandidateAroundAnchor(
+      edgeImage: closed,
+      anchor: anchor,
+      imageArea: imageArea,
+    );
+    // A weak edge pattern often describes the camera frame or a plastic sleeve,
+    // not the document. Keep the grid proposal only when all four borders
+    // provide enough evidence; otherwise continue with the contour and anchor
+    // fallbacks below.
+    if (anchorPage != null && anchorPage.confidence >= 0.79) {
+      return <_DocumentCandidate>[anchorPage];
+    }
+
+    final anchorWidth = math.max(1, anchor.width);
+    final anchorHeight = math.max(1, anchor.height);
+    final containing = <_DocumentCandidate>[];
+    for (final contour in contours) {
+      final candidate = _candidateFromContour(
+        contour,
+        imageArea: imageArea,
+        profile: boundaryProfile,
+        allowAxisAlignedFallback: true,
+      );
+      if (candidate == null) continue;
+      final containsAnchor =
+          candidate.left <= anchor.centerX &&
+          candidate.right >= anchor.centerX &&
+          candidate.top <= anchor.centerY &&
+          candidate.bottom >= anchor.centerY;
+      if (!containsAnchor ||
+          candidate.width < anchorWidth * 1.20 ||
+          candidate.height < anchorHeight * 1.20 ||
+          candidate.area < anchor.area * 1.35) {
+        continue;
+      }
+      containing.add(candidate);
+    }
+    containing.sort((first, second) => first.area.compareTo(second.area));
+    return containing.take(2).toList(growable: false);
+  } finally {
+    hierarchy?.dispose();
+    contours?.dispose();
+    closed?.dispose();
+    kernel?.dispose();
+    edges?.dispose();
+    blurred?.dispose();
+    gray?.dispose();
+  }
+}
+
+_DocumentCandidate? _housingPageCandidateFromLines({
+  required cv.Mat edgeImage,
+  required _DocumentCandidate anchor,
+  required double imageArea,
+}) {
+  cv.Mat? lines;
+  try {
+    final minimumDimension = math
+        .min(edgeImage.cols, edgeImage.rows)
+        .toDouble();
+    lines = cv.HoughLinesP(
+      edgeImage,
+      1,
+      cv.CV_PI / 180,
+      math.max(24, (minimumDimension * 0.035).round()),
+      minLineLength: minimumDimension * 0.22,
+      maxLineGap: minimumDimension * 0.04,
+    );
+    final rows = lines.toList();
+    final horizontal = <(double, double, double)>[];
+    final vertical = <(double, double, double)>[];
+    final angleTolerance = math.max(8.0, minimumDimension * 0.012);
+    for (final row in rows) {
+      if (row.length < 4) continue;
+      final x1 = row[0].toDouble();
+      final y1 = row[1].toDouble();
+      final x2 = row[2].toDouble();
+      final y2 = row[3].toDouble();
+      final length = math.sqrt(math.pow(x2 - x1, 2) + math.pow(y2 - y1, 2));
+      if (length < minimumDimension * 0.18) continue;
+      final dx = (x2 - x1).abs();
+      final dy = (y2 - y1).abs();
+      if (dy <= angleTolerance &&
+          math.max(x1, x2) >= anchor.left &&
+          math.min(x1, x2) <= anchor.right) {
+        horizontal.add(((y1 + y2) / 2, length, math.min(x1, x2)));
+      } else if (dx <= angleTolerance &&
+          math.max(y1, y2) >= anchor.top &&
+          math.min(y1, y2) <= anchor.bottom) {
+        vertical.add(((x1 + x2) / 2, length, math.min(y1, y2)));
+      }
+    }
+    if (horizontal.length < 2 || vertical.length < 2) {
+      return null;
+    }
+
+    final topLines = horizontal
+        .where((line) => line.$1 < anchor.centerY)
+        .toList();
+    final bottomLines = horizontal
+        .where((line) => line.$1 > anchor.centerY)
+        .toList();
+    final leftLines = vertical
+        .where((line) => line.$1 < anchor.centerX)
+        .toList();
+    final rightLines = vertical
+        .where((line) => line.$1 > anchor.centerX)
+        .toList();
+    if (topLines.isEmpty ||
+        bottomLines.isEmpty ||
+        leftLines.isEmpty ||
+        rightLines.isEmpty) {
+      return null;
+    }
+
+    // Select the strongest line on each side, while requiring a meaningful
+    // distance from the anchor so inner text strokes cannot form a rectangle.
+    double chooseSide(
+      List<(double, double, double)> values,
+      double center,
+      bool isBefore,
+    ) {
+      values.sort((a, b) => b.$2.compareTo(a.$2));
+      final eligible = values.where((line) {
+        final distance = (line.$1 - center).abs();
+        return distance >= math.min(anchor.width, anchor.height) * 0.35 &&
+            distance <= math.max(anchor.width, anchor.height) * 3.2;
+      }).toList();
+      final source = eligible.isNotEmpty ? eligible : values;
+      source.sort(
+        (a, b) => isBefore ? a.$1.compareTo(b.$1) : b.$1.compareTo(a.$1),
+      );
+      return source.first.$1;
+    }
+
+    final top = chooseSide(topLines, anchor.centerY, true);
+    final bottom = chooseSide(bottomLines, anchor.centerY, false);
+    final left = chooseSide(leftLines, anchor.centerX, true);
+    final right = chooseSide(rightLines, anchor.centerX, false);
+    final width = right - left;
+    final height = bottom - top;
+    if (width < anchor.width * 1.25 || height < anchor.height * 1.25) {
+      return null;
+    }
+    if (width <= 0 || height <= 0) {
+      return null;
+    }
+    final ratio = math.max(width, height) / math.min(width, height);
+    if (ratio < 1.0 || ratio > 2.4) {
+      return null;
+    }
+    final area = width * height;
+    final areaRatio = area / imageArea;
+    // A Hough rectangle covering most of a multi-document frame is usually
+    // a shared background edge or two adjacent pages, not one housing card.
+    // Large single-page captures are handled by the type-specific full-frame
+    // fallback before this method is called.
+    if (areaRatio < 0.02 || areaRatio > 0.45) return null;
+
+    final leftInt = _clampInt(left.round(), 0, edgeImage.cols - 1);
+    final topInt = _clampInt(top.round(), 0, edgeImage.rows - 1);
+    final rightInt = _clampInt(right.round(), leftInt + 1, edgeImage.cols);
+    final bottomInt = _clampInt(bottom.round(), topInt + 1, edgeImage.rows);
+    final candidateWidth = rightInt - leftInt;
+    final candidateHeight = bottomInt - topInt;
+    final sizeScore = (areaRatio / 0.28).clamp(0.0, 1.0).toDouble();
+    final ratioScore = (1 - ((ratio - 1.55).abs() / 0.9))
+        .clamp(0.0, 1.0)
+        .toDouble();
+    final confidence = (0.58 + sizeScore * 0.20 + ratioScore * 0.17)
+        .clamp(0.0, 0.95)
+        .toDouble();
+    return _DocumentCandidate(
+      points: <cv.Point>[
+        cv.Point(leftInt, topInt),
+        cv.Point(rightInt, topInt),
+        cv.Point(rightInt, bottomInt),
+        cv.Point(leftInt, bottomInt),
+      ],
+      area: candidateWidth * candidateHeight.toDouble(),
+      width: candidateWidth.toDouble(),
+      height: candidateHeight.toDouble(),
+      left: leftInt,
+      top: topInt,
+      right: rightInt,
+      bottom: bottomInt,
+      confidence: confidence,
+    );
+  } finally {
+    lines?.dispose();
+  }
+}
+
+_DocumentCandidate? _housingPageCandidateAroundAnchor({
+  required cv.Mat edgeImage,
+  required _DocumentCandidate anchor,
+  required double imageArea,
+}) {
+  final centerX = anchor.centerX;
+  final centerY = anchor.centerY;
+  final anchorWidth = math.max(1.0, anchor.width);
+  final anchorHeight = math.max(1.0, anchor.height);
+  const widthFactors = <double>[1.3, 1.5, 1.7, 2.0, 2.3, 2.6, 3.0];
+  const heightFactors = <double>[1.15, 1.3, 1.5, 1.7, 1.9, 2.15, 2.4];
+  _DocumentCandidate? best;
+  var bestScore = 0.0;
+
+  double maskDensity(cv.Rect rect) {
+    cv.Mat? roi;
+    try {
+      roi = edgeImage.region(rect);
+      final area = math.max(1, rect.width * rect.height);
+      return cv.countNonZero(roi) / area;
+    } finally {
+      roi?.dispose();
+    }
+  }
+
+  for (final widthFactor in widthFactors) {
+    for (final heightFactor in heightFactors) {
+      final width = (anchorWidth * widthFactor).round();
+      final height = (anchorHeight * heightFactor).round();
+      if (width < 96 || height < 96) continue;
+      var left = (centerX - width / 2).round();
+      var top = (centerY - height / 2).round();
+      left = _clampInt(left, 0, edgeImage.cols - 1);
+      top = _clampInt(top, 0, edgeImage.rows - 1);
+      final right = _clampInt(left + width, left + 1, edgeImage.cols);
+      final bottom = _clampInt(top + height, top + 1, edgeImage.rows);
+      final actualWidth = right - left;
+      final actualHeight = bottom - top;
+      final area = actualWidth * actualHeight.toDouble();
+      final areaRatio = area / imageArea;
+      if (areaRatio < 0.02 || areaRatio > 0.96) continue;
+      final ratio =
+          math.max(actualWidth, actualHeight) /
+          math.max(1, math.min(actualWidth, actualHeight));
+      if (ratio < 1.0 || ratio > 2.4) continue;
+
+      final thickness = math.max(3, math.min(actualWidth, actualHeight) ~/ 60);
+      final topDensity = maskDensity(
+        cv.Rect(left, top, actualWidth, math.min(thickness, actualHeight)),
+      );
+      final bottomDensity = maskDensity(
+        cv.Rect(
+          left,
+          math.max(top, bottom - thickness),
+          actualWidth,
+          math.min(thickness, actualHeight),
+        ),
+      );
+      final leftDensity = maskDensity(
+        cv.Rect(left, top, math.min(thickness, actualWidth), actualHeight),
+      );
+      final rightDensity = maskDensity(
+        cv.Rect(
+          math.max(left, right - thickness),
+          top,
+          math.min(thickness, actualWidth),
+          actualHeight,
+        ),
+      );
+      final edgeSupport = math.min(
+        math.min(topDensity, bottomDensity),
+        math.min(leftDensity, rightDensity),
+      );
+      if (edgeSupport < 0.006) continue;
+
+      final innerLeft = _clampInt(left + thickness, left, right - 1);
+      final innerTop = _clampInt(top + thickness, top, bottom - 1);
+      final innerRight = _clampInt(right - thickness, innerLeft + 1, right);
+      final innerBottom = _clampInt(bottom - thickness, innerTop + 1, bottom);
+      final interiorDensity = maskDensity(
+        cv.Rect(
+          innerLeft,
+          innerTop,
+          math.max(1, innerRight - innerLeft),
+          math.max(1, innerBottom - innerTop),
+        ),
+      );
+      final ratioScore = (1 - ((ratio - 1.55).abs() / 0.9))
+          .clamp(0.0, 1.0)
+          .toDouble();
+      final borderScore = (edgeSupport / 0.12).clamp(0.0, 1.0).toDouble();
+      final contentScore = (1 - ((interiorDensity - 0.12).abs() / 0.20))
+          .clamp(0.0, 1.0)
+          .toDouble();
+      final score =
+          borderScore * 0.60 + ratioScore * 0.25 + contentScore * 0.15;
+      if (score <= bestScore) continue;
+      bestScore = score;
+      best = _DocumentCandidate(
+        points: <cv.Point>[
+          cv.Point(left, top),
+          cv.Point(right, top),
+          cv.Point(right, bottom),
+          cv.Point(left, bottom),
+        ],
+        area: area,
+        width: actualWidth.toDouble(),
+        height: actualHeight.toDouble(),
+        left: left,
+        top: top,
+        right: right,
+        bottom: bottom,
+        confidence: (0.60 + score * 0.35).clamp(0.0, 0.95).toDouble(),
+      );
+    }
+  }
+  return best;
 }
 
 /// Full-frame passport fallback.
@@ -703,7 +1254,7 @@ _DocumentCandidate? _fullFrameCandidateForPassport({
   );
 }
 
-Future<List<String>> _detectAndCropInIsolate(
+Future<_SmartCropOutput> _detectAndCropInIsolate(
   Map<String, dynamic> args, {
   bool Function()? isCancelled,
 }) async {
@@ -712,9 +1263,21 @@ Future<List<String>> _detectAndCropInIsolate(
   final jobId = args['jobId'] as String? ?? 'legacy';
   final requestedType = _documentTypeFromIndex(args['documentTypeIndex']);
   final profile = _detectionProfileFor(requestedType);
-  if (isCancelled?.call() ?? false) return <String>[];
+  if (isCancelled?.call() ?? false) {
+    return const _SmartCropOutput(
+      paths: <String>[],
+      confidence: 0,
+      detectedDocumentCount: 0,
+      reviewReason: 'ألغيت المعالجة قبل بدء الكشف.',
+    );
+  }
   if (requestedType == DocumentType.a4Document) {
-    return <String>[imagePath];
+    return _SmartCropOutput(
+      paths: <String>[imagePath],
+      confidence: 1,
+      detectedDocumentCount: 1,
+      reviewReason: '',
+    );
   }
   cv.Mat? source;
   cv.Mat? gray;
@@ -762,7 +1325,12 @@ Future<List<String>> _detectAndCropInIsolate(
           allowAxisAlignedFallback: allowAxisAlignedFallback,
         );
         if (candidate == null ||
-            !_matchesVisualProfile(image, candidate, profile) ||
+            !_isLikelyDocumentCandidate(
+              source: image,
+              candidate: candidate,
+              profile: profile,
+            ) ||
+            !_matchesVisualProfile(source!, candidate, profile) ||
             candidates.any(
               (accepted) => _isDuplicateCandidate(candidate, accepted),
             )) {
@@ -779,7 +1347,14 @@ Future<List<String>> _detectAndCropInIsolate(
 
   try {
     source = cv.imdecode(File(imagePath).readAsBytesSync(), cv.IMREAD_COLOR);
-    if (source.isEmpty) return results;
+    if (source.isEmpty) {
+      return const _SmartCropOutput(
+        paths: <String>[],
+        confidence: 0,
+        detectedDocumentCount: 0,
+        reviewReason: 'تعذر قراءة الصورة الأصلية.',
+      );
+    }
 
     // The isolated vision pass works on a bounded image for predictable
     // latency. Candidate points remain in the same coordinate space used for
@@ -802,74 +1377,104 @@ Future<List<String>> _detectAndCropInIsolate(
     // Their glossy plastic sleeves suppress every outer edge, so the round
     // green ministry seal is used as the reliable anchor and expanded into
     // the full card extent instead of proposing geometric quadrilaterals.
-    if (requestedType == DocumentType.housingCard) {
+    // In allDocuments mode the same specialist path is merged with the
+    // geometric card proposals, so the green housing card is not lost.
+    if (requestedType == DocumentType.housingCard ||
+        requestedType == DocumentType.allDocuments) {
+      final housingProfile = _detectionProfileFor(DocumentType.housingCard);
       final stampCandidates = await _housingCardStampCandidates(
         source: source,
         imageArea: (source.rows * source.cols).toDouble(),
-        profile: profile,
+        profile: housingProfile,
         isCancelled: isCancelled ?? (() => false),
       );
-      if (stampCandidates.isEmpty) return results;
-      candidates.addAll(stampCandidates);
-    } else {
-    // Multiple complementary proposal masks are required for a sheet that
-    // contains several cards: some card borders are sharp while others have
-    // low contrast against the sheet. Every proposal still has to pass the
-    // strict quadrilateral validation in _candidateFromContour.
-    edges = cv.canny(blurred, 35, 110);
-    edgeClosed = cv.morphologyEx(edges, cv.MORPH_CLOSE, kernel);
-    sensitiveEdges = cv.canny(blurred, 15, 60);
-    sensitiveEdgeClosed = cv.morphologyEx(
-      sensitiveEdges,
-      cv.MORPH_CLOSE,
-      broadKernel,
-    );
-    threshold = cv.adaptiveThreshold(
-      gray,
-      255,
-      cv.ADAPTIVE_THRESH_GAUSSIAN_C,
-      cv.THRESH_BINARY_INV,
-      31,
-      8,
-    );
-    thresholdClosed = cv.morphologyEx(threshold, cv.MORPH_CLOSE, kernel);
-    sensitiveThreshold = cv.adaptiveThreshold(
-      gray,
-      255,
-      cv.ADAPTIVE_THRESH_GAUSSIAN_C,
-      cv.THRESH_BINARY_INV,
-      15,
-      3,
-    );
-    sensitiveThresholdClosed = cv.morphologyEx(
-      sensitiveThreshold,
-      cv.MORPH_CLOSE,
-      broadKernel,
-    );
+      if (isCancelled?.call() ?? false) {
+        return const _SmartCropOutput(
+          paths: <String>[],
+          confidence: 0,
+          detectedDocumentCount: 0,
+          reviewReason: 'ألغيت المعالجة أثناء كشف بطاقة السكن.',
+        );
+      }
+      if (requestedType == DocumentType.housingCard) {
+        if (stampCandidates.isEmpty) {
+          return const _SmartCropOutput(
+            paths: <String>[],
+            confidence: 0,
+            detectedDocumentCount: 0,
+            reviewReason: 'لم يُعثر على مرساة موثوقة لبطاقة السكن.',
+          );
+        }
+        candidates.addAll(stampCandidates);
+      } else {
+        candidates.addAll(stampCandidates);
+      }
+    }
+    if (requestedType != DocumentType.housingCard) {
+      // Multiple complementary proposal masks are required for a sheet that
+      // contains several cards: some card borders are sharp while others have
+      // low contrast against the sheet. Every proposal still has to pass the
+      // strict quadrilateral validation in _candidateFromContour.
+      edges = cv.canny(blurred, 35, 110);
+      edgeClosed = cv.morphologyEx(edges, cv.MORPH_CLOSE, kernel);
+      sensitiveEdges = cv.canny(blurred, 15, 60);
+      sensitiveEdgeClosed = cv.morphologyEx(
+        sensitiveEdges,
+        cv.MORPH_CLOSE,
+        broadKernel,
+      );
+      threshold = cv.adaptiveThreshold(
+        gray,
+        255,
+        cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv.THRESH_BINARY_INV,
+        31,
+        8,
+      );
+      thresholdClosed = cv.morphologyEx(threshold, cv.MORPH_CLOSE, kernel);
+      sensitiveThreshold = cv.adaptiveThreshold(
+        gray,
+        255,
+        cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv.THRESH_BINARY_INV,
+        15,
+        3,
+      );
+      sensitiveThresholdClosed = cv.morphologyEx(
+        sensitiveThreshold,
+        cv.MORPH_CLOSE,
+        broadKernel,
+      );
 
-    // This mask separates darker/coloured documents from a light sheet.
-    // It is deliberately evaluated with RETR_EXTERNAL so that a credential's
-    // visible outer extent can be proposed without treating its portrait or
-    // text blocks as separate documents.
-    foreground = cv.threshold(gray, 160, 255, cv.THRESH_BINARY_INV).$2;
-    foregroundClosed = cv.morphologyEx(
-      foreground,
-      cv.MORPH_CLOSE,
-      foregroundKernel,
-    );
-    final imageArea = (source.rows * source.cols).toDouble();
+      // This mask separates darker/coloured documents from a light sheet.
+      // It is deliberately evaluated with RETR_EXTERNAL so that a credential's
+      // visible outer extent can be proposed without treating its portrait or
+      // text blocks as separate documents.
+      foreground = cv.threshold(gray, 160, 255, cv.THRESH_BINARY_INV).$2;
+      foregroundClosed = cv.morphologyEx(
+        foreground,
+        cv.MORPH_CLOSE,
+        foregroundKernel,
+      );
+      final imageArea = (source.rows * source.cols).toDouble();
 
-    if (!await collectCandidates(edgeClosed, imageArea) ||
-        !await collectCandidates(sensitiveEdgeClosed, imageArea) ||
-        !await collectCandidates(thresholdClosed, imageArea) ||
-        !await collectCandidates(sensitiveThresholdClosed, imageArea) ||
-        !await collectCandidates(
-          foregroundClosed,
-          imageArea,
-          retrievalMode: cv.RETR_EXTERNAL,
-          allowAxisAlignedFallback: true,
-        )) {
-      return results;
+      if (!await collectCandidates(edgeClosed, imageArea) ||
+          !await collectCandidates(sensitiveEdgeClosed, imageArea) ||
+          !await collectCandidates(thresholdClosed, imageArea) ||
+          !await collectCandidates(sensitiveThresholdClosed, imageArea) ||
+          !await collectCandidates(
+            foregroundClosed,
+            imageArea,
+            retrievalMode: cv.RETR_EXTERNAL,
+            allowAxisAlignedFallback: true,
+          )) {
+        return const _SmartCropOutput(
+          paths: <String>[],
+          confidence: 0,
+          detectedDocumentCount: 0,
+          reviewReason: 'لم يُعثر على حدود مستند موثوقة.',
+        );
+      }
     }
 
     // A flat passport scan with no visible outer border produces no geometric
@@ -895,7 +1500,14 @@ Future<List<String>> _detectAndCropInIsolate(
         .toList(growable: false);
 
     for (final candidate in candidates) {
-      if (isCancelled?.call() ?? false) return results;
+      if (isCancelled?.call() ?? false) {
+        return const _SmartCropOutput(
+          paths: <String>[],
+          confidence: 0,
+          detectedDocumentCount: 0,
+          reviewReason: 'ألغيت المعالجة أثناء القص.',
+        );
+      }
       cv.VecPoint? sourcePoints;
       cv.VecPoint? destinationPoints;
       cv.Mat? transform;
@@ -950,9 +1562,13 @@ Future<List<String>> _detectAndCropInIsolate(
         warped?.dispose();
       }
     }
-    }
   } catch (_) {
-    return <String>[];
+    return const _SmartCropOutput(
+      paths: <String>[],
+      confidence: 0,
+      detectedDocumentCount: 0,
+      reviewReason: 'تعذر إنشاء قص موثوق من الصورة.',
+    );
   } finally {
     source?.dispose();
     gray?.dispose();
@@ -971,7 +1587,22 @@ Future<List<String>> _detectAndCropInIsolate(
     broadKernel?.dispose();
     foregroundKernel?.dispose();
   }
-  return results;
+  var cropConfidence = candidates.isEmpty ? 0.0 : 1.0;
+  for (final candidate in candidates) {
+    if (candidate.confidence < cropConfidence) {
+      cropConfidence = candidate.confidence;
+    }
+  }
+  cropConfidence = cropConfidence.clamp(0.0, 1.0).toDouble();
+  final reviewReason = cropConfidence < 0.65
+      ? 'حدود المستند غير مؤكدة بما يكفي؛ يلزم التحقق اليدوي.'
+      : '';
+  return _SmartCropOutput(
+    paths: List<String>.unmodifiable(results),
+    confidence: cropConfidence,
+    detectedDocumentCount: results.length,
+    reviewReason: reviewReason,
+  );
 }
 
 String _preprocessForOcrInIsolate(Map<String, dynamic> args) {
@@ -1054,13 +1685,16 @@ void _smartCropWorkerEntry(Map<String, dynamic> args) async {
     'controlPort': controlPort.sendPort,
   });
   try {
-    final outputPaths = await _detectAndCropInIsolate(
+    final output = await _detectAndCropInIsolate(
       args,
       isCancelled: () => isCancelled,
     );
     resultPort.send(<String, Object?>{
       'type': isCancelled ? 'cancelled' : 'completed',
-      'outputPaths': outputPaths,
+      'outputPaths': output.paths,
+      'cropConfidence': output.confidence,
+      'detectedDocumentCount': output.detectedDocumentCount,
+      'cropReviewReason': output.reviewReason,
     });
   } catch (error) {
     resultPort.send(<String, Object?>{
@@ -1191,7 +1825,7 @@ class ScannerService {
     }
   }
 
-  Future<List<String>> _runSmartCropWorker({
+  Future<_SmartCropOutput> _runSmartCropWorker({
     required File imageFile,
     required String tempPath,
     required String jobId,
@@ -1201,7 +1835,7 @@ class ScannerService {
     if (token.isCancelled) throw const _ScanWorkerCancelled();
 
     final resultPort = ReceivePort();
-    final completed = Completer<List<String>>();
+    final completed = Completer<_SmartCropOutput>();
     Isolate? worker;
     SendPort? controlPort;
     StreamSubscription<dynamic>? subscription;
@@ -1231,7 +1865,23 @@ class ScannerService {
           final paths = List<String>.from(
             (message['outputPaths'] as List<Object?>?) ?? const <Object?>[],
           );
-          if (!completed.isCompleted) completed.complete(paths);
+          final confidence =
+              (message['cropConfidence'] as num?)?.toDouble() ??
+              (paths.isEmpty ? 0.0 : 0.65);
+          final detectedDocumentCount =
+              (message['detectedDocumentCount'] as num?)?.toInt() ??
+              paths.length;
+          final reviewReason = message['cropReviewReason'] as String? ?? '';
+          if (!completed.isCompleted) {
+            completed.complete(
+              _SmartCropOutput(
+                paths: List<String>.unmodifiable(paths),
+                confidence: confidence.clamp(0.0, 1.0).toDouble(),
+                detectedDocumentCount: detectedDocumentCount,
+                reviewReason: reviewReason,
+              ),
+            );
+          }
         case 'cancelled':
           if (!completed.isCompleted) {
             completed.completeError(const _ScanWorkerCancelled());
@@ -1324,19 +1974,33 @@ class ScannerService {
         classification: _classificationForRequestedType(requestedType),
         status: SmartScanStatus.succeeded,
         message: 'تم اعتماد الصورة كاملة كورقة A4.',
+        cropConfidence: 1,
+        detectedDocumentCount: 1,
       );
+    }
+
+    var detectionType = requestedType;
+    if (requestedType == DocumentType.allDocuments &&
+        !(cancellationToken?.isCancelled ?? false)) {
+      final preliminaryType = await _detectPassportBeforeMultiCrop(
+        imageFile,
+        cancellationToken: cancellationToken,
+      );
+      if (preliminaryType == DocumentType.passport) {
+        detectionType = DocumentType.passport;
+      }
     }
 
     await TemporaryImageStore.cleanupStale();
     final tempDirectory = await getTemporaryDirectory();
     final jobId = DateTime.now().microsecondsSinceEpoch.toString();
-    List<String> outputPaths;
+    late final _SmartCropOutput cropOutput;
     try {
-      outputPaths = await _runSmartCropWorker(
+      cropOutput = await _runSmartCropWorker(
         imageFile: imageFile,
         tempPath: tempDirectory.path,
         jobId: jobId,
-        documentType: requestedType,
+        documentType: detectionType,
         token: cancellationToken ?? ScanCancellationToken(),
       );
     } on _ScanWorkerCancelled {
@@ -1368,6 +2032,7 @@ class ScannerService {
       );
     }
 
+    final outputPaths = cropOutput.paths;
     if (cancellationToken?.isCancelled ?? false) {
       for (final outputPath in outputPaths) {
         await TemporaryImageStore.deleteIfManaged(File(outputPath));
@@ -1387,7 +2052,12 @@ class ScannerService {
         files: const <File>[],
         classification: DocumentClassification.unknown,
         status: SmartScanStatus.manualReviewRequired,
-        message: 'لم يُعثر على مستند موثوق؛ يُرجى تحديده يدوياً.',
+        message: cropOutput.reviewReason.isEmpty
+            ? 'لم يُعثر على مستند موثوق؛ يُرجى تحديده يدوياً.'
+            : cropOutput.reviewReason,
+        cropConfidence: cropOutput.confidence,
+        detectedDocumentCount: cropOutput.detectedDocumentCount,
+        cropReviewReason: cropOutput.reviewReason,
       );
     }
 
@@ -1407,7 +2077,11 @@ class ScannerService {
 
     DocumentClassification classification;
     try {
-      classification = requestedType == DocumentType.unknown
+      final shouldClassifyOutput =
+          requestedType == DocumentType.unknown ||
+          (requestedType == DocumentType.allDocuments &&
+              detectionType == DocumentType.passport);
+      classification = shouldClassifyOutput
           ? await classifyDocument(
               files.first,
               cancellationToken: cancellationToken,
@@ -1434,18 +2108,55 @@ class ScannerService {
         message: 'ألغيت المعالجة.',
       );
     }
-    final status = classification.requiresManualReview
+    final cropNeedsReview = cropOutput.confidence < 0.65;
+    final status = classification.requiresManualReview || cropNeedsReview
         ? SmartScanStatus.manualReviewRequired
         : SmartScanStatus.succeeded;
+    final reviewReason = cropNeedsReview
+        ? (cropOutput.reviewReason.isEmpty
+              ? 'حدود المستند غير مؤكدة بما يكفي؛ راجع القص قبل الحفظ.'
+              : cropOutput.reviewReason)
+        : '';
     return SmartScanResult(
       source: imageFile,
       files: files,
       classification: classification,
       status: status,
-      message: classification.requiresManualReview
-          ? 'اكتمل القص، لكن تصنيف المستند يحتاج مراجعة يدوية.'
+      message: classification.requiresManualReview || cropNeedsReview
+          ? 'اكتمل القص، لكن يجب مراجعة المعاينة قبل الحفظ.'
           : 'اكتمل القص والتصنيف بثقة مناسبة.',
+      cropConfidence: cropOutput.confidence,
+      detectedDocumentCount: cropOutput.detectedDocumentCount,
+      cropReviewReason: reviewReason,
     );
+  }
+
+  Future<DocumentType?> _detectPassportBeforeMultiCrop(
+    File imageFile, {
+    ScanCancellationToken? cancellationToken,
+  }) async {
+    if (!await imageFile.exists() ||
+        (cancellationToken?.isCancelled ?? false)) {
+      return null;
+    }
+    try {
+      final classification = await classifyDocument(
+        imageFile,
+        cancellationToken: cancellationToken,
+      ).timeout(_classificationTimeout);
+      if (classification.type == DocumentType.passport &&
+          classification.confidence >= 0.80 &&
+          !(cancellationToken?.isCancelled ?? false)) {
+        return DocumentType.passport;
+      }
+    } on _ScanWorkerCancelled {
+      return null;
+    } on TimeoutException {
+      return null;
+    } catch (_) {
+      return null;
+    }
+    return null;
   }
 
   Future<SmartScanBatchResult> processBatchSmartRecognition(

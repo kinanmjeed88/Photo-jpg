@@ -66,6 +66,9 @@ void main() {
     expect(result.files.single.path, source.path);
     expect(result.classification.type, DocumentType.a4Document);
     expect(result.classification.requiresManualReview, isFalse);
+    expect(result.cropConfidence, 1);
+    expect(result.detectedDocumentCount, 1);
+    expect(result.requiresManualFallback, isFalse);
   });
 
   test(
@@ -83,6 +86,55 @@ void main() {
       expect(result.status, SmartScanStatus.manualReviewRequired);
       expect(result.files, isEmpty);
       expect(result.classification.type, DocumentType.unknown);
+    },
+  );
+
+  test(
+    'low crop confidence requires manual fallback independently of type confidence',
+    () {
+      final result = SmartScanResult(
+        source: File('/tmp/source.jpg'),
+        files: <File>[File('/tmp/cropped.jpg')],
+        classification: const DocumentClassification(
+          type: DocumentType.housingCard,
+          normalizedText: '',
+          confidence: 1,
+          reason: 'Requested type',
+          requiresManualReview: false,
+        ),
+        status: SmartScanStatus.manualReviewRequired,
+        message: 'Boundary review required',
+        cropConfidence: 0.54,
+        detectedDocumentCount: 1,
+        cropReviewReason: 'Boundary support is insufficient',
+      );
+
+      expect(result.requiresManualFallback, isTrue);
+      expect(result.classification.requiresManualReview, isFalse);
+      expect(result.cropReviewReason, isNotEmpty);
+    },
+  );
+
+  test(
+    'A successful high-confidence crop does not require manual fallback',
+    () {
+      final result = SmartScanResult(
+        source: File('/tmp/source.jpg'),
+        files: <File>[File('/tmp/cropped.jpg')],
+        classification: const DocumentClassification(
+          type: DocumentType.passport,
+          normalizedText: '',
+          confidence: 1,
+          reason: 'Requested type',
+          requiresManualReview: false,
+        ),
+        status: SmartScanStatus.succeeded,
+        message: 'Success',
+        cropConfidence: 0.91,
+        detectedDocumentCount: 1,
+      );
+
+      expect(result.requiresManualFallback, isFalse);
     },
   );
 

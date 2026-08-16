@@ -157,12 +157,16 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
       final inputs = <DocumentInput>[];
       final manualFallbackSources = <File>[];
       var requiresClassificationReview = false;
+      var requiresCropReview = false;
       for (final sourceFile in sourceFiles) {
         final result = smartResult.results[sourceFile];
-        if (result == null || result.files.isEmpty) {
+        if (result == null ||
+            result.files.isEmpty ||
+            result.requiresManualFallback) {
           if (!smartResult.wasCancelled) {
             manualFallbackSources.add(sourceFile);
           }
+          requiresCropReview |= result?.requiresManualFallback ?? false;
           continue;
         }
         requiresClassificationReview |=
@@ -184,6 +188,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
       if (!mounted) return;
       if (smartResult.wasCancelled) {
         _showMessage('أُلغي المسح الذكي؛ عولجت الصور المكتملة فقط.');
+      } else if (requiresCropReview) {
+        _showMessage('تم تحويل القص غير المؤكد إلى القص اليدوي قبل الحفظ.');
       } else if (requiresClassificationReview) {
         _showMessage('اكتمل القص. راجع نوع المستند يدوياً عند الحاجة.');
       }
