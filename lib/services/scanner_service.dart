@@ -777,9 +777,20 @@ String _candidateReviewReason(_DocumentCandidate candidate) {
 
 double _candidateQuality(_DocumentCandidate candidate) {
   final stability = (candidate.evidenceCount / 3).clamp(0.0, 1.0).toDouble();
-  return (candidate.confidence * 0.65 +
-          stability * 0.15 +
-          candidate.documentEvidence * 0.20)
+  final typeEvidence = candidate.documentEvidence.clamp(0.0, 1.0).toDouble();
+
+  // Type-specific evidence is optional for geometric multi-document crops.
+  // National and ration cards may have no dedicated visual/OCR signal, but a
+  // strong quadrilateral supported by one or more independent masks is still
+  // a valid document. Keep the geometry score self-sufficient and only use
+  // type evidence as a bonus when it is actually available.
+  if (typeEvidence <= 0) {
+    return (candidate.confidence * 0.80 + stability * 0.20)
+        .clamp(0.0, 1.0)
+        .toDouble();
+  }
+
+  return (candidate.confidence * 0.65 + stability * 0.15 + typeEvidence * 0.20)
       .clamp(0.0, 1.0)
       .toDouble();
 }
@@ -1116,11 +1127,13 @@ Future<List<_DocumentCandidate>> _housingCardStampCandidates({
           continue;
         }
 
-        final boundaryCandidates = _housingCardBoundaryCandidates(
+        final boundaryCandidates = await _housingCardBoundaryCandidates(
           source: source,
           anchor: anchor,
           imageArea: imageArea,
+          isCancelled: isCancelled,
         );
+        if (isCancelled()) return candidates;
         if (boundaryCandidates.isNotEmpty) {
           candidates.addAll(boundaryCandidates);
         } else {
@@ -1184,11 +1197,12 @@ _DocumentCandidate? _fullFrameHousingCandidate({
   );
 }
 
-List<_DocumentCandidate> _housingCardBoundaryCandidates({
+Future<List<_DocumentCandidate>> _housingCardBoundaryCandidates({
   required cv.Mat source,
   required _DocumentCandidate anchor,
   required double imageArea,
-}) {
+  required bool Function() isCancelled,
+}) async {
   cv.Mat? gray;
   cv.Mat? blurred;
   cv.Mat? edges;
@@ -1204,7 +1218,7 @@ List<_DocumentCandidate> _housingCardBoundaryCandidates({
     closed = cv.morphologyEx(edges, cv.MORPH_CLOSE, kernel);
     final result = cv.findContours(
       closed,
-      cv.RETR_LIST,
+      cv.RETR_EXTERNAL,
       cv.CHAIN_APPROX_SIMPLE,
     );
     contours = result.$1;
@@ -1242,7 +1256,10 @@ List<_DocumentCandidate> _housingCardBoundaryCandidates({
     final anchorWidth = math.max(1, anchor.width);
     final anchorHeight = math.max(1, anchor.height);
     final containing = <_DocumentCandidate>[];
+    var inspected = 0;
     for (final contour in contours) {
+      if (isCancelled()) return const <_DocumentCandidate>[];
+      if (inspected++ % 24 == 0) await Future<void>.delayed(Duration.zero);
       final candidate = _candidateFromContour(
         contour,
         imageArea: imageArea,
@@ -2785,12 +2802,33 @@ class ScannerService {
     final activeToken = cancellationToken ?? ScanCancellationToken();
     final tempDirectory = await getTemporaryDirectory();
     final jobId = DateTime.now().microsecondsSinceEpoch.toString();
-    final preprocessedPath = await _runOcrPreprocessWorker(
-      imageFile: imageFile,
-      tempPath: tempDirectory.path,
-      jobId: jobId,
-      token: activeToken,
-    );
+    late final String preprocessedPath;
+    try {
+      preprocessedPath = await _runOcrPreprocessWorker(
+        imageFile: imageFile,
+        tempPath: tempDirectory.path,
+        jobId: jobId,
+        token: activeToken,
+      );
+    } on _ScanWorkerCancelled {
+      rethrow;
+    } on TimeoutException {
+      return const DocumentClassification(
+        type: DocumentType.unknown,
+        normalizedText: '',
+        confidence: 0,
+        reason: 'تجاوزت معالجة OCR المهلة؛ اختر نوع المستند أو راجعه يدوياً.',
+        requiresManualReview: true,
+      );
+    } on StateError {
+      return const DocumentClassification(
+        type: DocumentType.unknown,
+        normalizedText: '',
+        confidence: 0,
+        reason: 'تعذر تشغيل معالجة OCR؛ اختر نوع المستند أو راجعه يدوياً.',
+        requiresManualReview: true,
+      );
+    }
     final preprocessedFile = File(preprocessedPath);
     final recognizer = TextRecognizer(script: TextRecognitionScript.latin);
     var recognizerClosedByCancellation = false;
