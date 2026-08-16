@@ -162,6 +162,41 @@ void main() {
     },
   );
 
+  test('performance metrics remain safe and structured', () {
+    const metrics = ScanPerformanceMetrics(
+      stageMilliseconds: <String, int>{'decode': 12, 'detection': 34},
+      peakMemoryBytes: 1024,
+    );
+    final result = SmartScanResult(
+      source: File('/tmp/source.jpg'),
+      files: <File>[File('/tmp/cropped.jpg')],
+      classification: DocumentClassification.unknown,
+      status: SmartScanStatus.succeeded,
+      message: 'Success',
+      performanceMetrics: metrics,
+    );
+
+    expect(result.performanceMetrics.stageMilliseconds['decode'], 12);
+    expect(result.performanceMetrics.stageMilliseconds['detection'], 34);
+    expect(result.performanceMetrics.peakMemoryBytes, 1024);
+    expect(result.performanceMetrics.isEmpty, isFalse);
+  });
+
+  test('review region preserves a diagnostic reason', () {
+    const region = DocumentRegion(
+      left: 1,
+      top: 2,
+      right: 101,
+      bottom: 202,
+      area: 20000,
+      reason: 'حدود المستند ضعيفة',
+    );
+
+    expect(region.reason, 'حدود المستند ضعيفة');
+    expect(region.width, 100);
+    expect(region.height, 200);
+  });
+
   test('A4 batch processing returns one complete source per input', () async {
     final directory = await Directory.systemTemp.createTemp('a4_batch_scan_');
     addTearDown(() => directory.delete(recursive: true));

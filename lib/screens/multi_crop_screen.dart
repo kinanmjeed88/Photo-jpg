@@ -64,11 +64,15 @@ List<File> _processMultiCrop(Map<String, dynamic> args) {
 class MultiCropScreen extends StatefulWidget {
   final File imageFile;
   final List<DocumentRegion> suggestedRegions;
+  final Future<SmartScanResult?> Function()? onReanalyze;
+  final bool includeReanalyzedAcceptedFiles;
 
   const MultiCropScreen({
     super.key,
     required this.imageFile,
     this.suggestedRegions = const <DocumentRegion>[],
+    this.onReanalyze,
+    this.includeReanalyzedAcceptedFiles = true,
   });
 
   @override
@@ -77,14 +81,24 @@ class MultiCropScreen extends StatefulWidget {
 
 class _MultiCropScreenState extends State<MultiCropScreen> {
   final List<CropRect> _cropRects = [];
+  List<DocumentRegion> _suggestedRegions = const <DocumentRegion>[];
+  List<File> _acceptedReanalysisFiles = const <File>[];
+  bool _allowFullFrameFallback = true;
   bool _isProcessing = false;
   ImageProvider? _imageProvider;
   Size? _imageSize;
   final GlobalKey _imageKey = GlobalKey();
 
+  int get _maxCropBoxes =>
+      math.min(20, math.max(5, _suggestedRegions.length)).toInt();
+
   @override
   void initState() {
     super.initState();
+    _suggestedRegions = List<DocumentRegion>.unmodifiable(
+      widget.suggestedRegions,
+    );
+    _allowFullFrameFallback = widget.suggestedRegions.isEmpty;
     _imageProvider = FileImage(widget.imageFile);
     _loadImageSize();
   }
@@ -107,7 +121,7 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
 
   void _seedSuggestedRegions() {
     if (_cropRects.isNotEmpty ||
-        widget.suggestedRegions.isEmpty ||
+        _suggestedRegions.isEmpty ||
         _imageSize == null) {
       return;
     }
@@ -122,8 +136,8 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
     }
     final scaleX = imageBox.size.width / _imageSize!.width;
     final scaleY = imageBox.size.height / _imageSize!.height;
-    final seeded = widget.suggestedRegions
-        .take(5)
+    final seeded = _suggestedRegions
+        .take(_maxCropBoxes)
         .map((region) {
           return CropRect(
             region.left * scaleX,
@@ -139,9 +153,9 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
   }
 
   void _addCropBox() {
-    if (_cropRects.length >= 5) {
+    if (_cropRects.length >= _maxCropBoxes) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('الحد الأقصى هو 5 مربعات قص')),
+        SnackBar(content: Text('الحد الأقصى هو $_maxCropBoxes مربعات قص')),
       );
       return;
     }
@@ -157,11 +171,61 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
     });
   }
 
+  Future<void> _reanalyze() async {
+    final reanalyze = widget.onReanalyze;
+    if (reanalyze == null || _isProcessing) return;
+    setState(() => _isProcessing = true);
+    try {
+      final result = await reanalyze();
+      if (!mounted || result == null) return;
+      setState(() {
+        _acceptedReanalysisFiles = widget.includeReanalyzedAcceptedFiles
+            ? List<File>.unmodifiable(result.files)
+            : const <File>[];
+        _suggestedRegions = List<DocumentRegion>.unmodifiable(
+          result.manualReviewRegions,
+        );
+        _allowFullFrameFallback =
+            _allowFullFrameFallback && result.manualReviewRegions.isEmpty;
+        _cropRects.clear();
+      });
+      if (result.files.isEmpty && result.manualReviewRegions.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('لم يعثر التحليل على حدود موثوقة.')),
+        );
+      } else if (result.manualReviewRegions.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'أعيد التحليل: ${result.files.length} قص مقبول و${result.manualReviewRegions.length} منطقة للمراجعة.',
+            ),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('أعيد التحليل وقُبلت ${result.files.length} قصوص.'),
+          ),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('تعذر إعادة تحليل الصورة.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isProcessing = false);
+    }
+  }
+
   Future<void> _finishCropping() async {
     if (_cropRects.isEmpty) {
       Navigator.pop(
         context,
-        widget.suggestedRegions.isEmpty
+        _acceptedReanalysisFiles.isNotEmpty
+            ? _acceptedReanalysisFiles
+            : _suggestedRegions.isEmpty && _allowFullFrameFallback
             ? <File>[widget.imageFile]
             : const <File>[],
       );
@@ -213,12 +277,15 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
 
       final croppedFiles = await _runMultiCropIsolate(args);
 
+      final outputFiles = <File>[..._acceptedReanalysisFiles, ...croppedFiles];
       if (mounted) {
         Navigator.pop(
           context,
-          croppedFiles.isEmpty && widget.suggestedRegions.isEmpty
+          outputFiles.isEmpty &&
+                  _suggestedRegions.isEmpty &&
+                  _allowFullFrameFallback
               ? <File>[widget.imageFile]
-              : croppedFiles,
+              : outputFiles,
         );
       }
     } catch (_) {
@@ -238,6 +305,12 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
       appBar: AppBar(
         title: const Text('تحديد متعدد للمستندات'),
         actions: [
+          if (widget.onReanalyze != null)
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              tooltip: 'إعادة التحليل',
+              onPressed: _isProcessing ? null : _reanalyze,
+            ),
           IconButton(
             icon: const Icon(Icons.check),
             tooltip: 'تأكيد',
@@ -252,12 +325,32 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
                 Padding(
                   padding: const EdgeInsets.all(8.0),
                   child: Text(
-                    widget.suggestedRegions.isEmpty
-                        ? 'حدد إطارات حول المستندات. يمكنك إضافة حتى 5 إطارات.'
-                        : 'تم تحديد المناطق غير المؤكدة تلقائياً. راجعها ثم اضغط تأكيد.',
+                    _suggestedRegions.isEmpty
+                        ? 'حدد إطارات حول المستندات. يمكنك إضافة حتى $_maxCropBoxes إطارات.'
+                        : 'تم تحديد المناطق غير المؤكدة تلقائياً. راجعها ثم اضغط تأكيد أو أعد التحليل.',
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                 ),
+                if (_suggestedRegions.any((region) => region.reason.isNotEmpty))
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      children: _suggestedRegions
+                          .where((region) => region.reason.isNotEmpty)
+                          .map(
+                            (region) => Chip(
+                              label: Text(region.reason),
+                              backgroundColor: Colors.orange.withValues(
+                                alpha: 0.18,
+                              ),
+                              side: const BorderSide(color: Colors.orange),
+                            ),
+                          )
+                          .toList(growable: false),
+                    ),
+                  ),
                 Expanded(
                   child: InteractiveViewer(
                     maxScale: 5.0,
@@ -285,12 +378,10 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
                                   height: rect.height,
                                   decoration: BoxDecoration(
                                     border: Border.all(
-                                      color: Colors.redAccent,
+                                      color: Colors.orange,
                                       width: 2,
                                     ),
-                                    color: Colors.redAccent.withValues(
-                                      alpha: 0.1,
-                                    ),
+                                    color: Colors.orange.withValues(alpha: 0.1),
                                   ),
                                   child: Stack(
                                     clipBehavior: Clip.none,

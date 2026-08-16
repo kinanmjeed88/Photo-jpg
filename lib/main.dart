@@ -1,12 +1,16 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'screens/settings_screen.dart';
+import 'services/temporary_image_store.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  unawaited(TemporaryImageStore.cleanupStale());
   runApp(const ProviderScope(child: DocScannerApp()));
 }
 

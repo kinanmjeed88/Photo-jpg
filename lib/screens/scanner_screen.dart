@@ -156,13 +156,18 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
       final inputs = <DocumentInput>[];
       final manualFallbackSources = <File>[];
+      final manualFallbackTypes = <File, DocumentType?>{};
       final partialReviewSources = <File, List<DocumentRegion>>{};
+      final partialReviewTypes = <File, DocumentType?>{};
       var requiresClassificationReview = false;
       var requiresCropReview = false;
       for (final sourceFile in sourceFiles) {
         final result = smartResult.results[sourceFile];
         if (result == null || result.files.isEmpty) {
-          if (!smartResult.wasCancelled) manualFallbackSources.add(sourceFile);
+          if (!smartResult.wasCancelled) {
+            manualFallbackSources.add(sourceFile);
+            manualFallbackTypes[sourceFile] = appState.selectedDocumentType;
+          }
           requiresCropReview |= result?.requiresManualFallback ?? true;
           continue;
         }
@@ -179,17 +184,24 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
         }
         if (result.requiresCropReview && !smartResult.wasCancelled) {
           partialReviewSources[sourceFile] = result.manualReviewRegions;
+          partialReviewTypes[sourceFile] = result.classification.type;
           requiresCropReview = true;
         }
       }
       if (manualFallbackSources.isNotEmpty) {
-        inputs.addAll(await _manuallyCropSources(manualFallbackSources));
+        inputs.addAll(
+          await _manuallyCropSources(
+            manualFallbackSources,
+            documentTypes: manualFallbackTypes,
+          ),
+        );
       }
       if (partialReviewSources.isNotEmpty) {
         inputs.addAll(
           await _manuallyCropSources(
             partialReviewSources.keys.toList(growable: false),
             suggestedRegions: partialReviewSources,
+            documentTypes: partialReviewTypes,
           ),
         );
       }
@@ -207,10 +219,23 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     }
   }
 
+  Future<SmartScanResult?> _reanalyzeSource(
+    File sourceFile,
+    DocumentType documentType,
+  ) async {
+    if (!await sourceFile.exists()) return null;
+    return _scannerService.processSmartRecognition(
+      sourceFile,
+      documentType: documentType,
+      cancellationToken: ScanCancellationToken(),
+    );
+  }
+
   Future<List<DocumentInput>> _manuallyCropSources(
     List<File> sourceFiles, {
     Map<File, List<DocumentRegion>> suggestedRegions =
         const <File, List<DocumentRegion>>{},
+    Map<File, DocumentType?> documentTypes = const <File, DocumentType?>{},
   }) async {
     final inputs = <DocumentInput>[];
     for (final sourceFile in sourceFiles) {
@@ -221,6 +246,13 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
             imageFile: sourceFile,
             suggestedRegions:
                 suggestedRegions[sourceFile] ?? const <DocumentRegion>[],
+            onReanalyze: documentTypes[sourceFile] == null
+                ? null
+                : () =>
+                      _reanalyzeSource(sourceFile, documentTypes[sourceFile]!),
+            includeReanalyzedAcceptedFiles: !suggestedRegions.containsKey(
+              sourceFile,
+            ),
           ),
         ),
       );
@@ -231,8 +263,13 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
               : <File>[sourceFile]);
       inputs.addAll(
         files.map(
-          (file) =>
-              DocumentInput(file: file, originalImagePath: sourceFile.path),
+          (file) => DocumentInput(
+            file: file,
+            type:
+                documentTypes[sourceFile] ??
+                ref.read(appStateProvider).selectedDocumentType,
+            originalImagePath: sourceFile.path,
+          ),
         ),
       );
     }

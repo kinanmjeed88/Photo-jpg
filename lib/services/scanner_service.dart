@@ -1,5 +1,5 @@
-import 'dart:io';
 import 'dart:async';
+import 'dart:io';
 import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -69,6 +69,22 @@ class DocumentClassification {
   );
 }
 
+class ScanPerformanceMetrics {
+  const ScanPerformanceMetrics({
+    this.stageMilliseconds = const <String, int>{},
+    this.peakMemoryBytes = 0,
+  });
+
+  const ScanPerformanceMetrics.empty()
+    : stageMilliseconds = const <String, int>{},
+      peakMemoryBytes = 0;
+
+  final Map<String, int> stageMilliseconds;
+  final int peakMemoryBytes;
+
+  bool get isEmpty => stageMilliseconds.isEmpty && peakMemoryBytes <= 0;
+}
+
 class SmartScanResult {
   const SmartScanResult({
     required this.source,
@@ -80,6 +96,7 @@ class SmartScanResult {
     this.detectedDocumentCount = 0,
     this.cropReviewReason = '',
     this.manualReviewRegions = const <DocumentRegion>[],
+    this.performanceMetrics = const ScanPerformanceMetrics.empty(),
   });
 
   final File source;
@@ -97,6 +114,7 @@ class SmartScanResult {
   /// Regions that need a human boundary decision. Accepted crops remain in
   /// [files] and are never discarded because this list is non-empty.
   final List<DocumentRegion> manualReviewRegions;
+  final ScanPerformanceMetrics performanceMetrics;
 
   bool get requiresCropReview => manualReviewRegions.isNotEmpty;
 
@@ -117,6 +135,7 @@ class _SmartCropOutput {
     required this.detectedDocumentCount,
     required this.reviewReason,
     this.reviewRegions = const <DocumentRegion>[],
+    this.performanceMetrics = const ScanPerformanceMetrics.empty(),
   });
 
   final List<String> paths;
@@ -124,6 +143,7 @@ class _SmartCropOutput {
   final int detectedDocumentCount;
   final String reviewReason;
   final List<DocumentRegion> reviewRegions;
+  final ScanPerformanceMetrics performanceMetrics;
 }
 
 Map<String, Object> _documentRegionToMessage(DocumentRegion region) =>
@@ -133,7 +153,33 @@ Map<String, Object> _documentRegionToMessage(DocumentRegion region) =>
       'right': region.right,
       'bottom': region.bottom,
       'area': region.area,
+      'reason': region.reason,
     };
+
+Map<String, Object> _performanceMetricsToMessage(
+  ScanPerformanceMetrics metrics,
+) => <String, Object>{
+  'stageMilliseconds': metrics.stageMilliseconds,
+  'peakMemoryBytes': metrics.peakMemoryBytes,
+};
+
+ScanPerformanceMetrics _performanceMetricsFromMessage(Object? value) {
+  if (value is! Map) return const ScanPerformanceMetrics.empty();
+  final rawStages = value['stageMilliseconds'];
+  final stageMilliseconds = <String, int>{};
+  if (rawStages is Map) {
+    rawStages.forEach((key, stage) {
+      if (key is String && stage is num) {
+        stageMilliseconds[key] = stage.round();
+      }
+    });
+  }
+  final peakMemoryBytes = (value['peakMemoryBytes'] as num?)?.toInt() ?? 0;
+  return ScanPerformanceMetrics(
+    stageMilliseconds: Map<String, int>.unmodifiable(stageMilliseconds),
+    peakMemoryBytes: math.max(0, peakMemoryBytes),
+  );
+}
 
 DocumentRegion? _documentRegionFromMessage(Object? value) {
   if (value is! Map) return null;
@@ -142,6 +188,7 @@ DocumentRegion? _documentRegionFromMessage(Object? value) {
   final right = (value['right'] as num?)?.toInt();
   final bottom = (value['bottom'] as num?)?.toInt();
   final area = (value['area'] as num?)?.toDouble();
+  final reason = value['reason'] as String? ?? '';
   if (left == null ||
       top == null ||
       right == null ||
@@ -156,6 +203,7 @@ DocumentRegion? _documentRegionFromMessage(Object? value) {
     right: right,
     bottom: bottom,
     area: area,
+    reason: reason,
   );
 }
 
@@ -180,6 +228,7 @@ class DocumentRegion {
     required this.right,
     required this.bottom,
     required this.area,
+    this.reason = '',
   });
 
   final int left;
@@ -187,6 +236,7 @@ class DocumentRegion {
   final int right;
   final int bottom;
   final double area;
+  final String reason;
 
   double get width => math.max(0, right - left).toDouble();
   double get height => math.max(0, bottom - top).toDouble();
@@ -415,6 +465,7 @@ class _DocumentCandidate {
     right: right,
     bottom: bottom,
     area: area,
+    reason: _candidateReviewReason(this),
   );
 }
 
@@ -699,6 +750,22 @@ bool _isDuplicateCandidate(
   _DocumentCandidate accepted,
 ) => _isDuplicateRegion(candidate.region, accepted.region);
 
+String _candidateReviewReason(_DocumentCandidate candidate) {
+  final reasons = <String>[];
+  if (candidate.confidence < 0.55) {
+    reasons.add('حدود المستند ضعيفة');
+  }
+  if (candidate.evidenceCount < 2) {
+    reasons.add('دليل كشف واحد فقط');
+  }
+  if (candidate.documentEvidence < 0.25) {
+    reasons.add('الدليل النوعي غير كافٍ');
+  }
+  return reasons.isEmpty
+      ? 'تحتاج مراجعة بسبب التقييم المركب'
+      : reasons.join('، ');
+}
+
 double _candidateQuality(_DocumentCandidate candidate) {
   final stability = (candidate.evidenceCount / 3).clamp(0.0, 1.0).toDouble();
   return (candidate.confidence * 0.65 +
@@ -706,6 +773,47 @@ double _candidateQuality(_DocumentCandidate candidate) {
           candidate.documentEvidence * 0.20)
       .clamp(0.0, 1.0)
       .toDouble();
+}
+
+List<_DocumentCandidate> _selectReviewCandidates(
+  Iterable<_DocumentCandidate> candidates, {
+  required int detectedDocumentCount,
+}) {
+  final ordered = List<_DocumentCandidate>.of(candidates)
+    ..sort((first, second) {
+      final quality = _candidateQuality(
+        first,
+      ).compareTo(_candidateQuality(second));
+      return quality != 0 ? quality : first.area.compareTo(second.area);
+    });
+
+  // The review queue scales with the number of detected documents instead of
+  // silently truncating every image to an arbitrary fixed count. A bounded
+  // ceiling remains in place as a protection against noisy contours.
+  final reviewLimit = math
+      .min(20, math.max(5, math.max(detectedDocumentCount, 1)))
+      .toInt();
+  return ordered.take(reviewLimit).toList(growable: false);
+}
+
+double _automaticAcceptanceThreshold(_DocumentDetectionProfile profile) {
+  switch (profile.type) {
+    case DocumentType.passport:
+      // A passport crop must have strong page geometry. The MRZ-like signal
+      // improves the score but can never compensate for a small inner region.
+      return 0.64;
+    case DocumentType.housingCard:
+      // Housing cards may have weak outer edges because of plastic sleeves;
+      // the stamp specialist path supplies the additional evidence.
+      return 0.58;
+    case DocumentType.allDocuments:
+      return 0.60;
+    case DocumentType.nationalId:
+    case DocumentType.rationCard:
+    case DocumentType.a4Document:
+    case DocumentType.unknown:
+      return 0.60;
+  }
 }
 
 void _mergeCandidate(
@@ -1429,6 +1537,26 @@ _DocumentCandidate? _fullFrameCandidateForPassport({
   );
 }
 
+const _stageBudgets = <String, Duration>{
+  'decode': Duration(seconds: 4),
+  'resize': Duration(seconds: 3),
+  'preprocessing': Duration(seconds: 5),
+  'detection': Duration(seconds: 8),
+  'warp_write': Duration(seconds: 10),
+};
+
+_SmartCropOutput? _stageTimeoutResult(String stage, Stopwatch watch) {
+  final budget = _stageBudgets[stage];
+  if (budget == null || watch.elapsed <= budget) return null;
+  return _SmartCropOutput(
+    paths: const <String>[],
+    confidence: 0,
+    detectedDocumentCount: 0,
+    reviewReason:
+        'تجاوزت مرحلة $stage المهلة المحددة وتحتاج الصورة إلى مراجعة يدوية.',
+  );
+}
+
 Future<_SmartCropOutput> _detectAndCropInIsolate(
   Map<String, dynamic> args, {
   bool Function()? isCancelled,
@@ -1455,6 +1583,7 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
     );
   }
   cv.Mat? source;
+  cv.Mat? analysisSource;
   cv.Mat? gray;
   cv.Mat? blurred;
   cv.Mat? edges;
@@ -1473,6 +1602,12 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
   var candidates = <_DocumentCandidate>[];
   final results = <String>[];
   var reviewCandidates = const <_DocumentCandidate>[];
+  final stageMilliseconds = <String, int>{};
+  var peakMemoryBytes = ProcessInfo.currentRss;
+  void recordStage(String name, Stopwatch stopwatch) {
+    stageMilliseconds[name] = stopwatch.elapsedMilliseconds;
+    peakMemoryBytes = math.max(peakMemoryBytes, ProcessInfo.currentRss);
+  }
 
   Future<bool> collectCandidates(
     cv.Mat image,
@@ -1514,7 +1649,7 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
               candidate: candidate,
               profile: profile,
             ) ||
-            !_matchesVisualProfile(source!, candidate, profile)) {
+            !_matchesVisualProfile(analysisSource!, candidate, profile)) {
           continue;
         }
         _mergeCandidate(candidates, candidate);
@@ -1527,7 +1662,11 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
   }
 
   try {
+    final decodeWatch = Stopwatch()..start();
     source = cv.imdecode(File(imagePath).readAsBytesSync(), cv.IMREAD_COLOR);
+    recordStage('decode', decodeWatch);
+    final decodeTimeout = _stageTimeoutResult('decode', decodeWatch);
+    if (decodeTimeout != null) return decodeTimeout;
     if (source.isEmpty) {
       return const _SmartCropOutput(
         paths: <String>[],
@@ -1537,19 +1676,23 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
       );
     }
 
-    // The isolated vision pass works on a bounded image for predictable
-    // latency. Candidate points remain in the same coordinate space used for
-    // the perspective crop below.
+    // Keep the decoded source at its original resolution for the final warp.
+    // All expensive vision operations run on a bounded analysis image, and
+    // candidate coordinates are mapped back to the source before writing.
     const maximumAnalysisDimension = 1600;
+    final resizeWatch = Stopwatch()..start();
+    analysisSource = source;
     final largestDimension = math.max(source.cols, source.rows);
     if (largestDimension > maximumAnalysisDimension) {
       final scale = maximumAnalysisDimension / largestDimension;
-      final resized = cv.resize(source, (0, 0), fx: scale, fy: scale);
-      source.dispose();
-      source = resized;
+      analysisSource = cv.resize(source, (0, 0), fx: scale, fy: scale);
     }
+    recordStage('resize', resizeWatch);
+    final resizeTimeout = _stageTimeoutResult('resize', resizeWatch);
+    if (resizeTimeout != null) return resizeTimeout;
 
-    gray = cv.cvtColor(source, cv.COLOR_BGR2GRAY);
+    final preprocessingWatch = Stopwatch()..start();
+    gray = cv.cvtColor(analysisSource, cv.COLOR_BGR2GRAY);
     blurred = cv.gaussianBlur(gray, (5, 5), 0);
     kernel = cv.getStructuringElement(cv.MORPH_RECT, (7, 7));
     broadKernel = cv.getStructuringElement(cv.MORPH_RECT, (11, 11));
@@ -1560,12 +1703,19 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
     // the full card extent instead of proposing geometric quadrilaterals.
     // In allDocuments mode the same specialist path is merged with the
     // geometric card proposals, so the green housing card is not lost.
+    recordStage('preprocessing', preprocessingWatch);
+    final preprocessingTimeout = _stageTimeoutResult(
+      'preprocessing',
+      preprocessingWatch,
+    );
+    if (preprocessingTimeout != null) return preprocessingTimeout;
+    final detectionWatch = Stopwatch()..start();
     if (requestedType == DocumentType.housingCard ||
         requestedType == DocumentType.allDocuments) {
       final housingProfile = _detectionProfileFor(DocumentType.housingCard);
       final stampCandidates = await _housingCardStampCandidates(
-        source: source,
-        imageArea: (source.rows * source.cols).toDouble(),
+        source: analysisSource,
+        imageArea: (analysisSource.rows * analysisSource.cols).toDouble(),
         profile: housingProfile,
         isCancelled: isCancelled ?? (() => false),
       );
@@ -1641,7 +1791,7 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
         cv.MORPH_CLOSE,
         foregroundKernel,
       );
-      final imageArea = (source.rows * source.cols).toDouble();
+      final imageArea = (analysisSource.rows * analysisSource.cols).toDouble();
 
       if (!await collectCandidates(edgeClosed, imageArea) ||
           !await collectCandidates(sensitiveEdgeClosed, imageArea) ||
@@ -1661,13 +1811,16 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
         );
       }
     }
+    recordStage('detection', detectionWatch);
+    final detectionTimeout = _stageTimeoutResult('detection', detectionWatch);
+    if (detectionTimeout != null) return detectionTimeout;
 
     // A flat passport scan with no visible outer border produces no geometric
     // candidate at all. The full-frame fallback is the faithful crop in that
     // case: the document genuinely covers the whole frame.
     if (requestedType == DocumentType.passport && candidates.isEmpty) {
       final fullFrame = _fullFrameCandidateForPassport(
-        source: source,
+        source: analysisSource,
         profile: profile,
       );
       if (fullFrame != null) candidates.add(fullFrame);
@@ -1675,13 +1828,17 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
 
     candidates = _selectDistinctCandidates(candidates);
 
-    const automaticAcceptanceThreshold = 0.60;
-    reviewCandidates = candidates
+    final automaticAcceptanceThreshold = _automaticAcceptanceThreshold(profile);
+    final lowConfidenceCandidates = candidates
         .where(
           (candidate) =>
               _candidateQuality(candidate) < automaticAcceptanceThreshold,
         )
         .toList(growable: false);
+    reviewCandidates = _selectReviewCandidates(
+      lowConfidenceCandidates,
+      detectedDocumentCount: candidates.length,
+    );
     final acceptedCandidates = candidates
         .where(
           (candidate) =>
@@ -1689,7 +1846,12 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
         )
         .toList(growable: false);
 
+    final sourceScaleX = source.cols / analysisSource.cols;
+    final sourceScaleY = source.rows / analysisSource.rows;
+    final cropWatch = Stopwatch()..start();
     for (final candidate in acceptedCandidates) {
+      final cropTimeout = _stageTimeoutResult('warp_write', cropWatch);
+      if (cropTimeout != null) return cropTimeout;
       if (isCancelled?.call() ?? false) {
         return const _SmartCropOutput(
           paths: <String>[],
@@ -1703,32 +1865,67 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
       cv.Mat? transform;
       cv.Mat? warped;
       try {
-        const padding = 8;
+        final paddingX = math.max(1, (8 * sourceScaleX).round());
+        final paddingY = math.max(1, (8 * sourceScaleY).round());
+        int sourceX(num value) => (value * sourceScaleX).round();
+        int sourceY(num value) => (value * sourceScaleY).round();
         final padded = <cv.Point>[
           cv.Point(
-            _clampInt(candidate.points[0].x - padding, 0, source.cols - 1),
-            _clampInt(candidate.points[0].y - padding, 0, source.rows - 1),
+            _clampInt(
+              sourceX(candidate.points[0].x) - paddingX,
+              0,
+              source.cols - 1,
+            ),
+            _clampInt(
+              sourceY(candidate.points[0].y) - paddingY,
+              0,
+              source.rows - 1,
+            ),
           ),
           cv.Point(
-            _clampInt(candidate.points[1].x + padding, 0, source.cols - 1),
-            _clampInt(candidate.points[1].y - padding, 0, source.rows - 1),
+            _clampInt(
+              sourceX(candidate.points[1].x) + paddingX,
+              0,
+              source.cols - 1,
+            ),
+            _clampInt(
+              sourceY(candidate.points[1].y) - paddingY,
+              0,
+              source.rows - 1,
+            ),
           ),
           cv.Point(
-            _clampInt(candidate.points[2].x + padding, 0, source.cols - 1),
-            _clampInt(candidate.points[2].y + padding, 0, source.rows - 1),
+            _clampInt(
+              sourceX(candidate.points[2].x) + paddingX,
+              0,
+              source.cols - 1,
+            ),
+            _clampInt(
+              sourceY(candidate.points[2].y) + paddingY,
+              0,
+              source.rows - 1,
+            ),
           ),
           cv.Point(
-            _clampInt(candidate.points[3].x - padding, 0, source.cols - 1),
-            _clampInt(candidate.points[3].y + padding, 0, source.rows - 1),
+            _clampInt(
+              sourceX(candidate.points[3].x) - paddingX,
+              0,
+              source.cols - 1,
+            ),
+            _clampInt(
+              sourceY(candidate.points[3].y) + paddingY,
+              0,
+              source.rows - 1,
+            ),
           ),
         ];
         final outputWidth = math.max(
           48,
-          (candidate.width + padding * 2).round(),
+          (candidate.width * sourceScaleX + paddingX * 2).round(),
         );
         final outputHeight = math.max(
           48,
-          (candidate.height + padding * 2).round(),
+          (candidate.height * sourceScaleY + paddingY * 2).round(),
         );
         sourcePoints = cv.VecPoint.fromList(padded);
         destinationPoints = cv.VecPoint.fromList(<cv.Point>[
@@ -1752,6 +1949,9 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
         warped?.dispose();
       }
     }
+    recordStage('warp_write', cropWatch);
+    final warpTimeout = _stageTimeoutResult('warp_write', cropWatch);
+    if (warpTimeout != null) return warpTimeout;
   } catch (_) {
     return const _SmartCropOutput(
       paths: <String>[],
@@ -1760,6 +1960,9 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
       reviewReason: 'تعذر إنشاء قص موثوق من الصورة.',
     );
   } finally {
+    if (!identical(analysisSource, source)) {
+      analysisSource?.dispose();
+    }
     source?.dispose();
     gray?.dispose();
     blurred?.dispose();
@@ -1798,6 +2001,10 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
     detectedDocumentCount: candidates.length,
     reviewReason: reviewReason,
     reviewRegions: reviewRegions,
+    performanceMetrics: ScanPerformanceMetrics(
+      stageMilliseconds: Map<String, int>.unmodifiable(stageMilliseconds),
+      peakMemoryBytes: peakMemoryBytes,
+    ),
   );
 }
 
@@ -1894,6 +2101,9 @@ void _smartCropWorkerEntry(Map<String, dynamic> args) async {
       'reviewRegions': output.reviewRegions
           .map(_documentRegionToMessage)
           .toList(growable: false),
+      'performanceMetrics': _performanceMetricsToMessage(
+        output.performanceMetrics,
+      ),
     });
   } catch (error) {
     resultPort.send(<String, Object?>{
@@ -2077,6 +2287,9 @@ class ScannerService {
                   .map(_documentRegionFromMessage)
                   .whereType<DocumentRegion>()
                   .toList(growable: false);
+          final performanceMetrics = _performanceMetricsFromMessage(
+            message['performanceMetrics'],
+          );
           if (!completed.isCompleted) {
             completed.complete(
               _SmartCropOutput(
@@ -2085,6 +2298,7 @@ class ScannerService {
                 detectedDocumentCount: detectedDocumentCount,
                 reviewReason: reviewReason,
                 reviewRegions: List<DocumentRegion>.unmodifiable(reviewRegions),
+                performanceMetrics: performanceMetrics,
               ),
             );
           }
@@ -2265,6 +2479,7 @@ class ScannerService {
         detectedDocumentCount: cropOutput.detectedDocumentCount,
         cropReviewReason: cropOutput.reviewReason,
         manualReviewRegions: cropOutput.reviewRegions,
+        performanceMetrics: cropOutput.performanceMetrics,
       );
     }
 
@@ -2336,6 +2551,7 @@ class ScannerService {
       detectedDocumentCount: cropOutput.detectedDocumentCount,
       cropReviewReason: reviewReason,
       manualReviewRegions: cropOutput.reviewRegions,
+      performanceMetrics: cropOutput.performanceMetrics,
     );
   }
 
@@ -2375,50 +2591,50 @@ class ScannerService {
   }) async {
     final activeToken = cancellationToken ?? ScanCancellationToken();
     final results = <File, SmartScanResult>{};
-    for (var index = 0; index < imageFiles.length; index++) {
-      if (activeToken.isCancelled) {
-        return SmartScanBatchResult(
-          results: Map.unmodifiable(results),
-          wasCancelled: true,
-        );
-      }
-      final source = imageFiles[index];
-      try {
-        final result = await processSmartRecognition(
-          source,
-          documentType: documentType,
-          cancellationToken: activeToken,
-        );
-        results[source] = result;
-        if (result.status == SmartScanStatus.cancelled ||
-            activeToken.isCancelled) {
-          return SmartScanBatchResult(
-            results: Map.unmodifiable(results),
-            wasCancelled: true,
+    var nextIndex = 0;
+    var completedCount = 0;
+
+    Future<void> runWorker() async {
+      while (true) {
+        if (activeToken.isCancelled) return;
+        final index = nextIndex++;
+        if (index >= imageFiles.length) return;
+        final source = imageFiles[index];
+        try {
+          final result = await processSmartRecognition(
+            source,
+            documentType: documentType,
+            cancellationToken: activeToken,
+          );
+          results[source] = result;
+          if (result.status == SmartScanStatus.cancelled ||
+              activeToken.isCancelled) {
+            return;
+          }
+        } catch (_) {
+          if (activeToken.isCancelled) return;
+          results[source] = SmartScanResult(
+            source: source,
+            files: const <File>[],
+            classification: DocumentClassification.unknown,
+            status: SmartScanStatus.failed,
+            message: 'تعذرت معالجة هذه الصورة؛ يُرجى قصها يدوياً.',
           );
         }
-      } catch (_) {
-        if (activeToken.isCancelled) {
-          return SmartScanBatchResult(
-            results: Map.unmodifiable(results),
-            wasCancelled: true,
-          );
+        if (!activeToken.isCancelled) {
+          completedCount++;
+          onProgress?.call(completedCount, imageFiles.length);
         }
-        results[source] = SmartScanResult(
-          source: source,
-          files: const <File>[],
-          classification: DocumentClassification.unknown,
-          status: SmartScanStatus.failed,
-          message: 'تعذرت معالجة هذه الصورة؛ يُرجى قصها يدوياً.',
-        );
-      }
-      if (!activeToken.isCancelled) {
-        onProgress?.call(index + 1, imageFiles.length);
       }
     }
+
+    final workerCount = math.min(2, imageFiles.length).toInt();
+    await Future.wait(
+      List<Future<void>>.generate(workerCount, (_) => runWorker()),
+    );
     return SmartScanBatchResult(
       results: Map.unmodifiable(results),
-      wasCancelled: false,
+      wasCancelled: activeToken.isCancelled,
     );
   }
 
