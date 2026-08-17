@@ -37,6 +37,77 @@ void main() {
       expect(plan.types, <DocumentType>[DocumentType.a4Document]);
       expect(plan.isA4Only, isTrue);
     });
+
+    test('mixed housing and passport selection keeps both detector passes', () {
+      final plan = DetectionPlan.forTypes(<DocumentType>[
+        DocumentType.housingCard,
+        DocumentType.passport,
+      ]);
+
+      expect(plan.types, <DocumentType>[
+        DocumentType.housingCard,
+        DocumentType.passport,
+      ]);
+      expect(plan.contains(DocumentType.housingCard), isTrue);
+      expect(plan.contains(DocumentType.passport), isTrue);
+      expect(plan.isA4Only, isFalse);
+    });
+  });
+
+  group('DocumentRegion scaling', () {
+    test(
+      'scales review coordinates to source dimensions and clamps bounds',
+      () {
+        const region = DocumentRegion(
+          left: -10,
+          top: 20,
+          right: 900,
+          bottom: 700,
+          area: 0,
+        );
+
+        final scaled = scaleDocumentRegionToSource(
+          region,
+          analysisWidth: 800,
+          analysisHeight: 600,
+          sourceWidth: 4000,
+          sourceHeight: 3000,
+        );
+
+        expect(scaled.left, 0);
+        expect(scaled.top, 100);
+        expect(scaled.right, 4000);
+        expect(scaled.bottom, 3000);
+        expect(scaled.area, 11600000);
+      },
+    );
+
+    test(
+      'scaling keeps a valid region proportional for non-uniform dimensions',
+      () {
+        const region = DocumentRegion(
+          left: 100,
+          top: 50,
+          right: 700,
+          bottom: 550,
+          area: 300000,
+        );
+
+        final scaled = scaleDocumentRegionToSource(
+          region,
+          analysisWidth: 800,
+          analysisHeight: 600,
+          sourceWidth: 1600,
+          sourceHeight: 1200,
+        );
+
+        expect(scaled.left, 200);
+        expect(scaled.top, 100);
+        expect(scaled.right, 1400);
+        expect(scaled.bottom, 1100);
+        expect(scaled.area, 1200000);
+      },
+    );
   });
 
   group('ScanCancellationToken', () {

@@ -607,21 +607,30 @@ class AppState {
     );
   }
 
-  DocumentType get selectedDocumentType {
-    if (hasA4Document) return DocumentType.a4Document;
+  /// Returns the exact detector selection without collapsing mixed choices.
+  ///
+  /// A4 is intentionally exclusive: it is a full-frame document mode, not a
+  /// detector that should be combined with card or passport passes.
+  List<DocumentType> get selectedDocumentTypes {
+    if (hasA4Document) return const <DocumentType>[DocumentType.a4Document];
 
-    final selectedCardTypes = <bool>[
-      hasNationalId,
-      hasHousingCard,
-      hasRationCard,
-      hasPassport,
-    ].where((selected) => selected).length;
-    if (selectedCardTypes > 1 || hasNationalId) {
-      return DocumentType.allDocuments;
-    }
-    if (hasHousingCard) return DocumentType.housingCard;
-    if (hasRationCard) return DocumentType.rationCard;
-    if (hasPassport) return DocumentType.passport;
+    final selected = <DocumentType>[
+      if (hasNationalId) DocumentType.nationalId,
+      if (hasHousingCard) DocumentType.housingCard,
+      if (hasRationCard) DocumentType.rationCard,
+      if (hasPassport) DocumentType.passport,
+    ];
+    return List<DocumentType>.unmodifiable(
+      selected.isEmpty
+          ? const <DocumentType>[DocumentType.allDocuments]
+          : selected,
+    );
+  }
+
+  /// Legacy single-value projection retained for existing non-smart flows.
+  DocumentType get selectedDocumentType {
+    final types = selectedDocumentTypes;
+    if (types.length == 1) return types.first;
     return DocumentType.allDocuments;
   }
 

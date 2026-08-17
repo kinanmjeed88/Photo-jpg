@@ -139,7 +139,7 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
         await Future<void>.delayed(Duration.zero);
         smartResult = await _scannerService.processBatchSmartRecognition(
           sourceFiles,
-          documentType: appState.selectedDocumentType,
+          detectionTypes: appState.selectedDocumentTypes,
           cancellationToken: cancellation,
           onProgress: (current, total) {
             if (!cancellation.isCancelled) progress.value = current;
@@ -156,9 +156,10 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
       final inputs = <DocumentInput>[];
       final manualFallbackSources = <File>[];
-      final manualFallbackTypes = <File, DocumentType?>{};
+      final manualFallbackTypes = <File, List<DocumentType>?>{};
       final partialReviewSources = <File, List<DocumentRegion>>{};
-      final partialReviewTypes = <File, DocumentType?>{};
+      final partialReviewTypes = <File, List<DocumentType>?>{};
+      final selectedTypes = appState.selectedDocumentTypes;
       var requiresClassificationReview = false;
       var requiresCropReview = false;
       for (final sourceFile in sourceFiles) {
@@ -174,13 +175,14 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
               partialReviewSources[sourceFile] = reviewRegions;
               final detectedType = result!.classification.type;
               partialReviewTypes[sourceFile] =
-                  detectedType == DocumentType.unknown
-                  ? appState.selectedDocumentType
-                  : detectedType;
+                  detectedType == DocumentType.unknown ||
+                      detectedType == DocumentType.allDocuments
+                  ? selectedTypes
+                  : <DocumentType>[detectedType];
               requiresCropReview = true;
             } else {
               manualFallbackSources.add(sourceFile);
-              manualFallbackTypes[sourceFile] = appState.selectedDocumentType;
+              manualFallbackTypes[sourceFile] = selectedTypes;
             }
           }
           requiresCropReview |= result?.requiresCropReview ?? true;
@@ -199,7 +201,10 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
         }
         if (result.requiresCropReview && !smartResult.wasCancelled) {
           partialReviewSources[sourceFile] = result.manualReviewRegions;
-          partialReviewTypes[sourceFile] = result.classification.type;
+          partialReviewTypes[sourceFile] =
+              result.classification.type == DocumentType.allDocuments
+              ? selectedTypes
+              : <DocumentType>[result.classification.type];
           requiresCropReview = true;
         }
       }
@@ -236,12 +241,12 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
   Future<SmartScanResult?> _reanalyzeSource(
     File sourceFile,
-    DocumentType documentType,
+    List<DocumentType> detectionTypes,
   ) async {
     if (!await sourceFile.exists()) return null;
     return _scannerService.processSmartRecognition(
       sourceFile,
-      documentType: documentType,
+      detectionTypes: detectionTypes,
       cancellationToken: ScanCancellationToken(),
     );
   }
@@ -250,7 +255,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     List<File> sourceFiles, {
     Map<File, List<DocumentRegion>> suggestedRegions =
         const <File, List<DocumentRegion>>{},
-    Map<File, DocumentType?> documentTypes = const <File, DocumentType?>{},
+    Map<File, List<DocumentType>?> documentTypes =
+        const <File, List<DocumentType>?>{},
   }) async {
     final inputs = <DocumentInput>[];
     for (final sourceFile in sourceFiles) {
@@ -280,9 +286,10 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
         files.map(
           (file) => DocumentInput(
             file: file,
-            type:
-                documentTypes[sourceFile] ??
-                ref.read(appStateProvider).selectedDocumentType,
+            type: DetectionPlan.forTypes(
+              documentTypes[sourceFile] ??
+                  ref.read(appStateProvider).selectedDocumentTypes,
+            ).resultType,
             originalImagePath: sourceFile.path,
           ),
         ),

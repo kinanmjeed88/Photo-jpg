@@ -173,10 +173,13 @@ void main() {
     expect(state.selectedDocumentType, DocumentType.a4Document);
   });
 
-  test('national ID selects unified-card discovery mode', () {
+  test('national ID preserves the single selected detector type', () {
     const state = AppState(hasNationalId: true);
 
-    expect(state.selectedDocumentType, DocumentType.allDocuments);
+    expect(state.selectedDocumentType, DocumentType.nationalId);
+    expect(state.selectedDocumentTypes, <DocumentType>[
+      DocumentType.nationalId,
+    ]);
   });
 
   test('housing card selects the single housing-card profile', () {

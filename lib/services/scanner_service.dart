@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:math' as math;
@@ -15,6 +16,15 @@ import 'temporary_image_store.dart';
 
 enum SmartScanStatus { succeeded, manualReviewRequired, failed, cancelled }
 
+void _logScannerError(String operation, Object error, StackTrace stackTrace) {
+  developer.log(
+    'Scanner operation failed: $operation',
+    name: 'PhotoJpg.ScannerService',
+    error: error,
+    stackTrace: stackTrace,
+  );
+}
+
 /// Describes the independent detector passes that are allowed for one image.
 ///
 /// A requested UI type is intentionally converted into a plan before the
@@ -24,35 +34,56 @@ enum SmartScanStatus { succeeded, manualReviewRequired, failed, cancelled }
 class DetectionPlan {
   const DetectionPlan._(this.types);
 
-  factory DetectionPlan.forType(DocumentType requestedType) {
-    switch (requestedType) {
-      case DocumentType.a4Document:
-        return const DetectionPlan._(<DocumentType>[DocumentType.a4Document]);
-      case DocumentType.housingCard:
-        return const DetectionPlan._(<DocumentType>[DocumentType.housingCard]);
-      case DocumentType.passport:
-        return const DetectionPlan._(<DocumentType>[DocumentType.passport]);
-      case DocumentType.nationalId:
-        return const DetectionPlan._(<DocumentType>[DocumentType.nationalId]);
-      case DocumentType.rationCard:
-        return const DetectionPlan._(<DocumentType>[DocumentType.rationCard]);
-      case DocumentType.allDocuments:
-        return const DetectionPlan._(<DocumentType>[
-          DocumentType.housingCard,
-          DocumentType.nationalId,
-          DocumentType.rationCard,
-        ]);
-      case DocumentType.unknown:
-        return const DetectionPlan._(<DocumentType>[
-          DocumentType.housingCard,
-          DocumentType.nationalId,
-          DocumentType.rationCard,
-          DocumentType.passport,
-        ]);
+  factory DetectionPlan.forType(DocumentType requestedType) =>
+      DetectionPlan.forTypes(<DocumentType>[requestedType]);
+
+  factory DetectionPlan.forTypes(Iterable<DocumentType> requestedTypes) {
+    final expanded = <DocumentType>[];
+    for (final requestedType in requestedTypes) {
+      switch (requestedType) {
+        case DocumentType.a4Document:
+          // A4 is a full-frame mode and must remain exclusive.
+          return const DetectionPlan._(<DocumentType>[DocumentType.a4Document]);
+        case DocumentType.allDocuments:
+          expanded
+            ..add(DocumentType.housingCard)
+            ..add(DocumentType.nationalId)
+            ..add(DocumentType.rationCard);
+        case DocumentType.unknown:
+          expanded
+            ..add(DocumentType.housingCard)
+            ..add(DocumentType.nationalId)
+            ..add(DocumentType.rationCard)
+            ..add(DocumentType.passport);
+        case DocumentType.housingCard:
+        case DocumentType.nationalId:
+        case DocumentType.rationCard:
+        case DocumentType.passport:
+          expanded.add(requestedType);
+      }
     }
+
+    final uniqueTypes = <DocumentType>[];
+    for (final type in expanded) {
+      if (!uniqueTypes.contains(type)) uniqueTypes.add(type);
+    }
+    if (uniqueTypes.isEmpty) {
+      uniqueTypes.addAll(const <DocumentType>[
+        DocumentType.housingCard,
+        DocumentType.nationalId,
+        DocumentType.rationCard,
+        DocumentType.passport,
+      ]);
+    }
+    return DetectionPlan._(List<DocumentType>.unmodifiable(uniqueTypes));
   }
 
   final List<DocumentType> types;
+
+  DocumentType get resultType {
+    if (isA4Only) return DocumentType.a4Document;
+    return types.length == 1 ? types.first : DocumentType.allDocuments;
+  }
 
   List<int> get typeIndices =>
       List<int>.unmodifiable(types.map((type) => type.index));
@@ -305,6 +336,74 @@ class DocumentRegion {
   int get hashCode => Object.hash(left, top, right, bottom, area);
 }
 
+/// Maps detector coordinates back to the original decoded image.
+///
+/// The manual crop screen consumes source-image coordinates. Keeping this
+/// conversion as a pure function makes the resize contract explicit and
+/// prevents review proposals from being displayed at analysis-image offsets.
+DocumentRegion scaleDocumentRegionToSource(
+  DocumentRegion region, {
+  required int analysisWidth,
+  required int analysisHeight,
+  required int sourceWidth,
+  required int sourceHeight,
+}) {
+  if (analysisWidth <= 0 ||
+      analysisHeight <= 0 ||
+      sourceWidth <= 0 ||
+      sourceHeight <= 0) {
+    return region;
+  }
+  final scaleX = sourceWidth / analysisWidth;
+  final scaleY = sourceHeight / analysisHeight;
+  final left = _clampInt(
+    (region.left * scaleX).round(),
+    0,
+    math.max(0, sourceWidth - 1),
+  );
+  final top = _clampInt(
+    (region.top * scaleY).round(),
+    0,
+    math.max(0, sourceHeight - 1),
+  );
+  final right = _clampInt(
+    (region.right * scaleX).round(),
+    left + 1,
+    sourceWidth,
+  );
+  final bottom = _clampInt(
+    (region.bottom * scaleY).round(),
+    top + 1,
+    sourceHeight,
+  );
+  return DocumentRegion(
+    left: left,
+    top: top,
+    right: right,
+    bottom: bottom,
+    area: ((right - left) * (bottom - top)).toDouble(),
+    reason: region.reason,
+  );
+}
+
+List<DocumentRegion> scaleDocumentRegionsToSource(
+  Iterable<DocumentRegion> regions, {
+  required int analysisWidth,
+  required int analysisHeight,
+  required int sourceWidth,
+  required int sourceHeight,
+}) => List<DocumentRegion>.unmodifiable(
+  regions.map(
+    (region) => scaleDocumentRegionToSource(
+      region,
+      analysisWidth: analysisWidth,
+      analysisHeight: analysisHeight,
+      sourceWidth: sourceWidth,
+      sourceHeight: sourceHeight,
+    ),
+  ),
+);
+
 List<DocumentRegion> selectDistinctDocumentRegions(
   Iterable<DocumentRegion> candidates,
 ) {
@@ -478,6 +577,7 @@ class _DocumentCandidate {
     this.evidenceCount = 1,
     this.documentEvidence = 0,
     this.detectedType = DocumentType.unknown,
+    this.isAxisAligned = false,
   });
 
   final List<cv.Point> points;
@@ -509,11 +609,17 @@ class _DocumentCandidate {
   /// ration-card proposals without collapsing them into one requested type.
   final DocumentType detectedType;
 
+  /// Axis-aligned boxes are useful proposals, but they do not prove that the
+  /// visible outer boundary is the document boundary. They require stronger
+  /// independent evidence before automatic export.
+  final bool isAxisAligned;
+
   _DocumentCandidate copyWith({
     double? confidence,
     int? evidenceCount,
     double? documentEvidence,
     DocumentType? detectedType,
+    bool? isAxisAligned,
   }) {
     return _DocumentCandidate(
       points: points,
@@ -528,6 +634,7 @@ class _DocumentCandidate {
       evidenceCount: evidenceCount ?? this.evidenceCount,
       documentEvidence: documentEvidence ?? this.documentEvidence,
       detectedType: detectedType ?? this.detectedType,
+      isAxisAligned: isAxisAligned ?? this.isAxisAligned,
     );
   }
 
@@ -704,22 +811,59 @@ bool _candidateHasGreenTint(cv.Mat source, _DocumentCandidate candidate) {
 
   cv.Rect? rect;
   cv.Mat? roi;
-  cv.Scalar? average;
+  cv.Mat? hsv;
+  cv.Mat? greenMask;
+  cv.Mat? brightMask;
+  cv.Mat? saturatedMask;
+  cv.Mat? stableMask;
   try {
     rect = cv.Rect(left, top, width, height);
     roi = source.region(rect);
-    average = roi.mean();
-    // OpenCV stores decoded color images as BGR. The green housing card has
-    // a measurable green-channel dominance over both blue and red cards.
-    final blue = average.val1;
-    final green = average.val2;
-    final red = average.val3;
-    final greenDominance = green - ((red + blue) / 2);
-    return greenDominance >= 8 && green >= red * 1.04 && green >= blue * 1.04;
+    hsv = cv.cvtColor(roi, cv.COLOR_BGR2HSV);
+
+    // Use two hue bands because camera white-balance can move the Iraqi
+    // housing-card seal and body across the green/yellow-green boundary.
+    cv.Mat range(cv.Scalar lower, cv.Scalar upper) {
+      try {
+        return cv.inRangebyScalar(hsv!, lower, upper);
+      } finally {
+        lower.dispose();
+        upper.dispose();
+      }
+    }
+
+    final firstRange = range(cv.Scalar(28, 45, 35), cv.Scalar(92, 255, 255));
+    final secondRange = range(cv.Scalar(18, 65, 45), cv.Scalar(35, 255, 255));
+    try {
+      greenMask = cv.bitwiseOR(firstRange, secondRange);
+    } finally {
+      firstRange.dispose();
+      secondRange.dispose();
+    }
+
+    brightMask = range(cv.Scalar(0, 0, 28), cv.Scalar(179, 255, 255));
+    saturatedMask = range(cv.Scalar(0, 35, 35), cv.Scalar(179, 255, 255));
+    stableMask = cv.bitwiseAND(greenMask, brightMask);
+    final stableSaturated = cv.bitwiseAND(stableMask, saturatedMask);
+    try {
+      final area = math.max(1, width * height).toDouble();
+      final greenCoverage = cv.countNonZero(greenMask) / area;
+      final stableCoverage = cv.countNonZero(stableMask) / area;
+      final stableSaturatedCoverage = cv.countNonZero(stableSaturated) / area;
+      return greenCoverage >= 0.08 &&
+          stableCoverage >= 0.06 &&
+          stableSaturatedCoverage >= 0.035;
+    } finally {
+      stableSaturated.dispose();
+    }
   } finally {
-    average?.dispose();
-    roi?.dispose();
     rect?.dispose();
+    roi?.dispose();
+    hsv?.dispose();
+    greenMask?.dispose();
+    brightMask?.dispose();
+    saturatedMask?.dispose();
+    stableMask?.dispose();
   }
 }
 
@@ -783,6 +927,7 @@ _DocumentCandidate? _axisAlignedCandidateFromContour(
         profile: profile,
       ),
       detectedType: profile.type,
+      isAxisAligned: true,
     );
   } finally {
     bounds.dispose();
@@ -829,7 +974,15 @@ bool _isDuplicateRegion(DocumentRegion candidate, DocumentRegion accepted) {
 bool _isDuplicateCandidate(
   _DocumentCandidate candidate,
   _DocumentCandidate accepted,
-) => _isDuplicateRegion(candidate.region, accepted.region);
+) {
+  final candidateType = candidate.detectedType;
+  final acceptedType = accepted.detectedType;
+  final typesAreKnown =
+      candidateType != DocumentType.unknown &&
+      acceptedType != DocumentType.unknown;
+  if (typesAreKnown && candidateType != acceptedType) return false;
+  return _isDuplicateRegion(candidate.region, accepted.region);
+}
 
 String _candidateReviewReason(_DocumentCandidate candidate) {
   final reasons = <String>[];
@@ -841,6 +994,9 @@ String _candidateReviewReason(_DocumentCandidate candidate) {
   }
   if (candidate.documentEvidence < 0.25) {
     reasons.add('الدليل النوعي غير كافٍ');
+  }
+  if (candidate.isAxisAligned && candidate.evidenceCount < 2) {
+    reasons.add('حدود محورية تحتاج دعماً مستقلاً');
   }
   return reasons.isEmpty
       ? 'تحتاج مراجعة بسبب التقييم المركب'
@@ -910,6 +1066,24 @@ double _automaticAcceptanceThreshold(_DocumentDetectionProfile profile) {
     case DocumentType.unknown:
       return 0.60;
   }
+}
+
+bool _isAutomaticallyAcceptable(
+  _DocumentCandidate candidate,
+  _DocumentDetectionProfile profile,
+) {
+  if (_candidateQuality(candidate) < _automaticAcceptanceThreshold(profile)) {
+    return false;
+  }
+  // An axis-aligned rectangle is a proposal, not proof of the outer document
+  // boundary. Export it only after an independent mask or specialist signal
+  // supports it; otherwise preserve it for manual review.
+  if (candidate.isAxisAligned &&
+      candidate.evidenceCount < 2 &&
+      candidate.documentEvidence < 0.35) {
+    return false;
+  }
+  return true;
 }
 
 void _mergeCandidate(
@@ -1069,25 +1243,68 @@ double _housingAnchorEvidence({
   required double contourArea,
 }) {
   cv.Mat? roi;
-  cv.Scalar? average;
+  cv.Mat? hsv;
+  cv.Mat? strictGreen;
+  cv.Mat? relaxedGreen;
+  cv.Mat? combinedGreen;
+  cv.Scalar? hsvAverage;
   try {
     final boundingArea = math.max(1, bounds.width * bounds.height).toDouble();
     final fillRatio = (contourArea / boundingArea).clamp(0.0, 1.0).toDouble();
     roi = source.region(bounds);
-    average = roi.mean();
-    // The source is BGR. A valid housing seal has both measurable green
-    // dominance and a compact, filled component; isolated green text strokes
-    // or background noise score low on one or both signals.
-    final greenDominance = average.val2 - ((average.val1 + average.val3) / 2);
-    final dominanceScore = ((greenDominance - 8) / 18)
+    hsv = cv.cvtColor(roi, cv.COLOR_BGR2HSV);
+    hsvAverage = hsv.mean();
+
+    // Use two green ranges: the strict range rejects pale background noise,
+    // while the relaxed range recovers a seal affected by glare or exposure.
+    // The relaxed range is only supporting evidence; it cannot accept a crop
+    // without the compact contour and outer-boundary checks.
+    strictGreen = cv.inRangebyScalar(
+      hsv,
+      cv.Scalar(32, 48, 35),
+      cv.Scalar(88, 255, 255),
+    );
+    relaxedGreen = cv.inRangebyScalar(
+      hsv,
+      cv.Scalar(25, 24, 24),
+      cv.Scalar(96, 255, 255),
+    );
+    combinedGreen = cv.bitwiseOR(strictGreen, relaxedGreen);
+
+    final roiArea = math.max(1, roi.rows * roi.cols).toDouble();
+    final strictCoverage = (cv.countNonZero(strictGreen) / roiArea)
+        .clamp(0.0, 1.0)
+        .toDouble();
+    final combinedCoverage = (cv.countNonZero(combinedGreen) / roiArea)
+        .clamp(0.0, 1.0)
+        .toDouble();
+    final saturationScore = ((hsvAverage.val1 - 35) / 110)
+        .clamp(0.0, 1.0)
+        .toDouble();
+    final brightnessScore = ((hsvAverage.val2 - 35) / 150)
+        .clamp(0.0, 1.0)
+        .toDouble();
+    final strictCoverageScore = ((strictCoverage - 0.025) / 0.30)
+        .clamp(0.0, 1.0)
+        .toDouble();
+    final coverageScore = ((combinedCoverage - 0.04) / 0.42)
         .clamp(0.0, 1.0)
         .toDouble();
     final fillScore = ((fillRatio - 0.24) / 0.46).clamp(0.0, 1.0).toDouble();
-    return (dominanceScore * 0.70 + fillScore * 0.30)
+
+    return (strictCoverageScore * 0.35 +
+            coverageScore * 0.20 +
+            saturationScore * 0.15 +
+            brightnessScore * 0.10 +
+            fillScore * 0.20)
         .clamp(0.0, 1.0)
         .toDouble();
   } finally {
-    average?.dispose();
+    hsvAverage?.dispose();
+    combinedGreen?.dispose();
+    relaxedGreen?.dispose();
+    strictGreen?.dispose();
+    hsv?.dispose();
     roi?.dispose();
   }
 }
@@ -1109,6 +1326,8 @@ Future<List<_DocumentCandidate>> _housingCardStampCandidates({
   required bool Function() isCancelled,
 }) async {
   cv.Mat? hsv;
+  cv.Mat? strictSealMask;
+  cv.Mat? relaxedSealMask;
   cv.Mat? sealMask;
   cv.Mat? sealKernel;
   cv.Mat? sealClosed;
@@ -1117,11 +1336,17 @@ Future<List<_DocumentCandidate>> _housingCardStampCandidates({
   final candidates = <_DocumentCandidate>[];
   try {
     hsv = cv.cvtColor(source, cv.COLOR_BGR2HSV);
-    sealMask = cv.inRangebyScalar(
+    strictSealMask = cv.inRangebyScalar(
       hsv,
-      cv.Scalar(35, 30, 30),
-      cv.Scalar(80, 255, 255),
+      cv.Scalar(32, 48, 35),
+      cv.Scalar(88, 255, 255),
     );
+    relaxedSealMask = cv.inRangebyScalar(
+      hsv,
+      cv.Scalar(25, 24, 24),
+      cv.Scalar(96, 255, 255),
+    );
+    sealMask = cv.bitwiseOR(strictSealMask, relaxedSealMask);
     sealKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (51, 51));
     sealClosed = cv.morphologyEx(sealMask, cv.MORPH_CLOSE, sealKernel);
     final result = cv.findContours(
@@ -1222,6 +1447,8 @@ Future<List<_DocumentCandidate>> _housingCardStampCandidates({
     sealClosed?.dispose();
     sealKernel?.dispose();
     sealMask?.dispose();
+    relaxedSealMask?.dispose();
+    strictSealMask?.dispose();
     hsv?.dispose();
   }
   return candidates;
@@ -1786,12 +2013,17 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
   cv.Mat? broadKernel;
   cv.Mat? foregroundKernel;
   var candidates = <_DocumentCandidate>[];
+  var sourceWidth = 0;
+  var sourceHeight = 0;
+  var analysisWidth = 0;
+  var analysisHeight = 0;
   // Keep geometrically plausible proposals that fail only a visual/type gate.
   // They must remain available for manual review instead of disappearing before
   // the UI can offer a boundary suggestion.
   var reviewProposals = <_DocumentCandidate>[];
   final results = <String>[];
   var reviewCandidates = const <_DocumentCandidate>[];
+  var acceptedCandidates = const <_DocumentCandidate>[];
   final stageMilliseconds = <String, int>{};
   var peakMemoryBytes = ProcessInfo.currentRss;
   void recordStage(String name, Stopwatch stopwatch) {
@@ -1803,7 +2035,7 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
     cv.Mat image,
     double imageArea, {
     required _DocumentDetectionProfile profile,
-    int retrievalMode = cv.RETR_LIST,
+    int retrievalMode = cv.RETR_EXTERNAL,
     bool allowAxisAlignedFallback = false,
   }) async {
     final contourResult = cv.findContours(
@@ -1880,6 +2112,8 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
     // Keep the decoded source at its original resolution for the final warp.
     // All expensive vision operations run on a bounded analysis image, and
     // candidate coordinates are mapped back to the source before writing.
+    sourceWidth = source.cols;
+    sourceHeight = source.rows;
     const maximumAnalysisDimension = 1600;
     final resizeWatch = Stopwatch()..start();
     analysisSource = source;
@@ -1888,6 +2122,8 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
       final scale = maximumAnalysisDimension / largestDimension;
       analysisSource = cv.resize(source, (0, 0), fx: scale, fy: scale);
     }
+    analysisWidth = analysisSource.cols;
+    analysisHeight = analysisSource.rows;
     recordStage('resize', resizeWatch);
     final resizeTimeout = _stageTimeoutResult('resize', resizeWatch);
     if (resizeTimeout != null) return resizeTimeout;
@@ -2117,7 +2353,10 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
     final hasPassportCandidate = candidates.any(
       (candidate) => candidate.detectedType == DocumentType.passport,
     );
-    if (runPassportDetector && !hasPassportCandidate) {
+    final isPassportOnlyRequest =
+        detectionTypes.length == 1 &&
+        detectionTypes.first == DocumentType.passport;
+    if (runPassportDetector && isPassportOnlyRequest && !hasPassportCandidate) {
       final fullFrame = _fullFrameCandidateForPassport(
         source: analysisSource,
         profile: passportProfile,
@@ -2136,9 +2375,10 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
     );
     final lowConfidenceCandidates = candidates
         .where(
-          (candidate) =>
-              _candidateQuality(candidate) <
-              _automaticAcceptanceThreshold(profileForCandidate(candidate)),
+          (candidate) => !_isAutomaticallyAcceptable(
+            candidate,
+            profileForCandidate(candidate),
+          ),
         )
         .toList(growable: false);
     final reviewPool = <_DocumentCandidate>[
@@ -2149,11 +2389,12 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
       _selectDistinctCandidates(reviewPool),
       detectedDocumentCount: math.max(candidates.length, reviewPool.length),
     );
-    final acceptedCandidates = candidates
+    acceptedCandidates = candidates
         .where(
-          (candidate) =>
-              _candidateQuality(candidate) >=
-              _automaticAcceptanceThreshold(profileForCandidate(candidate)),
+          (candidate) => _isAutomaticallyAcceptable(
+            candidate,
+            profileForCandidate(candidate),
+          ),
         )
         .toList(growable: false);
 
@@ -2263,7 +2504,8 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
     recordStage('warp_write', cropWatch);
     final warpTimeout = _stageTimeoutResult('warp_write', cropWatch);
     if (warpTimeout != null) return warpTimeout;
-  } catch (_) {
+  } catch (error, stackTrace) {
+    _logScannerError('smart-crop-output', error, stackTrace);
     return const _SmartCropOutput(
       paths: <String>[],
       confidence: 0,
@@ -2295,17 +2537,23 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
     broadKernel?.dispose();
     foregroundKernel?.dispose();
   }
-  final qualityScores = candidates
+  final acceptedQualityScores = acceptedCandidates
       .map(_candidateQuality)
       .toList(growable: false);
-  final cropConfidence = qualityScores.isEmpty
-      ? 0.0
-      : (qualityScores.reduce((first, second) => first + second) /
-                qualityScores.length)
-            .clamp(0.0, 1.0)
-            .toDouble();
-  final reviewRegions = List<DocumentRegion>.unmodifiable(
+  final reviewQualityScores = reviewCandidates
+      .map(_candidateQuality)
+      .toList(growable: false);
+  final cropConfidence = acceptedQualityScores.isNotEmpty
+      ? acceptedQualityScores.reduce(math.min).clamp(0.0, 1.0).toDouble()
+      : reviewQualityScores.isNotEmpty
+      ? reviewQualityScores.reduce(math.max).clamp(0.0, 1.0).toDouble()
+      : 0.0;
+  final reviewRegions = scaleDocumentRegionsToSource(
     reviewCandidates.map((candidate) => candidate.region),
+    analysisWidth: analysisWidth,
+    analysisHeight: analysisHeight,
+    sourceWidth: sourceWidth,
+    sourceHeight: sourceHeight,
   );
   final reviewReason = reviewRegions.isEmpty
       ? ''
@@ -2340,7 +2588,8 @@ String _preprocessForOcrInIsolate(Map<String, dynamic> args) {
     final outputPath =
         '$tempPath/${TemporaryImageStore.uniqueJpegName('ocr_preprocessed_', suffix: '-$jobId')}';
     return cv.imwrite(outputPath, processed) ? outputPath : imagePath;
-  } catch (_) {
+  } catch (error, stackTrace) {
+    _logScannerError('ocr-preprocess', error, stackTrace);
     return imagePath;
   } finally {
     source?.dispose();
@@ -2656,9 +2905,12 @@ class ScannerService {
     }
   }
 
-  DocumentClassification _classificationForRequestedType(DocumentType type) {
-    final reason = type == DocumentType.allDocuments
-        ? 'تم اعتماد وضع البطاقة الموحدة لاكتشاف جميع المستمسكات في الصورة.'
+  DocumentClassification _classificationForPlan(DetectionPlan plan) {
+    final type = plan.resultType;
+    final reason = plan.contains(DocumentType.passport) && plan.types.length > 1
+        ? 'تم تشغيل كاشف الجواز مع الكواشف الأخرى بشكل مستقل.'
+        : type == DocumentType.allDocuments
+        ? 'تم تشغيل كواشف المستندات المحددة بشكل مستقل داخل الصورة.'
         : 'تم اعتماد نوع المستند المحدد من إعدادات المستخدم.';
     return DocumentClassification(
       type: type,
@@ -2672,6 +2924,7 @@ class ScannerService {
   Future<SmartScanResult> processSmartRecognition(
     File imageFile, {
     DocumentType? documentType,
+    List<DocumentType>? detectionTypes,
     ScanCancellationToken? cancellationToken,
   }) async {
     if (cancellationToken?.isCancelled ?? false) {
@@ -2685,7 +2938,10 @@ class ScannerService {
     }
 
     final requestedType = documentType ?? DocumentType.unknown;
-    if (requestedType == DocumentType.a4Document) {
+    final detectionPlan = detectionTypes == null
+        ? DetectionPlan.forType(requestedType)
+        : DetectionPlan.forTypes(detectionTypes);
+    if (detectionPlan.isA4Only) {
       if (!await imageFile.exists()) {
         return SmartScanResult(
           source: imageFile,
@@ -2707,7 +2963,7 @@ class ScannerService {
       return SmartScanResult(
         source: imageFile,
         files: List<File>.unmodifiable(<File>[imageFile]),
-        classification: _classificationForRequestedType(requestedType),
+        classification: _classificationForPlan(detectionPlan),
         status: SmartScanStatus.succeeded,
         message: 'تم اعتماد الصورة كاملة كورقة A4.',
         cropConfidence: 1,
@@ -2715,7 +2971,6 @@ class ScannerService {
       );
     }
 
-    final detectionPlan = DetectionPlan.forType(requestedType);
     await TemporaryImageStore.cleanupStale();
     final tempDirectory = await getTemporaryDirectory();
     final jobId = DateTime.now().microsecondsSinceEpoch.toString();
@@ -2746,7 +3001,8 @@ class ScannerService {
         status: SmartScanStatus.manualReviewRequired,
         message: 'انتهت مهلة القص الذكي؛ يُرجى تحديد المستند يدوياً.',
       );
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _logScannerError('smart-recognition', error, stackTrace);
       await TemporaryImageStore.deleteManagedWithMarker(jobId);
       return SmartScanResult(
         source: imageFile,
@@ -2819,7 +3075,11 @@ class ScannerService {
                 requiresManualReview: true,
               ),
             )
-          : _classificationForRequestedType(requestedType);
+          : _classificationForPlan(
+              detectionTypes == null
+                  ? DetectionPlan.forType(requestedType)
+                  : detectionPlan,
+            );
     } on _ScanWorkerCancelled {
       for (final file in files) {
         await TemporaryImageStore.deleteIfManaged(file);
@@ -2860,6 +3120,7 @@ class ScannerService {
   Future<SmartScanBatchResult> processBatchSmartRecognition(
     List<File> imageFiles, {
     DocumentType? documentType,
+    List<DocumentType>? detectionTypes,
     void Function(int current, int total)? onProgress,
     ScanCancellationToken? cancellationToken,
   }) async {
@@ -2878,6 +3139,7 @@ class ScannerService {
           final result = await processSmartRecognition(
             source,
             documentType: documentType,
+            detectionTypes: detectionTypes,
             cancellationToken: activeToken,
           );
           results[source] = result;
@@ -2885,8 +3147,9 @@ class ScannerService {
               activeToken.isCancelled) {
             return;
           }
-        } catch (_) {
+        } catch (error, stackTrace) {
           if (activeToken.isCancelled) return;
+          _logScannerError('batch-smart-recognition', error, stackTrace);
           results[source] = SmartScanResult(
             source: source,
             files: const <File>[],
@@ -2976,7 +3239,8 @@ class ScannerService {
       return _classifyRecognizedText(recognized.text);
     } on _ScanWorkerCancelled {
       rethrow;
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _logScannerError('classify-document', error, stackTrace);
       return const DocumentClassification(
         type: DocumentType.unknown,
         normalizedText: '',
