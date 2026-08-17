@@ -185,6 +185,15 @@ void main() {
     expect(state.selectedDocumentType, DocumentType.housingCard);
   });
 
+  test(
+    'multiple selected card types use independent all-document discovery',
+    () {
+      const state = AppState(hasHousingCard: true, hasRationCard: true);
+
+      expect(state.selectedDocumentType, DocumentType.allDocuments);
+    },
+  );
+
   test('toggles A4 through AppStateNotifier immutably', () {
     final container = ProviderContainer();
     addTearDown(container.dispose);

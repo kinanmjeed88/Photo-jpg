@@ -15,6 +15,54 @@ import 'temporary_image_store.dart';
 
 enum SmartScanStatus { succeeded, manualReviewRequired, failed, cancelled }
 
+/// Describes the independent detector passes that are allowed for one image.
+///
+/// A requested UI type is intentionally converted into a plan before the
+/// isolate starts. This prevents one specialist (notably passport OCR) from
+/// replacing a multi-document request and makes every detector contribute
+/// candidates to the same confidence and review pipeline.
+class DetectionPlan {
+  const DetectionPlan._(this.types);
+
+  factory DetectionPlan.forType(DocumentType requestedType) {
+    switch (requestedType) {
+      case DocumentType.a4Document:
+        return const DetectionPlan._(<DocumentType>[DocumentType.a4Document]);
+      case DocumentType.housingCard:
+        return const DetectionPlan._(<DocumentType>[DocumentType.housingCard]);
+      case DocumentType.passport:
+        return const DetectionPlan._(<DocumentType>[DocumentType.passport]);
+      case DocumentType.nationalId:
+        return const DetectionPlan._(<DocumentType>[DocumentType.nationalId]);
+      case DocumentType.rationCard:
+        return const DetectionPlan._(<DocumentType>[DocumentType.rationCard]);
+      case DocumentType.allDocuments:
+        return const DetectionPlan._(<DocumentType>[
+          DocumentType.housingCard,
+          DocumentType.nationalId,
+          DocumentType.rationCard,
+        ]);
+      case DocumentType.unknown:
+        return const DetectionPlan._(<DocumentType>[
+          DocumentType.housingCard,
+          DocumentType.nationalId,
+          DocumentType.rationCard,
+          DocumentType.passport,
+        ]);
+    }
+  }
+
+  final List<DocumentType> types;
+
+  List<int> get typeIndices =>
+      List<int>.unmodifiable(types.map((type) => type.index));
+
+  bool contains(DocumentType type) => types.contains(type);
+
+  bool get isA4Only =>
+      types.length == 1 && types.first == DocumentType.a4Document;
+}
+
 class ScanCancellationToken {
   bool _isCancelled = false;
   final Set<void Function()> _listeners = <void Function()>{};
@@ -403,6 +451,19 @@ DocumentType _documentTypeFromIndex(Object? value) {
   return DocumentType.values[value];
 }
 
+List<DocumentType> _detectionTypesFromArgs(Map<String, dynamic> args) {
+  final rawTypes = args['detectionTypeIndices'];
+  if (rawTypes is List) {
+    final types = rawTypes
+        .map(_documentTypeFromIndex)
+        .where((type) => type != DocumentType.unknown)
+        .toSet()
+        .toList(growable: false);
+    if (types.isNotEmpty) return types;
+  }
+  return <DocumentType>[_documentTypeFromIndex(args['documentTypeIndex'])];
+}
+
 class _DocumentCandidate {
   const _DocumentCandidate({
     required this.points,
@@ -416,6 +477,7 @@ class _DocumentCandidate {
     this.confidence = 0,
     this.evidenceCount = 1,
     this.documentEvidence = 0,
+    this.detectedType = DocumentType.unknown,
   });
 
   final List<cv.Point> points;
@@ -442,10 +504,16 @@ class _DocumentCandidate {
   /// geometric profile.
   final double documentEvidence;
 
+  /// The detector profile that produced this candidate. Keeping this metadata
+  /// with the candidate allows one image to contain housing, unified, and
+  /// ration-card proposals without collapsing them into one requested type.
+  final DocumentType detectedType;
+
   _DocumentCandidate copyWith({
     double? confidence,
     int? evidenceCount,
     double? documentEvidence,
+    DocumentType? detectedType,
   }) {
     return _DocumentCandidate(
       points: points,
@@ -459,6 +527,7 @@ class _DocumentCandidate {
       confidence: confidence ?? this.confidence,
       evidenceCount: evidenceCount ?? this.evidenceCount,
       documentEvidence: documentEvidence ?? this.documentEvidence,
+      detectedType: detectedType ?? this.detectedType,
     );
   }
 
@@ -586,6 +655,7 @@ _DocumentCandidate? _candidateFromContour(
         height: height,
         profile: profile,
       ),
+      detectedType: profile.type,
     );
   } finally {
     approximation?.dispose();
@@ -712,6 +782,7 @@ _DocumentCandidate? _axisAlignedCandidateFromContour(
         height: bounds.height.toDouble(),
         profile: profile,
       ),
+      detectedType: profile.type,
     );
   } finally {
     bounds.dispose();
@@ -1112,6 +1183,7 @@ Future<List<_DocumentCandidate>> _housingCardStampCandidates({
           bottom: by.toInt() + height.toInt(),
           confidence: 0.84 + anchorEvidence * 0.11,
           documentEvidence: anchorEvidence,
+          detectedType: DocumentType.housingCard,
         );
         // When one large green anchor occupies the centre of the frame, the
         // page itself is usually the complete capture and its outer border is
@@ -1195,6 +1267,7 @@ _DocumentCandidate? _fullFrameHousingCandidate({
     // unique anchor. It is lower than a verified four-edge rectangle but
     // high enough to avoid a destructive face/logo crop.
     confidence: 0.87,
+    detectedType: DocumentType.housingCard,
   );
 }
 
@@ -1431,6 +1504,7 @@ _DocumentCandidate? _housingPageCandidateFromLines({
       right: rightInt,
       bottom: bottomInt,
       confidence: confidence,
+      detectedType: DocumentType.housingCard,
     );
   } finally {
     lines?.dispose();
@@ -1576,6 +1650,7 @@ _DocumentCandidate? _housingPageCandidateAroundAnchor({
         right: right,
         bottom: bottom,
         confidence: (0.60 + score * 0.35).clamp(0.0, 0.95).toDouble(),
+        detectedType: DocumentType.housingCard,
       );
     }
   }
@@ -1625,6 +1700,7 @@ _DocumentCandidate? _fullFrameCandidateForPassport({
     confidence: 0.90,
     evidenceCount: 2,
     documentEvidence: 1.0,
+    detectedType: DocumentType.passport,
   );
 }
 
@@ -1655,8 +1731,22 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
   final imagePath = args['imagePath'] as String;
   final tempPath = args['tempPath'] as String;
   final jobId = args['jobId'] as String? ?? 'legacy';
-  final requestedType = _documentTypeFromIndex(args['documentTypeIndex']);
-  final profile = _detectionProfileFor(requestedType);
+  final detectionTypes = _detectionTypesFromArgs(args);
+  final runGenericDetector = detectionTypes.any(
+    (type) =>
+        type == DocumentType.allDocuments ||
+        type == DocumentType.nationalId ||
+        type == DocumentType.rationCard,
+  );
+  final runHousingDetector = detectionTypes.contains(DocumentType.housingCard);
+  final runGeometricDetector = runGenericDetector || runHousingDetector;
+  final runPassportDetector = detectionTypes.contains(DocumentType.passport);
+  final genericProfile = _detectionProfileFor(
+    detectionTypes.length > 1
+        ? DocumentType.allDocuments
+        : detectionTypes.first,
+  );
+  final passportProfile = _detectionProfileFor(DocumentType.passport);
   if (isCancelled?.call() ?? false) {
     return const _SmartCropOutput(
       paths: <String>[],
@@ -1665,7 +1755,8 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
       reviewReason: 'ألغيت المعالجة قبل بدء الكشف.',
     );
   }
-  if (requestedType == DocumentType.a4Document) {
+  if (detectionTypes.length == 1 &&
+      detectionTypes.first == DocumentType.a4Document) {
     return _SmartCropOutput(
       paths: <String>[imagePath],
       confidence: 1,
@@ -1711,6 +1802,7 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
   Future<bool> collectCandidates(
     cv.Mat image,
     double imageArea, {
+    required _DocumentDetectionProfile profile,
     int retrievalMode = cv.RETR_LIST,
     bool allowAxisAlignedFallback = false,
   }) async {
@@ -1741,8 +1833,9 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
                   gray: gray,
                   candidate: rawCandidate,
                 ),
+                detectedType: DocumentType.passport,
               )
-            : rawCandidate;
+            : rawCandidate.copyWith(detectedType: profile.type);
         final passesGeometryGate = _isLikelyDocumentCandidate(
           source: image,
           candidate: candidate,
@@ -1818,8 +1911,7 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
     );
     if (preprocessingTimeout != null) return preprocessingTimeout;
     final detectionWatch = Stopwatch()..start();
-    if (requestedType == DocumentType.housingCard ||
-        requestedType == DocumentType.allDocuments) {
+    if (runHousingDetector) {
       final housingProfile = _detectionProfileFor(DocumentType.housingCard);
       final stampCandidates = await _housingCardStampCandidates(
         source: analysisSource,
@@ -1835,25 +1927,11 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
           reviewReason: 'ألغيت المعالجة أثناء كشف بطاقة السكن.',
         );
       }
-      if (requestedType == DocumentType.housingCard) {
-        if (stampCandidates.isEmpty) {
-          return const _SmartCropOutput(
-            paths: <String>[],
-            confidence: 0,
-            detectedDocumentCount: 0,
-            reviewReason: 'لم يُعثر على مرساة موثوقة لبطاقة السكن.',
-          );
-        }
-        for (final candidate in stampCandidates) {
-          _mergeCandidate(candidates, candidate);
-        }
-      } else {
-        for (final candidate in stampCandidates) {
-          _mergeCandidate(candidates, candidate);
-        }
+      for (final candidate in stampCandidates) {
+        _mergeCandidate(candidates, candidate);
       }
     }
-    if (requestedType != DocumentType.housingCard) {
+    if (runGeometricDetector || runPassportDetector) {
       // Multiple complementary proposal masks are required for a sheet that
       // contains several cards: some card borders are sharp while others have
       // low contrast against the sheet. Every proposal still has to pass the
@@ -1905,8 +1983,8 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
       // blue/lilac unified cards in a light sheet. It produces one external
       // component per card in both portrait and landscape captures, while the
       // green-tint gate excludes the housing form from the national-ID type.
-      if (requestedType == DocumentType.nationalId ||
-          requestedType == DocumentType.allDocuments) {
+      if (detectionTypes.contains(DocumentType.nationalId) ||
+          detectionTypes.contains(DocumentType.allDocuments)) {
         hsv = cv.cvtColor(analysisSource, cv.COLOR_BGR2HSV);
         final saturationLower = cv.Scalar(0, 35, 50);
         final saturationUpper = cv.Scalar(179, 255, 255);
@@ -1945,6 +2023,7 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
         if (!await collectCandidates(
           saturatedOpen,
           imageArea,
+          profile: genericProfile,
           retrievalMode: cv.RETR_EXTERNAL,
           allowAxisAlignedFallback: true,
         )) {
@@ -1957,21 +2036,74 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
         }
       }
 
-      if (!await collectCandidates(edgeClosed, imageArea) ||
-          !await collectCandidates(sensitiveEdgeClosed, imageArea) ||
-          !await collectCandidates(thresholdClosed, imageArea) ||
-          !await collectCandidates(sensitiveThresholdClosed, imageArea) ||
-          !await collectCandidates(
-            foregroundClosed,
-            imageArea,
-            retrievalMode: cv.RETR_EXTERNAL,
-            allowAxisAlignedFallback: true,
-          )) {
+      if (runGeometricDetector &&
+          (!await collectCandidates(
+                edgeClosed,
+                imageArea,
+                profile: genericProfile,
+              ) ||
+              !await collectCandidates(
+                sensitiveEdgeClosed,
+                imageArea,
+                profile: genericProfile,
+              ) ||
+              !await collectCandidates(
+                thresholdClosed,
+                imageArea,
+                profile: genericProfile,
+              ) ||
+              !await collectCandidates(
+                sensitiveThresholdClosed,
+                imageArea,
+                profile: genericProfile,
+              ) ||
+              !await collectCandidates(
+                foregroundClosed,
+                imageArea,
+                profile: genericProfile,
+                retrievalMode: cv.RETR_EXTERNAL,
+                allowAxisAlignedFallback: true,
+              ))) {
         return const _SmartCropOutput(
           paths: <String>[],
           confidence: 0,
           detectedDocumentCount: 0,
           reviewReason: 'لم يُعثر على حدود مستند موثوقة.',
+        );
+      }
+      if (runPassportDetector &&
+          (!await collectCandidates(
+                edgeClosed,
+                imageArea,
+                profile: passportProfile,
+              ) ||
+              !await collectCandidates(
+                sensitiveEdgeClosed,
+                imageArea,
+                profile: passportProfile,
+              ) ||
+              !await collectCandidates(
+                thresholdClosed,
+                imageArea,
+                profile: passportProfile,
+              ) ||
+              !await collectCandidates(
+                sensitiveThresholdClosed,
+                imageArea,
+                profile: passportProfile,
+              ) ||
+              !await collectCandidates(
+                foregroundClosed,
+                imageArea,
+                profile: passportProfile,
+                retrievalMode: cv.RETR_EXTERNAL,
+                allowAxisAlignedFallback: true,
+              ))) {
+        return const _SmartCropOutput(
+          paths: <String>[],
+          confidence: 0,
+          detectedDocumentCount: 0,
+          reviewReason: 'ألغيت المعالجة أثناء تحليل صفحة الجواز.',
         );
       }
     }
@@ -1982,21 +2114,31 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
     // A flat passport scan with no visible outer border produces no geometric
     // candidate at all. The full-frame fallback is the faithful crop in that
     // case: the document genuinely covers the whole frame.
-    if (requestedType == DocumentType.passport && candidates.isEmpty) {
+    final hasPassportCandidate = candidates.any(
+      (candidate) => candidate.detectedType == DocumentType.passport,
+    );
+    if (runPassportDetector && !hasPassportCandidate) {
       final fullFrame = _fullFrameCandidateForPassport(
         source: analysisSource,
-        profile: profile,
+        profile: passportProfile,
       );
       if (fullFrame != null) candidates.add(fullFrame);
     }
 
     candidates = _selectDistinctCandidates(candidates);
 
-    final automaticAcceptanceThreshold = _automaticAcceptanceThreshold(profile);
+    _DocumentDetectionProfile profileForCandidate(
+      _DocumentCandidate candidate,
+    ) => _detectionProfileFor(
+      candidate.detectedType == DocumentType.unknown
+          ? genericProfile.type
+          : candidate.detectedType,
+    );
     final lowConfidenceCandidates = candidates
         .where(
           (candidate) =>
-              _candidateQuality(candidate) < automaticAcceptanceThreshold,
+              _candidateQuality(candidate) <
+              _automaticAcceptanceThreshold(profileForCandidate(candidate)),
         )
         .toList(growable: false);
     final reviewPool = <_DocumentCandidate>[
@@ -2010,7 +2152,8 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
     final acceptedCandidates = candidates
         .where(
           (candidate) =>
-              _candidateQuality(candidate) >= automaticAcceptanceThreshold,
+              _candidateQuality(candidate) >=
+              _automaticAcceptanceThreshold(profileForCandidate(candidate)),
         )
         .toList(growable: false);
 
@@ -2410,7 +2553,7 @@ class ScannerService {
     required File imageFile,
     required String tempPath,
     required String jobId,
-    required DocumentType documentType,
+    required DetectionPlan detectionPlan,
     required ScanCancellationToken token,
   }) async {
     if (token.isCancelled) throw const _ScanWorkerCancelled();
@@ -2494,7 +2637,8 @@ class ScannerService {
           'imagePath': imageFile.path,
           'tempPath': tempPath,
           'jobId': jobId,
-          'documentTypeIndex': documentType.index,
+          'documentTypeIndex': detectionPlan.types.first.index,
+          'detectionTypeIndices': detectionPlan.typeIndices,
           'resultPort': resultPort.sendPort,
         },
         errorsAreFatal: false,
@@ -2571,18 +2715,7 @@ class ScannerService {
       );
     }
 
-    var detectionType = requestedType;
-    if (requestedType == DocumentType.allDocuments &&
-        !(cancellationToken?.isCancelled ?? false)) {
-      final preliminaryType = await _detectPassportBeforeMultiCrop(
-        imageFile,
-        cancellationToken: cancellationToken,
-      );
-      if (preliminaryType == DocumentType.passport) {
-        detectionType = DocumentType.passport;
-      }
-    }
-
+    final detectionPlan = DetectionPlan.forType(requestedType);
     await TemporaryImageStore.cleanupStale();
     final tempDirectory = await getTemporaryDirectory();
     final jobId = DateTime.now().microsecondsSinceEpoch.toString();
@@ -2592,7 +2725,7 @@ class ScannerService {
         imageFile: imageFile,
         tempPath: tempDirectory.path,
         jobId: jobId,
-        documentType: detectionType,
+        detectionPlan: detectionPlan,
         token: cancellationToken ?? ScanCancellationToken(),
       );
     } on _ScanWorkerCancelled {
@@ -2671,10 +2804,7 @@ class ScannerService {
 
     DocumentClassification classification;
     try {
-      final shouldClassifyOutput =
-          requestedType == DocumentType.unknown ||
-          (requestedType == DocumentType.allDocuments &&
-              detectionType == DocumentType.passport);
+      final shouldClassifyOutput = requestedType == DocumentType.unknown;
       classification = shouldClassifyOutput
           ? await classifyDocument(
               files.first,
@@ -2725,34 +2855,6 @@ class ScannerService {
       manualReviewRegions: cropOutput.reviewRegions,
       performanceMetrics: cropOutput.performanceMetrics,
     );
-  }
-
-  Future<DocumentType?> _detectPassportBeforeMultiCrop(
-    File imageFile, {
-    ScanCancellationToken? cancellationToken,
-  }) async {
-    if (!await imageFile.exists() ||
-        (cancellationToken?.isCancelled ?? false)) {
-      return null;
-    }
-    try {
-      final classification = await classifyDocument(
-        imageFile,
-        cancellationToken: cancellationToken,
-      ).timeout(_classificationTimeout);
-      if (classification.type == DocumentType.passport &&
-          classification.confidence >= 0.80 &&
-          !(cancellationToken?.isCancelled ?? false)) {
-        return DocumentType.passport;
-      }
-    } on _ScanWorkerCancelled {
-      return null;
-    } on TimeoutException {
-      return null;
-    } catch (_) {
-      return null;
-    }
-    return null;
   }
 
   Future<SmartScanBatchResult> processBatchSmartRecognition(

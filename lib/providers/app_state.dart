@@ -609,7 +609,16 @@ class AppState {
 
   DocumentType get selectedDocumentType {
     if (hasA4Document) return DocumentType.a4Document;
-    if (hasNationalId) return DocumentType.allDocuments;
+
+    final selectedCardTypes = <bool>[
+      hasNationalId,
+      hasHousingCard,
+      hasRationCard,
+      hasPassport,
+    ].where((selected) => selected).length;
+    if (selectedCardTypes > 1 || hasNationalId) {
+      return DocumentType.allDocuments;
+    }
     if (hasHousingCard) return DocumentType.housingCard;
     if (hasRationCard) return DocumentType.rationCard;
     if (hasPassport) return DocumentType.passport;

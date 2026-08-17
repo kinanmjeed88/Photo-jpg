@@ -5,6 +5,40 @@ import 'package:doc_scanner_app/services/scanner_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  group('DetectionPlan', () {
+    test('allDocuments keeps independent housing and card detector passes', () {
+      final plan = DetectionPlan.forType(DocumentType.allDocuments);
+
+      expect(
+        plan.types,
+        containsAll(<DocumentType>[
+          DocumentType.housingCard,
+          DocumentType.nationalId,
+          DocumentType.rationCard,
+        ]),
+      );
+      expect(plan.contains(DocumentType.passport), isFalse);
+      expect(plan.isA4Only, isFalse);
+    });
+
+    test(
+      'passport remains a passport-only plan without preemption side effects',
+      () {
+        final plan = DetectionPlan.forType(DocumentType.passport);
+
+        expect(plan.types, <DocumentType>[DocumentType.passport]);
+        expect(plan.typeIndices, <int>[DocumentType.passport.index]);
+      },
+    );
+
+    test('A4 remains a single full-frame plan', () {
+      final plan = DetectionPlan.forType(DocumentType.a4Document);
+
+      expect(plan.types, <DocumentType>[DocumentType.a4Document]);
+      expect(plan.isA4Only, isTrue);
+    });
+  });
+
   group('ScanCancellationToken', () {
     test('notifies listeners once and remains idempotent', () {
       final token = ScanCancellationToken();
