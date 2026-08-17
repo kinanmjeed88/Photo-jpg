@@ -123,6 +123,7 @@ class SmartScanResult {
   /// review, not a full-image fallback.
   bool get requiresManualFallback =>
       files.isEmpty &&
+      manualReviewRegions.isEmpty &&
       (status == SmartScanStatus.manualReviewRequired ||
           status == SmartScanStatus.failed ||
           classification.requiresManualReview);
@@ -1694,6 +1695,10 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
   cv.Mat? broadKernel;
   cv.Mat? foregroundKernel;
   var candidates = <_DocumentCandidate>[];
+  // Keep geometrically plausible proposals that fail only a visual/type gate.
+  // They must remain available for manual review instead of disappearing before
+  // the UI can offer a boundary suggestion.
+  var reviewProposals = <_DocumentCandidate>[];
   final results = <String>[];
   var reviewCandidates = const <_DocumentCandidate>[];
   final stageMilliseconds = <String, int>{};
@@ -1738,12 +1743,21 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
                 ),
               )
             : rawCandidate;
-        if (!_isLikelyDocumentCandidate(
-              source: image,
-              candidate: candidate,
-              profile: profile,
-            ) ||
-            !_matchesVisualProfile(analysisSource!, candidate, profile)) {
+        final passesGeometryGate = _isLikelyDocumentCandidate(
+          source: image,
+          candidate: candidate,
+          profile: profile,
+        );
+        final passesVisualGate = _matchesVisualProfile(
+          analysisSource!,
+          candidate,
+          profile,
+        );
+        if (!passesGeometryGate) continue;
+        if (!passesVisualGate) {
+          // A visually ambiguous but geometrically credible region is exactly
+          // what the manual crop screen needs. Do not silently discard it.
+          _mergeCandidate(reviewProposals, candidate);
           continue;
         }
         _mergeCandidate(candidates, candidate);
@@ -1985,9 +1999,13 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
               _candidateQuality(candidate) < automaticAcceptanceThreshold,
         )
         .toList(growable: false);
+    final reviewPool = <_DocumentCandidate>[
+      ...lowConfidenceCandidates,
+      ...reviewProposals,
+    ];
     reviewCandidates = _selectReviewCandidates(
-      lowConfidenceCandidates,
-      detectedDocumentCount: candidates.length,
+      _selectDistinctCandidates(reviewPool),
+      detectedDocumentCount: math.max(candidates.length, reviewPool.length),
     );
     final acceptedCandidates = candidates
         .where(
@@ -2152,7 +2170,7 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
   return _SmartCropOutput(
     paths: List<String>.unmodifiable(results),
     confidence: cropConfidence,
-    detectedDocumentCount: candidates.length,
+    detectedDocumentCount: math.max(candidates.length, reviewCandidates.length),
     reviewReason: reviewReason,
     reviewRegions: reviewRegions,
     performanceMetrics: ScanPerformanceMetrics(

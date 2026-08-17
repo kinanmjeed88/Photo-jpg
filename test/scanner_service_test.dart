@@ -140,6 +140,40 @@ void main() {
   });
 
   test(
+    'empty accepted output with review regions stays a partial manual review',
+    () {
+      final result = SmartScanResult(
+        source: File('/tmp/source.jpg'),
+        files: const <File>[],
+        classification: const DocumentClassification(
+          type: DocumentType.nationalId,
+          normalizedText: '',
+          confidence: 0,
+          reason: 'Boundary proposals need review',
+          requiresManualReview: false,
+        ),
+        status: SmartScanStatus.manualReviewRequired,
+        message: 'Review proposed boundaries',
+        detectedDocumentCount: 5,
+        manualReviewRegions: <DocumentRegion>[
+          DocumentRegion(
+            left: 10,
+            top: 20,
+            right: 210,
+            bottom: 120,
+            area: 20000,
+            reason: 'حدود تحتاج إلى تأكيد',
+          ),
+        ],
+      );
+
+      expect(result.requiresManualFallback, isFalse);
+      expect(result.requiresCropReview, isTrue);
+      expect(result.manualReviewRegions, hasLength(1));
+    },
+  );
+
+  test(
     'A successful high-confidence crop does not require manual fallback',
     () {
       final result = SmartScanResult(

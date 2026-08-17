@@ -165,10 +165,25 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
         final result = smartResult.results[sourceFile];
         if (result == null || result.files.isEmpty) {
           if (!smartResult.wasCancelled) {
-            manualFallbackSources.add(sourceFile);
-            manualFallbackTypes[sourceFile] = appState.selectedDocumentType;
+            final reviewRegions =
+                result?.manualReviewRegions ?? const <DocumentRegion>[];
+            if (reviewRegions.isNotEmpty) {
+              // Preserve geometrically valid but low-confidence proposals even
+              // when no crop passed automatic acceptance. The manual screen
+              // must receive these regions instead of opening an empty canvas.
+              partialReviewSources[sourceFile] = reviewRegions;
+              final detectedType = result!.classification.type;
+              partialReviewTypes[sourceFile] =
+                  detectedType == DocumentType.unknown
+                  ? appState.selectedDocumentType
+                  : detectedType;
+              requiresCropReview = true;
+            } else {
+              manualFallbackSources.add(sourceFile);
+              manualFallbackTypes[sourceFile] = appState.selectedDocumentType;
+            }
           }
-          requiresCropReview |= result?.requiresManualFallback ?? true;
+          requiresCropReview |= result?.requiresCropReview ?? true;
           continue;
         }
         requiresClassificationReview |=
