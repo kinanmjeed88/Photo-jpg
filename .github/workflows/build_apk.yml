@@ -17,7 +17,10 @@ permissions:
 jobs:
   verify:
     name: Analyze, test and build
-    runs-on: ubuntu-latest
+    # Pinned on purpose: `ubuntu-latest` is migrating and jobs were repeatedly
+    # left unacquired on it ("The job was not acquired by Runner of type hosted
+    # even after multiple attempts"), while a pinned image is reproducible.
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout repository
