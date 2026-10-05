@@ -691,7 +691,8 @@ API ≤ 29، و`hasAccess()` في `gal` يتجاهل أي إذن آخر. **ال�
 
 | الحدث | الرابط |
 | --- | --- |
-| سير العمل الحقيقي (pub get/format/analyze/test/build) على شجرة التسليم | `https://github.com/kinanmjeed88/Photo-jpg/actions/runs/37348686017` (نجح، 11m 0s) |
+| سير العمل الحقيقي (pub get/format/analyze/test/build) على شجرة التسليم **بعد إزالة الملف المؤقت** | `https://github.com/kinanmjeed88/Photo-jpg/actions/runs/37351640946` (نجح: «Install packages» ✅ «Verify formatting» ✅ «Static analysis» ✅ «Unit and widget tests» ✅ «Build release APK» ✅) |
+| سير العمل الحقيقي قبل خطوة التنظيف الأخيرة | `https://github.com/kinanmjeed88/Photo-jpg/actions/runs/37348686017` (نجح، 11m 0s) |
 | **جمع المخرجات الخمس كاملة للنص الحرفي أعلاه** | `https://github.com/kinanmjeed88/Photo-jpg/actions/runs/37350356813` (نجح) |
 | التشخيص الأول (قبل الإصلاحات) | `https://github.com/kinanmjeed88/Photo-jpg/actions/runs/37345474546` |
 | PR المفتوح من الفرع نحو `main` (غير مدموج) | `https://github.com/kinanmjeed88/Photo-jpg/pull/93` |
@@ -700,6 +701,7 @@ API ≤ 29، و`hasAccess()` في `gal` يتجاهل أي إذن آخر. **ال�
 > الشجرة (هو الأداة التي تجمع المخرجات). الفرق الوحيد بين تلك الشجرة وشجرة التسليم هو وجود
 > ذلك الملف المؤقت ثم حذفه + نصوص هذا التقرير؛ **لا سطر شيفرة Dart أو Kotlin أو إعداد بناء
 > يختلف** — وقد أُكِّد ذلك بتشغيل سير العمل الحقيقي على الشجرة الخالية منه (شاهد الجدول أعلاه).
+> وأي تعديل لاحق على هذا التقرير هو تعديل **نصوص فقط** ولا يمسّ الشيفرة أو إعدادات البناء.
 > الحالة المعلنة هي حالة **الفرع** فقط؛ `main` لم يُمسّ، ولا وُجد Release أو Tag.
 
 ### 7.4 ما كشفه البناء الحقيقي فعلياً وأُصلح (دورة كاملة، لا ترقيع)
