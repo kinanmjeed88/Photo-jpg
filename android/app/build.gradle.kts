@@ -7,23 +7,67 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// ---------------------------------------------------------------------------
+// Release signing
+//
+// Secrets are resolved in this order:
+//   1. environment variables (CI / local shell, e.g. `PHOTOJPG_STORE_PASSWORD`)
+//   2. android/key.properties (git-ignored local file)
+//
+// Nothing is read from the repository and *no* build is aborted while Gradle
+// configures the project: a checkout without signing material still builds a
+// release APK signed with the debug key so that `flutter build apk` and the CI
+// workflow keep working. The warning makes the resulting artifact obvious.
+// ---------------------------------------------------------------------------
 val signingPropertiesFile = rootProject.file("key.properties")
-if (!signingPropertiesFile.isFile) {
-    throw GradleException(
-        "Missing android/key.properties. Create it from android/key.properties.example " +
-            "before building a release APK.",
-    )
+val signingProperties = Properties().apply {
+    if (signingPropertiesFile.isFile) {
+        signingPropertiesFile.inputStream().use(::load)
+    }
 }
 
-val signingProperties = Properties().apply {
-    signingPropertiesFile.inputStream().use(::load)
+fun signingValue(propertyName: String, environmentName: String): String? {
+    val environment = System.getenv(environmentName)
+    if (!environment.isNullOrBlank()) return environment
+    val stored = signingProperties.getProperty(propertyName)
+    return stored?.takeIf { it.isNotBlank() }
 }
-val signingStoreFile = rootProject.file(
-    signingProperties.getProperty("storeFile")
-        ?: throw GradleException("Missing storeFile in android/key.properties"),
-)
-if (!signingStoreFile.isFile) {
-    throw GradleException("Signing keystore not found: ${signingStoreFile.path}")
+
+val releaseStoreFile = signingValue("storeFile", "PHOTOJPG_STORE_FILE")
+val releaseStorePassword = signingValue("storePassword", "PHOTOJPG_STORE_PASSWORD")
+val releaseKeyAlias = signingValue("keyAlias", "PHOTOJPG_KEY_ALIAS")
+val releaseKeyPassword = signingValue("keyPassword", "PHOTOJPG_KEY_PASSWORD")
+
+val resolvedKeystore =
+    releaseStoreFile?.let { rootProject.file(it) }?.takeIf { it.isFile }
+
+// Values that were supplied but are unusable are a configuration error and must
+// fail the build: silently falling back to the debug key would ship an unsigned
+// update while looking successful. The fallback below therefore only applies
+// when *nothing* was configured.
+val missingSigningValues = buildList {
+    if (releaseStoreFile != null && resolvedKeystore == null) {
+        add("storeFile '$releaseStoreFile' does not point to an existing file")
+    }
+    if (releaseStorePassword == null) add("storePassword is missing")
+    if (releaseKeyAlias == null) add("keyAlias is missing")
+    if (releaseKeyPassword == null) add("keyPassword is missing")
+}
+val anySigningValueProvided =
+    releaseStoreFile != null ||
+        releaseStorePassword != null ||
+        releaseKeyAlias != null ||
+        releaseKeyPassword != null
+val hasReleaseSigning = anySigningValueProvided && missingSigningValues.isEmpty()
+
+if (anySigningValueProvided && missingSigningValues.isNotEmpty) {
+    throw GradleException(
+        "[photo-jpg] Release signing is incomplete: " +
+            missingSigningValues.joinToString("; ") +
+            ". Provide all four values (PHOTOJPG_STORE_FILE, " +
+            "PHOTOJPG_STORE_PASSWORD, PHOTOJPG_KEY_ALIAS, PHOTOJPG_KEY_PASSWORD) " +
+            "or remove them all to build with the debug key.",
+    )
 }
 
 android {
@@ -42,10 +86,7 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.jules.docscanner.doc_scanner_app"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 24
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
@@ -53,23 +94,44 @@ android {
     }
 
     signingConfigs {
-        create("release") {
-            storeFile = signingStoreFile
-            storePassword = signingProperties.getProperty("storePassword")
-                ?: throw GradleException("Missing storePassword in android/key.properties")
-            keyAlias = signingProperties.getProperty("keyAlias")
-                ?: throw GradleException("Missing keyAlias in android/key.properties")
-            keyPassword = signingProperties.getProperty("keyPassword")
-                ?: throw GradleException("Missing keyPassword in android/key.properties")
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = resolvedKeystore
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
         }
     }
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("release")
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            } else {
+                // Debug key: usable for testing, never for distribution.
+                signingConfig = signingConfigs.getByName("debug")
+            }
+            // Minification is intentionally left at its previous setting: R8
+            // cannot be verified here, and the native plugins in use
+            // (opencv_dart JNI, ML Kit, image_editor) need their consumer rules
+            // to be proven first. The proguard file stays wired for when that
+            // verification can run.
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
+}
+
+if (!hasReleaseSigning) {
+    logger.warn(
+        "[photo-jpg] Release signing is not configured; the release APK will be " +
+            "signed with the debug key. Provide PHOTOJPG_STORE_FILE / " +
+            "PHOTOJPG_STORE_PASSWORD / PHOTOJPG_KEY_ALIAS / PHOTOJPG_KEY_PASSWORD " +
+            "or an android/key.properties file (see android/key.properties.example).",
+    )
 }
 
 flutter {

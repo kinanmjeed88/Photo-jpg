@@ -16,6 +16,7 @@ class TemporaryImageStore {
     'smart_cropped_',
     'edited_',
     'ocr_preprocessed_',
+    'upright_',
   };
   static final Random _random = Random.secure();
 
@@ -76,7 +77,12 @@ class TemporaryImageStore {
   }
 
   /// Removes stale internal work files while preserving recent edits referenced
-  /// by the active layout. This is called on entry to image-producing flows.
+  /// by the active layout.
+  ///
+  /// This runs exactly once, from application start-up: any later call could
+  /// delete a file that is still placed on the canvas. [protectedPaths] allows a
+  /// caller to pin specific files, and [maxAge] is deliberately longer than any
+  /// realistic editing session.
   static Future<void> cleanupStale({
     Duration maxAge = const Duration(hours: 12),
     Set<String> protectedPaths = const <String>{},

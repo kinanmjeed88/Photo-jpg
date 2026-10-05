@@ -1,25 +1,27 @@
-name: Build Android APK
+name: Build & Verify Android
 
 on:
   push:
     branches:
       - main
-      - feature/*
+      - 'feature/**'
+  pull_request:
   workflow_dispatch:
 
+# Least privilege: the workflow only reads the repository. It never pushes.
+# Automated commits from a build machine are intentionally not part of CI:
+# every change must be reviewed by a human before it reaches a branch.
 permissions:
-  contents: write # ⚠️ مهم جداً: تم تغييرها إلى write ليتمكن البوت من رفع التعديلات
-  issues: write
+  contents: read
 
 jobs:
-  build:
+  verify:
+    name: Analyze, test and build
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # ضروري ليتمكن البوت من عمل push
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -34,111 +36,36 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Clean Workspace & Get Packages
-        run: |
-          flutter clean
-          flutter pub get
+      - name: Install packages
+        run: flutter pub get
 
-      - name: Build Release APK
-        id: build_step
-        run: |
-          set -o pipefail
-          flutter build apk --release 2>&1 | tee build_log.txt
+      - name: Verify formatting
+        # Canonical formatting is part of the gate: a diff here means the file
+        # would be rewritten by `dart format`, so the fix is to format the
+        # source rather than to skip the check.
+        run: dart format --output=none --set-exit-if-changed .
 
-      - name: Upload APK Artifact
-        if: success()
+      - name: Static analysis
+        run: flutter analyze
+
+      - name: Unit and widget tests
+        run: flutter test
+
+      - name: Build release APK
+        env:
+          # Optional: configure these secrets to sign a distributable build.
+          # Without them Gradle falls back to the debug key and the warning is
+          # visible in the log.
+          PHOTOJPG_STORE_FILE: ${{ secrets.PHOTOJPG_STORE_FILE }}
+          PHOTOJPG_STORE_PASSWORD: ${{ secrets.PHOTOJPG_STORE_PASSWORD }}
+          PHOTOJPG_KEY_ALIAS: ${{ secrets.PHOTOJPG_KEY_ALIAS }}
+          PHOTOJPG_KEY_PASSWORD: ${{ secrets.PHOTOJPG_KEY_PASSWORD }}
+        run: flutter build apk --release
+
+      - name: Upload APK artifact
+        if: success() && github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: release-apk
           path: build/app/outputs/flutter-apk/app-release.apk
-
-      - name: 🤖 Autonomous AI Self-Healing
-        if: failure()
-        env:
-          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # 1. التقاط الخطأ بدقة
-          if [ -f build_log.txt ]; then
-            ERROR_DETAILS=$(grep -iE "error:|exception|failure|what went wrong" -C 15 build_log.txt | head -n 100)
-            if [ -z "$ERROR_DETAILS" ]; then
-              ERROR_DETAILS=$(tail -n 50 build_log.txt)
-            fi
-          else
-            ERROR_DETAILS="Build log file not found."
-          fi
-
-          export ERROR_DETAILS="$ERROR_DETAILS"
-
-          # 2. إنشاء سكربت بايثون للاتصال بـ API جولز وإصلاح الملفات تلقائياً
-          cat << 'EOF' > auto_fix.py
-          import os, json, urllib.request
-
-          api_key = os.environ.get("JULES_API_KEY")
-          error_log = os.environ.get("ERROR_DETAILS")
-
-          if not api_key:
-              print("Error: JULES_API_KEY is missing!")
-              exit(1)
-
-          prompt = f"""
-          You are a Principal Software Engineer. The Flutter Android build failed.
-          Analyze this error log carefully:
-          {error_log}
-          
-          Identify the exact file causing the error (e.g., lib/main.dart or android/app/proguard-rules.pro).
-          Provide the FULL corrected code for that file. Do NOT use workarounds.
-          If it's a local_auth options error, remove 'AuthenticationOptions' and use the legacy parameters.
-          If it's an R8/ProGuard play core error, the file is 'android/app/proguard-rules.pro' and the fix is '-dontwarn com.google.android.play.core.**'.
-
-          Return ONLY a valid JSON object matching this exact structure, with no markdown tags or extra text:
-          {{
-              "file_path": "the/exact/path/to/the/file",
-              "fixed_code": "the complete source code to replace the file"
-          }}
-          """
-
-          url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
-          data = json.dumps({
-              "contents": [{"parts": [{"text": prompt}]}]
-          }).encode('utf-8')
-
-          req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
-
-          try:
-              with urllib.request.urlopen(req) as response:
-                  res_body = json.loads(response.read().decode('utf-8'))
-                  ai_text = res_body['candidates'][0]['content']['parts'][0]['text'].strip()
-                  
-                  # تنظيف الرد إذا احتوى على علامات Markdown
-                  if ai_text.startswith('```json'): ai_text = ai_text[7:]
-                  if ai_text.startswith('```'): ai_text = ai_text[3:]
-                  if ai_text.endswith('```'): ai_text = ai_text[:-3]
-                  
-                  fix_data = json.loads(ai_text.strip())
-                  
-                  file_path = fix_data['file_path']
-                  fixed_code = fix_data['fixed_code']
-                  
-                  # التأكد من وجود المجلد
-                  os.makedirs(os.path.dirname(file_path) or '.', exist_ok=True)
-                  
-                  # كتابة الكود الجديد في الملف
-                  with open(file_path, 'w', encoding='utf-8') as f:
-                      f.write(fixed_code)
-                  
-                  print(f"✅ AI successfully patched: {file_path}")
-          except Exception as e:
-              print(f"❌ AI Fix Failed: {e}")
-              exit(1)
-          EOF
-
-          # تشغيل السكربت
-          python3 auto_fix.py
-
-          # 3. رفع التعديل (Push) لتشغيل البناء من جديد
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add .
-          git commit -m "🤖 auto-fix: AI resolved build error automatically"
-          git push
+          if-no-files-found: warn

@@ -1,0 +1,45 @@
+name: Format patch (temporary helper)
+
+# TEMPORARY: this workflow exists only while the canonical formatting pass is
+# being applied. It runs `dart format` in a real Flutter environment and uploads
+# the resulting diff as an artifact, because the audit environment has no Dart
+# SDK. It is removed again as soon as the formatting commit is in place, so that
+# the repository keeps a single, honest verification workflow (build_apk.yml).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  patch:
+    name: Produce formatting patch
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install packages
+        run: flutter pub get
+
+      - name: Format sources
+        run: dart format .
+
+      - name: Summarise changes
+        run: |
+          git --no-pager diff --stat
+          git diff > format.patch
+
+      - name: Upload formatting patch
+        uses: actions/upload-artifact@v4
+        with:
+          name: format-patch
+          path: format.patch
+          if-no-files-found: error

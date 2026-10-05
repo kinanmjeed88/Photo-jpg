@@ -2,14 +2,17 @@
     <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
     <uses-permission android:name="android.permission.USE_FINGERPRINT"/>
     <uses-permission android:name="android.permission.CAMERA"/>
-    <!-- Required by gal package for saving to gallery -->
+    <!-- Required by the gal plugin to insert into the gallery on API <= 29.
+         On API 30+ the MediaStore insert needs no permission at all, and the
+         plugin's own hasAccess() check ignores every other permission.
+
+         No read permission is requested: images enter the app through the
+         system photo picker / camera (per-file URI grants) and are read back
+         only from the app's private directories. -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
 
     <application
-        android:label="doc_scanner_app"
+        android:label="ماسح المستمسكات"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -34,10 +37,8 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
-        <activity
-            android:name="com.yalantis.ucrop.UCropActivity"
-            android:screenOrientation="portrait"
-            android:theme="@style/Theme.AppCompat.Light.NoActionBar"/>
+        <!-- Cropping is handled in Flutter (extended_image + image_editor);
+             no third-party crop activity is exported by this app. -->
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

@@ -1,3 +1,8 @@
+> **⚠️ وثيقة تاريخية (Superseded):** يصف هذا الملف مراجعة/بنية إصدار سابق من التطبيق
+> ولم يعد مطابقاً للكود الحالي. التقرير المعتمد والحديث هو
+> [`docs/AUDIT_REPORT_AR.md`](../docs/AUDIT_REPORT_AR.md).
+> تم الاحتفاظ به للمرجعية التاريخية فقط.
+
 ## 2024-05-24 - Document Scanner PII Leakage via Screenshots
 **Vulnerability:** The application handles highly sensitive PII documents (passports, national IDs) but allows OS-level screen capture and displays plain document content in the Android Recents app switcher.
 **Learning:** Apps handling physical document scans are essentially building a digital wallet. OS-level background snapshotting and user screenshots pose a significant data exfiltration risk.

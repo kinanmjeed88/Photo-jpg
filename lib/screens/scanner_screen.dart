@@ -1,15 +1,15 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:gal/gal.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../constants/app_constants.dart';
 import '../providers/app_state.dart';
+import '../services/gallery_service.dart';
+import '../services/image_pipeline.dart';
 import '../services/pdf_service.dart';
 import '../services/scanner_service.dart';
 import '../services/temporary_image_store.dart';
@@ -194,7 +194,10 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
           inputs.add(
             DocumentInput(
               file: output,
-              type: result.classification.type,
+              // The detector already evaluated a type-specific profile for this
+              // crop. Reusing that decision keeps a multi-document source from
+              // stamping the first crop's classification onto every document.
+              type: result.typeFor(output),
               originalImagePath: sourceFile.path,
             ),
           );
@@ -313,18 +316,18 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     if (result.skippedFiles.isNotEmpty) {
       _showMessage('طريقة العرض المختارة تقبل مستنداً واحداً فقط.');
     }
-    if (result.overflowFiles.isNotEmpty) {
-      await _handleOverflow(result.overflowFiles);
+    if (result.overflowInputs.isNotEmpty) {
+      await _handleOverflow(result.overflowInputs);
     }
   }
 
-  Future<void> _handleOverflow(List<File> overflowFiles) async {
+  Future<void> _handleOverflow(List<DocumentInput> overflowInputs) async {
     final shouldAddPage = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('الصفحة ممتلئة'),
         content: Text(
-          'هل تريد إنشاء صفحة للمستندات المتبقية (${overflowFiles.length})؟',
+          'هل تريد إنشاء صفحة للمستندات المتبقية (${overflowInputs.length})؟',
         ),
         actions: <Widget>[
           TextButton(
@@ -341,10 +344,13 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     if (shouldAddPage != true || !mounted) return;
     final notifier = ref.read(scannedDocumentsProvider.notifier)
       ..forceNewPage();
+    // The original inputs are replayed, so the detected type and the source
+    // image reference survive the page overflow instead of being guessed again.
     final result = await notifier.placeDocuments(
-      overflowFiles.map((file) => DocumentInput(file: file)).toList(),
+      overflowInputs,
       ref.read(appStateProvider),
     );
+    if (!mounted) return;
     if (result.overflowFiles.isNotEmpty) {
       _showMessage('لم تتسع الصفحة الجديدة لكل المستندات.');
     }
@@ -358,19 +364,27 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     }
     setState(() => _isProcessing = true);
     try {
-      await _pdfService.generatePdf(
+      final result = await _pdfService.generatePdf(
         groupedPages: pages,
         state: ref.read(appStateProvider),
         uiCanvasWidth: AppConstants.kVirtualCanvasWidth,
         uiCanvasHeight: AppConstants.kVirtualCanvasHeight,
       );
       if (!mounted) return;
-      _showMessage('تم إنشاء ملف PDF بنجاح.');
+      _showMessage(
+        result.warnings.isEmpty
+            ? 'تم إنشاء ملف PDF (${result.documentCount} مستند في ${result.pageCount} صفحة).'
+            : 'تم إنشاء الملف، وتعذر إدراج ${result.warnings.length} صورة غير متوفرة.',
+      );
       await Navigator.of(context).push(
         MaterialPageRoute<void>(builder: (context) => const ArchiveScreen()),
       );
-    } catch (_) {
-      if (mounted) _showMessage('تعذر إنشاء ملف PDF.');
+    } catch (error) {
+      if (mounted) {
+        _showMessage(
+          error is StateError ? error.message : 'تعذر إنشاء ملف PDF.',
+        );
+      }
     } finally {
       if (mounted) setState(() => _isProcessing = false);
     }
@@ -443,14 +457,19 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     );
     if (output == null || !mounted) return;
     try {
-      final decoded = await decodeImageFromList(await output.readAsBytes());
-      final width = decoded.width.toDouble();
-      final height = decoded.height.toDouble();
-      decoded.dispose();
+      // Decoding a full-resolution crop on the UI isolate froze the canvas for
+      // hundreds of milliseconds; the shared probe does it off the UI thread.
+      final dimensions = await readOrientedDimensions(output);
+      if (dimensions == null) {
+        throw const FormatException('ملف القص غير صالح.');
+      }
+      final (width, height) = dimensions;
       final oldFile = location.document.file;
+      // Re-cropping changes the aspect ratio, so the box is re-fitted instead
+      // of keeping the frame of the previous crop.
       ref
           .read(scannedDocumentsProvider.notifier)
-          .updateDocument(
+          .replaceDocumentImage(
             id,
             file: output,
             originalWidth: width,
@@ -476,10 +495,12 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
         .findDocument(id);
     if (location == null) return;
     try {
-      await Gal.putImage(location.document.file.path);
+      await GalleryService.saveFile(location.document.file);
       if (mounted) _showMessage('تم الحفظ في المعرض.');
-    } catch (_) {
-      if (mounted) _showMessage('تعذر الحفظ في المعرض.');
+    } catch (error) {
+      // Specific causes (permission, space, format) reach the user instead of a
+      // generic failure message.
+      if (mounted) _showMessage(GalleryService.describe(error));
     }
   }
 
@@ -495,13 +516,11 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     final centerY = document.dy + document.height / 2;
     final width = document.height;
     final height = document.width;
-    final inset = AppConstants.kA4PreviewInset;
-    final dx = (centerX - width / 2)
-        .clamp(inset, AppConstants.kVirtualCanvasWidth - inset - width)
-        .toDouble();
-    final dy = (centerY - height / 2)
-        .clamp(inset, AppConstants.kVirtualCanvasHeight - inset - height)
-        .toDouble();
+    // Rotation keeps the same centre and clamps through the shared canvas
+    // helpers, which stay valid even when the rotated box is larger than the
+    // A4 guide (a raw `clamp` with an inverted range used to throw here).
+    final dx = AppConstants.clampToGuideX(centerX - width / 2, width);
+    final dy = AppConstants.clampToGuideY(centerY - height / 2, height);
     ref
         .read(scannedDocumentsProvider.notifier)
         .updateDocumentLayout(
@@ -523,9 +542,14 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
         .findDocument(id);
     if (location == null) return;
     final document = location.document;
-    final ratio = document.originalHeight == 0
+    final naturalRatio = document.originalHeight == 0
         ? 1.0
         : document.originalWidth / document.originalHeight;
+    // A quarter turn swaps the box's aspect ratio, exactly like the rotate
+    // action does, so "fit to page" stays tight on rotated documents.
+    final ratio = document.rotationAngle % 180 == 0
+        ? naturalRatio
+        : 1 / naturalRatio;
     final inset = AppConstants.kA4PreviewInset;
     final availableWidth = AppConstants.kVirtualCanvasWidth - (inset * 2);
     final availableHeight = AppConstants.kVirtualCanvasHeight - (inset * 2);
@@ -595,24 +619,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     notifier.moveDocument(
       documentId,
       targetPageIndex: targetPage,
-      dx: targetDx
-          .clamp(
-            inset,
-            math.max(
-              inset,
-              AppConstants.kVirtualCanvasWidth - inset - scaledWidth,
-            ),
-          )
-          .toDouble(),
-      dy: targetDy
-          .clamp(
-            inset,
-            math.max(
-              inset,
-              AppConstants.kVirtualCanvasHeight - inset - scaledHeight,
-            ),
-          )
-          .toDouble(),
+      dx: AppConstants.clampToGuideX(targetDx, scaledWidth),
+      dy: AppConstants.clampToGuideY(targetDy, scaledHeight),
     );
 
     if (mounted) {
@@ -631,31 +639,14 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
   }
 
   void _snapDocumentBackToCurrentPage(ScannedDocument document) {
-    final inset = AppConstants.kA4PreviewInset;
     final scaledWidth = document.width * document.scale;
     final scaledHeight = document.height * document.scale;
     ref
         .read(scannedDocumentsProvider.notifier)
         .updateDocumentLayout(
           document.id,
-          dx: document.dx
-              .clamp(
-                inset,
-                math.max(
-                  inset,
-                  AppConstants.kVirtualCanvasWidth - inset - scaledWidth,
-                ),
-              )
-              .toDouble(),
-          dy: document.dy
-              .clamp(
-                inset,
-                math.max(
-                  inset,
-                  AppConstants.kVirtualCanvasHeight - inset - scaledHeight,
-                ),
-              )
-              .toDouble(),
+          dx: AppConstants.clampToGuideX(document.dx, scaledWidth),
+          dy: AppConstants.clampToGuideY(document.dy, scaledHeight),
           width: document.width,
           height: document.height,
           rotationAngle: document.rotationAngle,

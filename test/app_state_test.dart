@@ -223,6 +223,91 @@ void main() {
     );
   });
 
+  test('an oversized document is fitted inside the A4 guide', () async {
+    final directory = await Directory.systemTemp.createTemp('oversized_');
+    addTearDown(() => directory.delete(recursive: true));
+    final panorama = File('${directory.path}/panorama.jpg');
+    // 4:1 aspect ratio, far wider than the guide.
+    await panorama.writeAsBytes(
+      img.encodeJpg(img.Image(width: 800, height: 200)),
+    );
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    final notifier = container.read(scannedDocumentsProvider.notifier);
+    await notifier.placeDocuments(<DocumentInput>[
+      DocumentInput(file: panorama, type: DocumentType.a4Document),
+    ], const AppState(hasA4Document: true));
+
+    final document = container.read(scannedDocumentsProvider)[0]!.single;
+    expect(document.width, lessThanOrEqualTo(AppConstants.kA4GuideWidth));
+    expect(document.height, lessThanOrEqualTo(AppConstants.kA4GuideHeight));
+    expect(
+      document.width / document.height,
+      closeTo(4, 0.01),
+    );
+    expect(document.dx, greaterThanOrEqualTo(AppConstants.kA4GuideLeft));
+    expect(document.dy, greaterThanOrEqualTo(AppConstants.kA4GuideTop));
+  });
+
+  test('replacing an image refits the box and keeps the centre', () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    final notifier = container.read(scannedDocumentsProvider.notifier);
+    notifier.seedDocuments(<int, List<ScannedDocument>>{
+      0: <ScannedDocument>[
+        ScannedDocument(
+          id: 'refit',
+          file: File('/tmp/before.jpg'),
+          type: DocumentType.a4Document,
+          // Natural aspect 2:1, laid out away from every guide edge so the
+          // refit below does not have to clamp the centre away.
+          originalWidth: 1000,
+          originalHeight: 500,
+          dx: 150,
+          dy: 200,
+          width: 200,
+          height: 100,
+          scale: 1,
+        ),
+      ],
+    });
+    final before = notifier.findDocument('refit')!.document;
+    final centerX = before.dx + (before.width * before.scale) / 2;
+    final centerY = before.dy + (before.height * before.scale) / 2;
+
+    notifier.replaceDocumentImage(
+      'refit',
+      file: File('/tmp/after.jpg'),
+      // A portrait crop: the box has to follow the new aspect ratio.
+      originalWidth: 600,
+      originalHeight: 900,
+    );
+
+    final after = notifier.findDocument('refit')!.document;
+    expect(after.file.path, '/tmp/after.jpg');
+    expect(after.originalWidth, 600);
+    expect(after.originalHeight, 900);
+    expect(after.width / after.height, closeTo(600 / 900, 0.01));
+    expect(after.scale, 1);
+    expect(after.dx + after.width / 2, closeTo(centerX, 0.5));
+    expect(after.dy + after.height / 2, closeTo(centerY, 0.5));
+    expect(after.dx, greaterThanOrEqualTo(AppConstants.kA4GuideLeft));
+    expect(after.dy, greaterThanOrEqualTo(AppConstants.kA4GuideTop));
+    expect(
+      after.dx + after.width,
+      lessThanOrEqualTo(
+        AppConstants.kA4GuideLeft + AppConstants.kA4GuideWidth,
+      ),
+    );
+    expect(
+      after.dy + after.height,
+      lessThanOrEqualTo(
+        AppConstants.kA4GuideTop + AppConstants.kA4GuideHeight,
+      ),
+    );
+  });
+
   test('preserves original source metadata when moving a document', () {
     final container = ProviderContainer();
     addTearDown(container.dispose);

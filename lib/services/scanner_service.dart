@@ -3,15 +3,14 @@ import 'dart:developer' as developer;
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
-import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:opencv_dart/opencv_dart.dart' as cv;
 import 'package:path_provider/path_provider.dart';
 
 import '../providers/app_state.dart';
+import 'image_pipeline.dart';
 import 'temporary_image_store.dart';
 
 enum SmartScanStatus { succeeded, manualReviewRequired, failed, cancelled }
@@ -174,6 +173,7 @@ class SmartScanResult {
     this.cropConfidence = 0,
     this.detectedDocumentCount = 0,
     this.cropReviewReason = '',
+    this.outputTypes = const <DocumentType>[],
     this.manualReviewRegions = const <DocumentRegion>[],
     this.performanceMetrics = const ScanPerformanceMetrics.empty(),
   });
@@ -190,12 +190,31 @@ class SmartScanResult {
   final int detectedDocumentCount;
   final String cropReviewReason;
 
+  /// Detector-assigned type per accepted file, positionally aligned with
+  /// [files]. Empty when the caller works with an older result.
+  final List<DocumentType> outputTypes;
+
   /// Regions that need a human boundary decision. Accepted crops remain in
   /// [files] and are never discarded because this list is non-empty.
   final List<DocumentRegion> manualReviewRegions;
   final ScanPerformanceMetrics performanceMetrics;
 
   bool get requiresCropReview => manualReviewRegions.isNotEmpty;
+
+  /// Document type the detector assigned to [file].
+  ///
+  /// Falls back to the source-level classification when the crop has no
+  /// type-specific evidence, so a caller always has a usable type.
+  DocumentType typeFor(File file) {
+    final index = files.indexWhere(
+      (candidate) => candidate.path == file.path,
+    );
+    if (index >= 0 && index < outputTypes.length) {
+      final detected = outputTypes[index];
+      if (detected != DocumentType.unknown) return detected;
+    }
+    return classification.type;
+  }
 
   /// True only when the source has no safe automatic output, or processing
   /// failed. A low-confidence crop with other accepted crops is a partial
@@ -214,6 +233,7 @@ class _SmartCropOutput {
     required this.confidence,
     required this.detectedDocumentCount,
     required this.reviewReason,
+    this.outputTypes = const <DocumentType>[],
     this.reviewRegions = const <DocumentRegion>[],
     this.performanceMetrics = const ScanPerformanceMetrics.empty(),
   });
@@ -222,6 +242,12 @@ class _SmartCropOutput {
   final double confidence;
   final int detectedDocumentCount;
   final String reviewReason;
+
+  /// Detector-assigned type for every accepted path, in the same order as
+  /// [paths]. The smart-crop engine already evaluates a type-specific profile
+  /// for each candidate, so propagating that decision removes the need to run a
+  /// text recognizer over the crop just to guess the same information again.
+  final List<DocumentType> outputTypes;
   final List<DocumentRegion> reviewRegions;
   final ScanPerformanceMetrics performanceMetrics;
 }
@@ -235,6 +261,16 @@ Map<String, Object> _documentRegionToMessage(DocumentRegion region) =>
       'area': region.area,
       'reason': region.reason,
     };
+
+List<int> _documentTypeIndicesToMessage(Iterable<DocumentType> types) =>
+    List<int>.unmodifiable(types.map((type) => type.index));
+
+List<DocumentType> _documentTypesFromMessage(Object? value) {
+  if (value is! List) return const <DocumentType>[];
+  return List<DocumentType>.unmodifiable(
+    value.map(_documentTypeFromIndex).toList(growable: false),
+  );
+}
 
 Map<String, Object> _performanceMetricsToMessage(
   ScanPerformanceMetrics metrics,
@@ -1939,15 +1975,39 @@ const _stageBudgets = <String, Duration>{
   'warp_write': Duration(seconds: 10),
 };
 
-_SmartCropOutput? _stageTimeoutResult(String stage, Stopwatch watch) {
+/// Aborts a pipeline stage when it exceeded its budget.
+///
+/// [partialPaths]/[partialTypes] carry the crops that were already written to
+/// disk. A timeout while warping document 4 of 5 must not throw away the first
+/// three files: they are returned as accepted output, and [remainingRegion]
+/// describes the part of the source that still needs a human decision so the
+/// manual screen opens with a usable proposal instead of an empty canvas.
+_SmartCropOutput? _stageTimeoutResult(
+  String stage,
+  Stopwatch watch, {
+  List<String>? partialPaths,
+  List<DocumentType>? partialTypes,
+  DocumentRegion? remainingRegion,
+}) {
   final budget = _stageBudgets[stage];
   if (budget == null || watch.elapsed <= budget) return null;
+  final paths = partialPaths ?? const <String>[];
+  final types = partialTypes ?? const <DocumentType>[];
+  final incomplete = paths.isNotEmpty;
   return _SmartCropOutput(
-    paths: const <String>[],
+    paths: List<String>.unmodifiable(paths),
     confidence: 0,
-    detectedDocumentCount: 0,
-    reviewReason:
-        'تجاوزت مرحلة $stage المهلة المحددة وتحتاج الصورة إلى مراجعة يدوية.',
+    detectedDocumentCount: paths.length,
+    outputTypes: List<DocumentType>.unmodifiable(types),
+    reviewReason: incomplete
+        ? 'تجاوزت مرحلة $stage المهلة المحددة؛ حُفظت القصوص المكتملة وتحتاج '
+              'بقية الصورة إلى مراجعة يدوية.'
+        : 'تجاوزت مرحلة $stage المهلة المحددة وتحتاج الصورة إلى مراجعة يدوية.',
+    reviewRegions: incomplete
+        ? <DocumentRegion>[
+            if (remainingRegion != null) remainingRegion,
+          ]
+        : const <DocumentRegion>[],
   );
 }
 
@@ -2022,6 +2082,7 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
   // the UI can offer a boundary suggestion.
   var reviewProposals = <_DocumentCandidate>[];
   final results = <String>[];
+  final resultTypes = <DocumentType>[];
   var reviewCandidates = const <_DocumentCandidate>[];
   var acceptedCandidates = const <_DocumentCandidate>[];
   final stageMilliseconds = <String, int>{};
@@ -2402,7 +2463,23 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
     final sourceScaleY = source.rows / analysisSource.rows;
     final cropWatch = Stopwatch()..start();
     for (final candidate in acceptedCandidates) {
-      final cropTimeout = _stageTimeoutResult('warp_write', cropWatch);
+      final cropTimeout = _stageTimeoutResult(
+        'warp_write',
+        cropWatch,
+        partialPaths: results,
+        partialTypes: resultTypes,
+        // The whole frame is the honest proposal for "the part that was not
+        // reached yet": the manual screen clamps it to the image and the user
+        // trims it down to the remaining document.
+        remainingRegion: DocumentRegion(
+          left: 0,
+          top: 0,
+          right: math.max(1, source.cols),
+          bottom: math.max(1, source.rows),
+          area: (source.cols * source.rows).toDouble(),
+          reason: 'لم يكتمل القص التلقائي لهذه الصورة.',
+        ),
+      );
       if (cropTimeout != null) return cropTimeout;
       if (isCancelled?.call() ?? false) {
         return const _SmartCropOutput(
@@ -2493,7 +2570,12 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
         ));
         final outputPath =
             '$tempPath/${TemporaryImageStore.uniqueJpegName('smart_cropped_', suffix: '-$jobId-${results.length}')}';
-        if (cv.imwrite(outputPath, warped)) results.add(outputPath);
+        if (cv.imwrite(outputPath, warped)) {
+          results.add(outputPath);
+          // Keep the detector decision next to the file it produced so the
+          // caller does not have to re-classify the crop later.
+          resultTypes.add(candidate.detectedType);
+        }
       } finally {
         sourcePoints?.dispose();
         destinationPoints?.dispose();
@@ -2502,7 +2584,20 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
       }
     }
     recordStage('warp_write', cropWatch);
-    final warpTimeout = _stageTimeoutResult('warp_write', cropWatch);
+    final warpTimeout = _stageTimeoutResult(
+      'warp_write',
+      cropWatch,
+      partialPaths: results,
+      partialTypes: resultTypes,
+      remainingRegion: DocumentRegion(
+        left: 0,
+        top: 0,
+        right: math.max(1, source.cols),
+        bottom: math.max(1, source.rows),
+        area: (source.cols * source.rows).toDouble(),
+        reason: 'لم يكتمل القص التلقائي لهذه الصورة.',
+      ),
+    );
     if (warpTimeout != null) return warpTimeout;
   } catch (error, stackTrace) {
     _logScannerError('smart-crop-output', error, stackTrace);
@@ -2563,6 +2658,7 @@ Future<_SmartCropOutput> _detectAndCropInIsolate(
     confidence: cropConfidence,
     detectedDocumentCount: math.max(candidates.length, reviewCandidates.length),
     reviewReason: reviewReason,
+    outputTypes: List<DocumentType>.unmodifiable(resultTypes),
     reviewRegions: reviewRegions,
     performanceMetrics: ScanPerformanceMetrics(
       stageMilliseconds: Map<String, int>.unmodifiable(stageMilliseconds),
@@ -2659,6 +2755,7 @@ void _smartCropWorkerEntry(Map<String, dynamic> args) async {
     resultPort.send(<String, Object?>{
       'type': isCancelled ? 'cancelled' : 'completed',
       'outputPaths': output.paths,
+      'outputTypeIndices': _documentTypeIndicesToMessage(output.outputTypes),
       'cropConfidence': output.confidence,
       'detectedDocumentCount': output.detectedDocumentCount,
       'cropReviewReason': output.reviewReason,
@@ -2688,32 +2785,24 @@ class ScannerService {
 
   final ImagePicker _picker;
 
+  /// Opens the camera and returns an upright, ready-to-process work file.
   Future<File?> scanDocument({ImageSource source = ImageSource.camera}) async {
     final image = await _picker.pickImage(source: source);
-    return image == null ? null : File(image.path);
+    if (image == null) return null;
+    return normalizeOrientation(File(image.path));
   }
 
+  /// Opens the system picker and returns upright work files.
+  ///
+  /// Orientation is normalised here, once, at the only point where images enter
+  /// the application, so no downstream stage has to guess whether the pixels
+  /// already match the EXIF tag.
   Future<List<File>?> scanMultipleDocuments() async {
     final images = await _picker.pickMultiImage();
-    return images.isEmpty
-        ? null
-        : images.map((image) => File(image.path)).toList();
-  }
-
-  Future<File?> applyFilter(File imageFile, bool highContrast) async {
-    final bytes = await imageFile.readAsBytes();
-    final processedBytes = await Isolate.run(() {
-      var decoded = img.decodeImage(bytes);
-      if (decoded == null) return null;
-      decoded = img.grayscale(decoded);
-      if (highContrast) {
-        decoded = img.adjustColor(decoded, contrast: 1.5, exposure: 0.1);
-      }
-      return Uint8List.fromList(img.encodeJpg(decoded, quality: 90));
-    });
-    return processedBytes == null
-        ? null
-        : TemporaryImageStore.writeJpeg(processedBytes, prefix: 'edited_');
+    if (images.isEmpty) return null;
+    return Future.wait(
+      images.map((image) => normalizeOrientation(File(image.path))),
+    );
   }
 
   Future<String> _runOcrPreprocessWorker({
@@ -2844,6 +2933,9 @@ class ScannerService {
           final detectedDocumentCount =
               (message['detectedDocumentCount'] as num?)?.toInt() ??
               paths.length;
+          final outputTypes = _documentTypesFromMessage(
+            message['outputTypeIndices'],
+          );
           final reviewReason = message['cropReviewReason'] as String? ?? '';
           final reviewRegions =
               ((message['reviewRegions'] as List<Object?>?) ??
@@ -2861,6 +2953,7 @@ class ScannerService {
                 confidence: confidence.clamp(0.0, 1.0).toDouble(),
                 detectedDocumentCount: detectedDocumentCount,
                 reviewReason: reviewReason,
+                outputTypes: outputTypes,
                 reviewRegions: List<DocumentRegion>.unmodifiable(reviewRegions),
                 performanceMetrics: performanceMetrics,
               ),
@@ -2941,6 +3034,15 @@ class ScannerService {
     final detectionPlan = detectionTypes == null
         ? DetectionPlan.forType(requestedType)
         : DetectionPlan.forTypes(detectionTypes);
+    // "Discovery" means the user asked the scanner to work the type out on its
+    // own instead of naming one. Only in that mode is a text recognition pass
+    // worth running; with an explicit single type the user's choice already
+    // decides both the detector plan and the placement of every crop.
+    final explicitTypes = detectionTypes ?? <DocumentType>[requestedType];
+    final isDiscoveryScan =
+        explicitTypes.length != 1 ||
+        explicitTypes.first == DocumentType.allDocuments ||
+        explicitTypes.first == DocumentType.unknown;
     if (detectionPlan.isA4Only) {
       if (!await imageFile.exists()) {
         return SmartScanResult(
@@ -2971,7 +3073,11 @@ class ScannerService {
       );
     }
 
-    await TemporaryImageStore.cleanupStale();
+    // NOTE: cleanup of stale work files deliberately does not run here. It used
+    // to run before every scan while protecting nothing, which meant a long
+    // editing session could delete images that were still placed on the canvas.
+    // Grooming now happens exactly once, at application start, where no
+    // document can be in use.
     final tempDirectory = await getTemporaryDirectory();
     final jobId = DateTime.now().microsecondsSinceEpoch.toString();
     late final _SmartCropOutput cropOutput;
@@ -3060,8 +3166,7 @@ class ScannerService {
 
     DocumentClassification classification;
     try {
-      final shouldClassifyOutput = requestedType == DocumentType.unknown;
-      classification = shouldClassifyOutput
+      classification = isDiscoveryScan
           ? await classifyDocument(
               files.first,
               cancellationToken: cancellationToken,
@@ -3112,6 +3217,9 @@ class ScannerService {
       cropConfidence: cropOutput.confidence,
       detectedDocumentCount: cropOutput.detectedDocumentCount,
       cropReviewReason: reviewReason,
+      outputTypes: cropOutput.outputTypes.length == files.length
+          ? cropOutput.outputTypes
+          : List<DocumentType>.filled(files.length, classification.type),
       manualReviewRegions: cropOutput.reviewRegions,
       performanceMetrics: cropOutput.performanceMetrics,
     );
@@ -3213,6 +3321,11 @@ class ScannerService {
       );
     }
     final preprocessedFile = File(preprocessedPath);
+    // ML Kit's on-device text recognizer ships models for latin, chinese,
+    // devanagiri, japanese and korean only: there is no Arabic model, so the
+    // supported cards cannot be read by this pass. The latin recognizer is
+    // still useful for passport MRZ lines and any Latin script on the page,
+    // and every other result stays explicitly "unknown" instead of guessing.
     final recognizer = TextRecognizer(script: TextRecognitionScript.latin);
     var recognizerClosedByCancellation = false;
     void closeRecognizerOnCancellation() {

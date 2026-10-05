@@ -5,13 +5,45 @@ import '../providers/app_state.dart';
 import 'archive_screen.dart';
 import 'scanner_screen.dart';
 
-class SettingsScreen extends ConsumerWidget {
+class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
 
+  @override
+  ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   static const _accent = Color(0xFFF59E0B);
+  late final TextEditingController _fileNameController;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  void initState() {
+    super.initState();
+    _fileNameController = TextEditingController(
+      text: ref.read(appStateProvider).fileName,
+    );
+    // Preferences are restored from disk after the first frame. Following the
+    // provider keeps the field in sync with that value without fighting the
+    // user: while typing, the field is the source of the state, so the listener
+    // sees an equal value and does nothing.
+    ref.listenManual(
+      appStateProvider.select((state) => state.fileName),
+      (previous, next) {
+        if (next != _fileNameController.text) {
+          _fileNameController.text = next;
+        }
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _fileNameController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final state = ref.watch(appStateProvider);
     final notifier = ref.read(appStateProvider.notifier);
 
@@ -112,14 +144,18 @@ class SettingsScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 10),
             TextField(
-              decoration: const InputDecoration(
+              controller: _fileNameController,
+              decoration: InputDecoration(
                 labelText: 'اسم الملف',
-                hintText: 'مستمسكاتي',
-                border: OutlineInputBorder(),
+                hintText: AppState.defaultFileName,
+                border: const OutlineInputBorder(),
+                // The name is sanitised when the PDF is written, so an empty
+                // field is harmless and does not need to be rewritten under the
+                // user's cursor while they type.
+                helperText: 'يُستخدم كاسم ملف PDF عند الحفظ.',
               ),
-              onChanged: (value) => notifier.updateFileName(
-                value.trim().isEmpty ? 'مستمسكاتي' : value.trim(),
-              ),
+              textInputAction: TextInputAction.done,
+              onChanged: notifier.updateFileName,
             ),
             const SizedBox(height: 20),
             if (!state.hasAtLeastOneDocument)
