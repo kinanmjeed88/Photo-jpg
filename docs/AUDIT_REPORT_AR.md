@@ -677,7 +677,7 @@ API ≤ 29، و`hasAccess()` في `gal` يتجاهل أي إذن آخر. **ال�
 | سير العمل المستخدم للتسليم | `.github/workflows/build_apk.yml` — **قراءة فقط**: لا يعدّل شيفرة ولا يدفع، ويرفع الـ APK كأثر فقط في الدفعات غير الخاصة بـ PR |
 | سير عمل تشخيصي مؤقت | `ci_scratch.yml` / `ci_signing_probe.yml` (مُقيَّدة بـ push يحمل علامة، تكتب المخرجات كاملة إلى فرع منفصل `arena/ci-scratch` لقراءتها) — **حُذف كلاهما فعلاً من شجرة التسليم (مُثبَّت بـ commit)، ولم يبقَ تحت `.github/workflows/` إلا `build_apk.yml`**، وحُذف الفرع المساعد من المستودع |
 | خطوتا التوقيع في سير العمل | (1) «Materialise release signing material»: يقرأ المفتاح وكلماته من أسرار المستودع ويكتبها إلى مسار محدود الصلاحيات داخل عامل البناء، ويطبع **أسماء** الأسرار المضبوطة فقط. (2) «Release signing verification»: يشغّل `tool/verify_release_apk.sh` للتحقق الفعلي من التوقيع |
-| نظام التشغيل | `ubuntu-latest` + Java 17 (Temurin) + `subosito/flutter-action` (قناة stable) |
+| نظام التشغيل | **`ubuntu-24.04` مثبَّت صراحةً** + Java 17 (Temurin) + `subosito/flutter-action` (قناة stable). التثبيت مقصود: صور `ubuntu-latest` كانت تُترك بلا عامل بناء («The job was not acquired by Runner of type hosted even after multiple attempts») في تشغيلين متتاليين (‎37362093698 و‎37363965101) وهذه مشكلة بنية تحتية لا علاقة لها بالشيفرة؛ بعد التثبيت نجح التشغيل من أول محاولة |
 | Flutter | **3.47.6** (stable، المراجعة `5fc346839b`) |
 | Dart | **3.13.5** |
 | قيود المشروع | `sdk: ">=3.11.0 <4.0.0"` و`flutter: ">=3.38.4"` ⇒ البيئة المُستخدمة **مُحقِّقة للقيود** بالإصدارات الحقيقية المثبَّتة في `pubspec.lock` |
@@ -711,6 +711,7 @@ API ≤ 29، و`hasAccess()` في `gal` يتجاهل أي إذن آخر. **ال�
 | التشخيص الأول (قبل الإصلاحات) | `https://github.com/kinanmjeed88/Photo-jpg/actions/runs/37345474546` |
 | تشغيل يجمع مخرجات خطوات التوقيع الفعلية + الأخطاء المصلَحة | `https://github.com/kinanmjeed88/Photo-jpg/actions/runs/37359853855` |
 | تشغيل كامل يشمل خطوتَي التوقيع (PR) | `https://github.com/kinanmjeed88/Photo-jpg/actions/runs/37361197161` — ✅ كل الخطوات ناجحة |
+| **تشغيل على شجرة التسليم بعد تثبيت عامل البناء** | `https://github.com/kinanmjeed88/Photo-jpg/actions/runs/37365640586` — ✅ كل الخطوات ناجحة |
 | PR المفتوح من الفرع نحو `main` (غير مدموج) | `https://github.com/kinanmjeed88/Photo-jpg/pull/93` |
 
 > **تحذير أمانة:** تشغيل جمع المخرجات يعمل **بوجود** ملف سير العمل المؤقت `ci_scratch.yml` في
