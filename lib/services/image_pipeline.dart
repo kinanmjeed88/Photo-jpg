@@ -99,9 +99,8 @@ class ImageAdjustments {
   bool get isIdentity => isToneIdentity && normalized.sharpness == 0;
 
   /// Strength of the unsharp mask in 0..1.
-  double get unsharpAmount => (normalized.sharpness / maximumSharpness)
-      .clamp(0.0, 1.0)
-      .toDouble();
+  double get unsharpAmount =>
+      (normalized.sharpness / maximumSharpness).clamp(0.0, 1.0).toDouble();
 
   /// `ColorFilter.matrix` compatible 4x5 matrix.
   ///
@@ -258,8 +257,9 @@ class CropBounds {
     required int sourceHeight,
   }) {
     if (rect == null || sourceWidth <= 0 || sourceHeight <= 0) return null;
-    final safeScale =
-        (proxyScale.isFinite && proxyScale > 0) ? proxyScale : 1.0;
+    final safeScale = (proxyScale.isFinite && proxyScale > 0)
+        ? proxyScale
+        : 1.0;
     // An empty or sub-pixel rectangle means the editor never reported a real
     // selection. Reporting that as "no crop" is honest; rounding it up would
     // silently export a one-pixel image.
@@ -273,12 +273,11 @@ class CropBounds {
     }
     final left = (rect.left / safeScale).floor().clamp(0, sourceWidth - 1);
     final top = (rect.top / safeScale).floor().clamp(0, sourceHeight - 1);
-    final right = (rect.right / safeScale)
-        .ceil()
-        .clamp(left + 1, sourceWidth);
-    final bottom = (rect.bottom / safeScale)
-        .ceil()
-        .clamp(top + 1, sourceHeight);
+    final right = (rect.right / safeScale).ceil().clamp(left + 1, sourceWidth);
+    final bottom = (rect.bottom / safeScale).ceil().clamp(
+      top + 1,
+      sourceHeight,
+    );
     final width = right - left;
     final height = bottom - top;
     if (width <= 0 || height <= 0) return null;

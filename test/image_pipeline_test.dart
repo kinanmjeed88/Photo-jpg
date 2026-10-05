@@ -26,11 +26,7 @@ const int _markerSize = 4;
 
 /// Builds a black JPEG with a red block at the pixel origin, tagged with
 /// [orientation]. Used to prove that the orientation is applied exactly once.
-Uint8List _markedJpeg(
-  int width,
-  int height, {
-  required int orientation,
-}) {
+Uint8List _markedJpeg(int width, int height, {required int orientation}) {
   final image = img.Image(width: width, height: height);
   img.fill(image, color: img.ColorRgb8(0, 0, 0));
   img.fillRect(
@@ -261,10 +257,7 @@ void main() {
       expect(oriented.height, 2160);
       expect(oriented.proxy.scale, closeTo(0.5, 0.001));
       final decoded = img.decodeImage(oriented.proxy.bytes)!;
-      expect(
-        decoded.width,
-        lessThanOrEqualTo(ImageAdjustments.previewMaxEdge),
-      );
+      expect(decoded.width, lessThanOrEqualTo(ImageAdjustments.previewMaxEdge));
       expect(
         decoded.height,
         lessThanOrEqualTo(ImageAdjustments.previewMaxEdge),
@@ -335,9 +328,7 @@ void main() {
 
       final before = orientedDimensionsFromBytes(bytes);
       final normalized = await normalizeOrientation(source);
-      final after = orientedDimensionsFromBytes(
-        await normalized.readAsBytes(),
-      );
+      final after = orientedDimensionsFromBytes(await normalized.readAsBytes());
 
       expect(before, (80, 120));
       expect(after, before);

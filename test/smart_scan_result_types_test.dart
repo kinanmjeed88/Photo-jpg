@@ -43,14 +43,8 @@ void main() {
       classificationType: DocumentType.allDocuments,
     );
 
-    expect(
-      result.typeFor(File('/tmp/crop-0.jpg')),
-      DocumentType.nationalId,
-    );
-    expect(
-      result.typeFor(File('/tmp/crop-1.jpg')),
-      DocumentType.housingCard,
-    );
+    expect(result.typeFor(File('/tmp/crop-0.jpg')), DocumentType.nationalId);
+    expect(result.typeFor(File('/tmp/crop-1.jpg')), DocumentType.housingCard);
   });
 
   test(

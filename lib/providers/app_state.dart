@@ -246,9 +246,7 @@ class ScannedDocumentsNotifier
     return BatchAddResult(
       addedDocuments: List.unmodifiable(added),
       overflowInputs: List.unmodifiable(overflow),
-      overflowFiles: List.unmodifiable(
-        overflow.map((input) => input.file),
-      ),
+      overflowFiles: List.unmodifiable(overflow.map((input) => input.file)),
       failedFiles: List.unmodifiable(failed),
       skippedFiles: List.unmodifiable(skipped),
     );

@@ -255,11 +255,10 @@ class _DraggableResizableDocumentState
     // can display. Only one axis is handed to `Image.file` so the decoder keeps
     // the source aspect ratio.
     final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
-    final cacheTarget =
-        (math.max(scaledWidth, scaledHeight) * devicePixelRatio)
-            .round()
-            .clamp(240, 3200)
-            .toInt();
+    final cacheTarget = (math.max(scaledWidth, scaledHeight) * devicePixelRatio)
+        .round()
+        .clamp(240, 3200)
+        .toInt();
     final isSourceLandscape =
         widget.document.originalWidth >= widget.document.originalHeight;
 

@@ -206,9 +206,7 @@ class SmartScanResult {
   /// Falls back to the source-level classification when the crop has no
   /// type-specific evidence, so a caller always has a usable type.
   DocumentType typeFor(File file) {
-    final index = files.indexWhere(
-      (candidate) => candidate.path == file.path,
-    );
+    final index = files.indexWhere((candidate) => candidate.path == file.path);
     if (index >= 0 && index < outputTypes.length) {
       final detected = outputTypes[index];
       if (detected != DocumentType.unknown) return detected;
@@ -2004,9 +2002,7 @@ _SmartCropOutput? _stageTimeoutResult(
               'بقية الصورة إلى مراجعة يدوية.'
         : 'تجاوزت مرحلة $stage المهلة المحددة وتحتاج الصورة إلى مراجعة يدوية.',
     reviewRegions: incomplete
-        ? <DocumentRegion>[
-            if (remainingRegion != null) remainingRegion,
-          ]
+        ? <DocumentRegion>[if (remainingRegion != null) remainingRegion]
         : const <DocumentRegion>[],
   );
 }

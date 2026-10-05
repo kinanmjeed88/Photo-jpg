@@ -186,9 +186,7 @@ class _DocScannerAppState extends ConsumerState<DocScannerApp>
   Widget _buildHome() {
     switch (_status) {
       case _AccessStatus.checking:
-        return const Scaffold(
-          body: Center(child: CircularProgressIndicator()),
-        );
+        return const Scaffold(body: Center(child: CircularProgressIndicator()));
       case _AccessStatus.authenticated:
         return const SettingsScreen();
       case _AccessStatus.lockedOut:

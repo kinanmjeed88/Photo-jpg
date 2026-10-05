@@ -14,9 +14,7 @@ void main() {
       final directory = await Directory.systemTemp.createTemp('single_crop_');
       addTearDown(() => directory.delete(recursive: true));
       final file = File('${directory.path}/source.jpg');
-      await file.writeAsBytes(
-        img.encodeJpg(img.Image(width: 40, height: 24)),
-      );
+      await file.writeAsBytes(img.encodeJpg(img.Image(width: 40, height: 24)));
 
       await tester.pumpWidget(
         MaterialApp(home: SingleCropScreen(imageFile: file)),

@@ -242,10 +242,7 @@ void main() {
     final document = container.read(scannedDocumentsProvider)[0]!.single;
     expect(document.width, lessThanOrEqualTo(AppConstants.kA4GuideWidth));
     expect(document.height, lessThanOrEqualTo(AppConstants.kA4GuideHeight));
-    expect(
-      document.width / document.height,
-      closeTo(4, 0.01),
-    );
+    expect(document.width / document.height, closeTo(4, 0.01));
     expect(document.dx, greaterThanOrEqualTo(AppConstants.kA4GuideLeft));
     expect(document.dy, greaterThanOrEqualTo(AppConstants.kA4GuideTop));
   });
@@ -296,15 +293,11 @@ void main() {
     expect(after.dy, greaterThanOrEqualTo(AppConstants.kA4GuideTop));
     expect(
       after.dx + after.width,
-      lessThanOrEqualTo(
-        AppConstants.kA4GuideLeft + AppConstants.kA4GuideWidth,
-      ),
+      lessThanOrEqualTo(AppConstants.kA4GuideLeft + AppConstants.kA4GuideWidth),
     );
     expect(
       after.dy + after.height,
-      lessThanOrEqualTo(
-        AppConstants.kA4GuideTop + AppConstants.kA4GuideHeight,
-      ),
+      lessThanOrEqualTo(AppConstants.kA4GuideTop + AppConstants.kA4GuideHeight),
     );
   });
 

@@ -26,14 +26,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     // provider keeps the field in sync with that value without fighting the
     // user: while typing, the field is the source of the state, so the listener
     // sees an equal value and does nothing.
-    ref.listenManual(
-      appStateProvider.select((state) => state.fileName),
-      (previous, next) {
-        if (next != _fileNameController.text) {
-          _fileNameController.text = next;
-        }
-      },
-    );
+    ref.listenManual(appStateProvider.select((state) => state.fileName), (
+      previous,
+      next,
+    ) {
+      if (next != _fileNameController.text) {
+        _fileNameController.text = next;
+      }
+    });
   }
 
   @override

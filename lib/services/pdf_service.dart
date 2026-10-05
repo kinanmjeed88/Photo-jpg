@@ -148,10 +148,7 @@ Future<Map<String, Object>> _generatePdfInIsolate(
                       ),
                     )
                   : null,
-              child: pw.Image(
-                pw.MemoryImage(bytes),
-                fit: pw.BoxFit.contain,
-              ),
+              child: pw.Image(pw.MemoryImage(bytes), fit: pw.BoxFit.contain),
             ),
           ),
         );
