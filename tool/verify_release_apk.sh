@@ -17,9 +17,18 @@
 #   PHOTOJPG_STORE_PASSWORD  store password of that keystore
 #   PHOTOJPG_KEY_ALIAS       alias of the release key
 #
-# Exit code 0 means: signature valid, single signer, not the debug key, identity
-# metadata unchanged. Anything else is a hard failure.
+# Exit codes:
+#   0  signature valid, single signer, release identity confirmed, metadata
+#      unchanged (a real release artifact)
+#   1  hard failure: signature missing/invalid, unexpected signer count,
+#      signing-identity mismatch, or identity metadata drift
+#   3  the artifact is not a release artifact at all (no signing material was
+#      provided, so the build fell back to the debug key). Callers decide
+#      whether that is fatal: it is fatal for a release build, while a PR build
+#      only needs to report it loudly.
 set -euo pipefail
+
+EXIT_NOT_A_RELEASE=3
 
 APK=${1:?usage: verify_release_apk.sh <apk> <applicationId> <versionName> <versionCode>}
 EXPECTED_APP_ID=${2:?missing expected applicationId}
@@ -33,6 +42,13 @@ PHOTOJPG_KEY_ALIAS=${PHOTOJPG_KEY_ALIAS:-}
 fail() {
     printf '[FAIL] %s\n' "$*" >&2
     exit 1
+}
+
+# Used when the APK cannot be a release artifact because no signing material
+# was available; the caller decides how fatal that is.
+report_not_a_release() {
+    printf '[FAIL] %s\n' "$*" >&2
+    exit "$EXIT_NOT_A_RELEASE"
 }
 
 [ -f "$APK" ] || fail "APK not found: $APK"
@@ -88,8 +104,8 @@ echo "signers        : $SIGNER_CERT_COUNT (schemes checked by apksigner above)"
 # no matter what the caller expected.
 case "$APK_SUBJECT" in
     *'CN=Android Debug'*)
-        fail "the APK is signed with the Android debug key, so it must not be \
-shipped: no release signing material was available. Configure \
+        report_not_a_release "the APK is signed with the Android debug key, so \
+it must not be shipped: no release signing material was available. Configure \
 PHOTOJPG_KEYSTORE_BASE64 + PHOTOJPG_STORE_PASSWORD + PHOTOJPG_KEY_ALIAS (or a \
 single PHOTOJPG_KEY_PROPERTIES_BASE64) and re-run."
         ;;
@@ -102,17 +118,17 @@ if [ -f "$DEBUG_KEYSTORE" ]; then
         | grep -i 'SHA256:' | head -n 1 | sed 's/^.*SHA256: *//' \
         | normalise_digest || true)
     if [ -n "$DEBUG_DIGEST" ] && [ "$DEBUG_DIGEST" = "$APK_DIGEST" ]; then
-        fail "the APK is signed with the debug key from $DEBUG_KEYSTORE"
+        report_not_a_release "the APK is signed with the debug key"
     fi
 fi
 
 # Same signing identity as the project's keystore: compare the public
 # certificate digest of the APK with the certificate inside the keystore.
 [ -n "$RELEASE_KEYSTORE" ] && [ -f "$RELEASE_KEYSTORE" ] \
-    || fail "no release keystore was provided, so the signing identity cannot be \
-confirmed: provide the repository secrets PHOTOJPG_KEYSTORE_BASE64 / \
-PHOTOJPG_STORE_PASSWORD / PHOTOJPG_KEY_ALIAS (or an existing `key.properties`), \
-then re-run this check"
+    || report_not_a_release "no release keystore was provided, so the signing \
+identity cannot be confirmed: provide the repository secrets \
+PHOTOJPG_KEYSTORE_BASE64 / PHOTOJPG_STORE_PASSWORD / PHOTOJPG_KEY_ALIAS (or a \
+materialised android/key.properties), then re-run this check"
 [ -n "$PHOTOJPG_STORE_PASSWORD" ] \
     || fail "PHOTOJPG_STORE_PASSWORD is not set; cannot read the release keystore"
 

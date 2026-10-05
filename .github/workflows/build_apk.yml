@@ -162,18 +162,36 @@ jobs:
         # Not a formality: the APK must be signed with the project's release
         # identity, must not be debug-signed, and must keep the same
         # applicationId / versionName / versionCode.
+        #
+        # An invalid signature, a signing-identity mismatch or changed identity
+        # metadata always fail. The remaining case - the build fell back to the
+        # debug key because no release signing material is configured - is fatal
+        # for a release (push to main / manual run) and is reported loudly on
+        # pull requests, where contributors cannot hold the release key: a PR
+        # build is not a release and never uploads an artifact.
         env:
           PHOTOJPG_STORE_PASSWORD: ${{ secrets.PHOTOJPG_STORE_PASSWORD }}
           PHOTOJPG_KEY_ALIAS: ${{ secrets.PHOTOJPG_KEY_ALIAS }}
+          RELEASE_GATE_REQUIRED: ${{ github.event_name != 'pull_request' }}
         run: |
           set -euo pipefail
           version=$(sed -n 's/^version: *//p' pubspec.yaml)
           name=${version%%+*}
           code=${version##*+}
+          set +e
           bash tool/verify_release_apk.sh \
             build/app/outputs/flutter-apk/app-release.apk \
             com.jules.docscanner.doc_scanner_app "$name" "$code"
-
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            exit 0
+          fi
+          if [ "$status" -eq 3 ] && [ "${RELEASE_GATE_REQUIRED}" != "true" ]; then
+            echo "::warning title=Release signing::this pull-request build is signed with the debug key because no release signing material is configured; it is not a distributable artifact."
+            exit 0
+          fi
+          exit "$status"
       - name: Upload APK artifact
         if: success() && github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
