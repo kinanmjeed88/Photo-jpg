@@ -9,8 +9,13 @@ name: Format patch (temporary helper)
 # result to a throwaway branch (`arena/format-helper`). The result is reviewed
 # and fast-forwarded into the working branch by hand; the repository keeps a
 # single honest verification workflow (build_apk.yml) that never writes.
+# `workflow_dispatch` cannot reach a workflow that is not on the default branch,
+# so the job is triggered by a push to the branch under verification and gated on
+# an explicit marker in the commit subject. Pushing without the marker is a no-op.
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - arena/01a10b57-photo-jpg
 
 permissions:
   contents: write
@@ -18,6 +23,7 @@ permissions:
 jobs:
   format:
     name: Run pub get and dart format, publish to a scratch branch
+    if: contains(github.event.head_commit.message, '[ci-format]')
     runs-on: ubuntu-latest
 
     steps:
