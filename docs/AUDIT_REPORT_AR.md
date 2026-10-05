@@ -674,26 +674,32 @@ API ≤ 29، و`hasAccess()` في `gal` يتجاهل أي إذن آخر. **ال�
 
 ### 7.3 نتائج السلسلة الخمسية (حرفياً)
 
-السلسلة نُفِّذت على مرحلتين: تشخيص أولي لجمع المخرجات الكاملة، ثم بعد الإصلاحات **تشغيل ثانٍ
-جمع المخرجات كاملة**، ثم تشغيل سير العمل الحقيقي على شجرة التسليم. الجدول أدناه يعطي النص
-الحرفي من آخر تشغيل جمع المخرجات على شجرة الشيفرة نفسها التي بين يديك:
+السلسلة نُفِّذت ثلاث مرات: تشخيص أول (كشف الأخطاء)، ثم تشغيل بعد الإصلاحات (كشف ملاحظة
+`unused_import` واحدة)، ثم **التشغيل النهائي على شجرة الشيفرة النهائية نفسها** الذي جمع
+المخرجات الخمس كاملة بلا أي فشل. الجدول أدناه هو **النص الحرفي** من ذلك التشغيل الأخير
+(`pub_get_exit=0`, `format_exit=0`, `analyze_exit=0`, `test_exit=0`, `build_exit=0`):
 
 | # | الأمر | النتيجة | النص الحرفي / الدليل |
 | --- | --- | --- | --- |
-| 1 | `flutter pub get` | ✅ | «Resolving dependencies... Got dependencies!» بلا أي تعارض، ثم «54 packages have newer versions incompatible with dependency constraints» (معلومة إرشادية لا خطأ). و**الثلاث تبعيات المُزالة اختفت فعلاً**: لا ذكر لـ`permission_handler` ولا `riverpod_annotation` ولا `cupertino_icons` في `pubspec.lock` |
-| 2 | `dart format --output=none --set-exit-if-changed .` | ✅ | «Formatted 23 files (0 changed) in 0.19 seconds.» |
-| 3 | `flutter analyze` | ✅ **0 مشكلة** | انظر 7.4: أُصلحت الملاحظات الثلاث (ملفّان إعلاميان + استيراد غير مستخدم) بجذورها، والخطوة صارت `success` |
-| 4 | `flutter test` | ✅ | «🎉 71 tests passed.» بلا فشل ولا تجاوز مهلة |
-| 5 | `flutter build apk --release` | ✅ | «Running Gradle task 'assembleRelease'... 488.9s» ثم «✓ Built build/app/outputs/flutter-apk/app-release.apk (182.9MB)» |
+| 1 | `flutter pub get` | ✅ `pub_get_exit=0` | «Got dependencies!» بلا تعارض، ثم «54 packages have newer versions incompatible with dependency constraints» (معلومة إرشادية لا خطأ). و**الثلاث تبعيات المُزالة اختفت فعلاً**: لا ذكر لـ`permission_handler` ولا `riverpod_annotation` ولا `cupertino_icons` في `pubspec.lock` |
+| 2 | `dart format --output=none --set-exit-if-changed .` | ✅ `format_exit=0` | «Formatted 23 files (0 changed) in 0.18 seconds.» ثم إعادة تشغيل بلا `--set-exit-if-changed`: «Formatted 23 files (0 changed) in 0.19 seconds.» ⇒ لا ملف واحد يحتاج تنسيقاً |
+| 3 | `flutter analyze` | ✅ `analyze_exit=0` — **0 مشكلة** | «Analyzing Photo-jpg... **No issues found!** (ran in 16.0s)» — بعد أن كان التشخيص الأول يُخرج `2` ملاحظة إعلامية، والثاني `1` ملاحظة `unused_import` أُصلحت بالحذف لا بالتجاهل |
+| 4 | `flutter test` | ✅ `test_exit=0` | «🎉 71 tests passed.» بلا فشل ولا تجاوز مهلة (كان التشخيص الأول: 68 ناجحاً / 3 فاشلة) |
+| 5 | `flutter build apk --release` | ✅ `build_exit=0` | «Running Gradle task 'assembleRelease'... 490.5s» ثم «✓ Built build/app/outputs/flutter-apk/app-release.apk (182.9MB)» |
 
 **تشغيلات مرجعية على GitHub:**
 
 | الحدث | الرابط |
 | --- | --- |
-| سير العمل الحقيقي (analyze/test/build) على شجرة التسليم | `https://github.com/kinanmjeed88/Photo-jpg/actions/runs/37348686017` |
-| جمع المخرجات الخمس كاملة (تشخيصي) | `https://github.com/kinanmjeed88/Photo-jpg/actions/runs/37345474546` |
+| سير العمل الحقيقي (pub get/format/analyze/test/build) على شجرة التسليم | `https://github.com/kinanmjeed88/Photo-jpg/actions/runs/37348686017` (نجح، 11m 0s) |
+| **جمع المخرجات الخمس كاملة للنص الحرفي أعلاه** | `https://github.com/kinanmjeed88/Photo-jpg/actions/runs/37350356813` (نجح) |
+| التشخيص الأول (قبل الإصلاحات) | `https://github.com/kinanmjeed88/Photo-jpg/actions/runs/37345474546` |
 | PR المفتوح من الفرع نحو `main` (غير مدموج) | `https://github.com/kinanmjeed88/Photo-jpg/pull/93` |
 
+> **تحذير أمانة:** تشغيل جمع المخرجات يعمل **بوجود** ملف سير العمل المؤقت `ci_scratch.yml` في
+> الشجرة (هو الأداة التي تجمع المخرجات). الفرق الوحيد بين تلك الشجرة وشجرة التسليم هو وجود
+> ذلك الملف المؤقت ثم حذفه + نصوص هذا التقرير؛ **لا سطر شيفرة Dart أو Kotlin أو إعداد بناء
+> يختلف** — وقد أُكِّد ذلك بتشغيل سير العمل الحقيقي على الشجرة الخالية منه (شاهد الجدول أعلاه).
 > الحالة المعلنة هي حالة **الفرع** فقط؛ `main` لم يُمسّ، ولا وُجد Release أو Tag.
 
 ### 7.4 ما كشفه البناء الحقيقي فعلياً وأُصلح (دورة كاملة، لا ترقيع)
