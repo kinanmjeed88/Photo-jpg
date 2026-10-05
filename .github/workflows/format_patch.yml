@@ -1,24 +1,31 @@
 name: Format patch (temporary helper)
 
-# TEMPORARY: this workflow exists only while the canonical formatting pass is
-# being applied. It runs `dart format` in a real Flutter environment and uploads
-# the resulting diff as an artifact, because the audit environment has no Dart
-# SDK. It is removed again as soon as the formatting commit is in place, so that
-# the repository keeps a single, honest verification workflow (build_apk.yml).
+# TEMPORARY HELPER - removed as soon as the canonical formatting pass is in the
+# branch being verified.
+#
+# Why it exists: the audit environment has no Dart SDK, so `dart format` and the
+# `pubspec.lock` refresh that a real `flutter pub get` produces cannot be run
+# locally. This job runs both in a real Flutter environment and commits the
+# result to a throwaway branch (`arena/format-helper`). The result is reviewed
+# and fast-forwarded into the working branch by hand; the repository keeps a
+# single honest verification workflow (build_apk.yml) that never writes.
 on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  patch:
-    name: Produce formatting patch
+  format:
+    name: Run pub get and dart format, publish to a scratch branch
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: arena/01a10b57-photo-jpg
+          fetch-depth: 0
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -26,20 +33,22 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Install packages
+      - name: Install packages (refreshes pubspec.lock)
         run: flutter pub get
 
-      - name: Format sources
+      - name: Report resolved versions
+        run: |
+          flutter --version
+          grep -c "^  cupertino_icons:\|^  permission_handler:\|^  riverpod_annotation:" pubspec.lock || echo "removed dependencies absent from pubspec.lock"
+
+      - name: Apply canonical formatting
         run: dart format .
 
-      - name: Summarise changes
+      - name: Publish the result to the scratch branch
         run: |
-          git --no-pager diff --stat
-          git diff > format.patch
-
-      - name: Upload formatting patch
-        uses: actions/upload-artifact@v4
-        with:
-          name: format-patch
-          path: format.patch
-          if-no-files-found: error
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git --no-pager diff --cached --stat
+          git commit -m "style: canonical dart formatting + refreshed pubspec.lock (CI helper)" || echo "nothing to commit"
+          git push --force origin HEAD:refs/heads/arena/format-helper
