@@ -60,7 +60,7 @@ val anySigningValueProvided =
         releaseKeyPassword != null
 val hasReleaseSigning = anySigningValueProvided && missingSigningValues.isEmpty()
 
-if (anySigningValueProvided && missingSigningValues.isNotEmpty) {
+if (anySigningValueProvided && missingSigningValues.isNotEmpty()) {
     throw GradleException(
         "[photo-jpg] Release signing is incomplete: " +
             missingSigningValues.joinToString("; ") +
@@ -79,10 +79,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
         isCoreLibraryDesugaringEnabled = true
-    }
-
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
     }
 
     defaultConfig {
@@ -132,6 +128,15 @@ if (!hasReleaseSigning) {
             "PHOTOJPG_STORE_PASSWORD / PHOTOJPG_KEY_ALIAS / PHOTOJPG_KEY_PASSWORD " +
             "or an android/key.properties file (see android/key.properties.example).",
     )
+}
+
+// Kotlin target, expressed through the compilerOptions DSL: the deprecated
+// `kotlinOptions.jvmTarget = <String>` assignment is a hard error with the
+// Kotlin version the current Flutter stable ships (`https://kotl.in/u1r8ln`).
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
 }
 
 flutter {

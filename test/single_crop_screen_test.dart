@@ -6,18 +6,33 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
 void main() {
+  // The source image is prepared in a fixture, not inside the test body:
+  // `testWidgets` runs its body in a fake asynchronous zone where real file I/O
+  // never completes, which is what made an earlier version of this test hang
+  // until the ten-minute timeout. Fixtures run in the real zone.
+  late Directory directory;
+  late File sourceFile;
+
+  setUp(() async {
+    directory = await Directory.systemTemp.createTemp('single_crop_');
+    sourceFile = File('${directory.path}/source.jpg');
+    final thumbnail = img.Image(width: 40, height: 24);
+    await sourceFile.writeAsBytes(img.encodeJpg(thumbnail));
+  });
+
+  tearDown(() async {
+    if (await directory.exists()) {
+      await directory.delete(recursive: true);
+    }
+  });
+
   testWidgets(
     'SingleCropScreen shows the Arabic crop controls and keeps the editor',
     (WidgetTester tester) async {
       // A real (small) JPEG keeps the editor's image provider loadable, so the
       // screen under test is the same one a user sees.
-      final directory = await Directory.systemTemp.createTemp('single_crop_');
-      addTearDown(() => directory.delete(recursive: true));
-      final file = File('${directory.path}/source.jpg');
-      await file.writeAsBytes(img.encodeJpg(img.Image(width: 40, height: 24)));
-
       await tester.pumpWidget(
-        MaterialApp(home: SingleCropScreen(imageFile: file)),
+        MaterialApp(home: SingleCropScreen(imageFile: sourceFile)),
       );
       await tester.pump();
 

@@ -37,7 +37,7 @@ Map<String, Object> _generateProxyInIsolate(Map<String, dynamic> args) {
 /// which is the same gain/offset pair used by the export path, so only the
 /// sharpen pass has to run here.
 Uint8List _renderPreview(Map<String, dynamic> args) {
-  final source = img.decodeImage(args['bytes'] as Uint8List);
+  final source = decodeImageOrNull(args['bytes'] as Uint8List);
   if (source == null) {
     throw StateError('ملف معاينة غير صالح.');
   }

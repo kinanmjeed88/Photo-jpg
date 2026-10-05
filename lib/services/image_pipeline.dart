@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'dart:ui' show Rect;
 
 import 'package:flutter/foundation.dart';
@@ -340,6 +339,25 @@ class ImageProxy {
 
 /// Decodes [encoded] and bakes any EXIF orientation into the pixels.
 ///
+/// Decodes [encoded] and never throws.
+///
+/// `package:image` probes every registered format with the bytes it is given,
+/// and a truncated or hostile header makes a decoder throw (`RangeError`,
+/// `FormatException`, ...) instead of reporting "this is not an image". Every
+/// decode of untrusted bytes in the application goes through this helper so the
+/// documented contract of each entry point holds for *any* input: `null` where
+/// the caller handles a missing image, [StateError] where the caller expects a
+/// deterministic failure.
+img.Image? decodeImageOrNull(Uint8List encoded) {
+  if (encoded.isEmpty) return null;
+  try {
+    return img.decodeImage(encoded);
+  } catch (error) {
+    debugPrint('تعذر فك ترميز الصورة: $error');
+    return null;
+  }
+}
+
 /// Decodes [encoded] into the single "upright pixel" space the application
 /// works in: what is measured here is what is displayed, what is cropped, and
 /// what is embedded into the PDF.
@@ -354,7 +372,7 @@ class ImageProxy {
 /// Throws [StateError] when the bytes cannot be decoded so the caller can show a
 /// deterministic error instead of an endless loading indicator.
 img.Image decodeOriented(Uint8List encoded) {
-  final decoded = img.decodeImage(encoded);
+  final decoded = decodeImageOrNull(encoded);
   if (decoded == null) {
     throw StateError('ملف الصورة غير صالح.');
   }
@@ -372,7 +390,7 @@ bool _hasPendingOrientation(img.Image image) {
 ///
 /// Isolate-friendly: only bytes go in and two integers come out.
 (int, int)? orientedDimensionsFromBytes(Uint8List encoded) {
-  final decoded = img.decodeImage(encoded);
+  final decoded = decodeImageOrNull(encoded);
   if (decoded == null) return null;
   final oriented = img.bakeOrientation(decoded);
   return (oriented.width, oriented.height);
@@ -398,7 +416,7 @@ Future<File> normalizeOrientation(File file) async {
     final baked = await Isolate.run(() {
       final source = File(path);
       if (!source.existsSync()) return null;
-      final decoded = img.decodeImage(source.readAsBytesSync());
+      final decoded = decodeImageOrNull(source.readAsBytesSync());
       if (decoded == null || !_hasPendingOrientation(decoded)) return null;
       final upright = img.bakeOrientation(decoded);
       return Uint8List.fromList(
@@ -457,7 +475,7 @@ OrientedProxy createOrientedProxy(
   Uint8List encoded, {
   int maxEdge = ImageAdjustments.previewMaxEdge,
 }) {
-  final decoded = img.decodeImage(encoded);
+  final decoded = decodeImageOrNull(encoded);
   if (decoded == null) {
     throw StateError('ملف الصورة غير صالح للمعاينة.');
   }

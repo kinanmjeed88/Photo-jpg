@@ -2002,7 +2002,7 @@ _SmartCropOutput? _stageTimeoutResult(
               'بقية الصورة إلى مراجعة يدوية.'
         : 'تجاوزت مرحلة $stage المهلة المحددة وتحتاج الصورة إلى مراجعة يدوية.',
     reviewRegions: incomplete
-        ? <DocumentRegion>[if (remainingRegion != null) remainingRegion]
+        ? <DocumentRegion>[?remainingRegion]
         : const <DocumentRegion>[],
   );
 }

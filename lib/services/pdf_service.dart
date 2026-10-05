@@ -10,6 +10,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
 import '../providers/app_state.dart';
+import 'image_pipeline.dart';
 
 const double _a4WidthPoints = 595.275590551;
 const double _a4HeightPoints = 841.88976378;
@@ -51,7 +52,7 @@ Uint8List _preparePdfImage({
   required int targetLongestEdge,
 }) {
   final rawBytes = File(sourcePath).readAsBytesSync();
-  var image = img.decodeImage(rawBytes);
+  var image = decodeImageOrNull(rawBytes);
   if (image == null) {
     throw StateError('ملف الصورة غير صالح: $sourcePath');
   }
