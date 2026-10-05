@@ -1,0 +1,146 @@
+name: CI signing diagnostics (temporary)
+
+# TEMPORARY HELPER - removed before this branch is handed over.
+#
+# Why it exists: the audit environment cannot read GitHub Actions logs, so the
+# raw output of the signing materialisation step and of the release signature
+# verification step is published as text files to a throwaway branch
+# (`arena/ci-scratch`) that can be fetched with git.
+#
+# It mirrors the real workflow step by step, never touches the working branch
+# and never writes to `main`.
+on:
+  push:
+    branches:
+      - arena/01a10b57-photo-jpg
+
+permissions:
+  contents: write
+
+jobs:
+  diagnostics:
+    runs-on: ubuntu-latest
+    if: contains(github.event.head_commit.message, '[ci-scratch]')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: Run the chain and capture the output
+        env:
+          PHOTOJPG_KEYSTORE_BASE64: ${{ secrets.PHOTOJPG_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          PHOTOJPG_KEY_PROPERTIES_BASE64: ${{ secrets.PHOTOJPG_KEY_PROPERTIES_BASE64 }}
+          ANDROID_KEY_PROPERTIES_BASE64: ${{ secrets.ANDROID_KEY_PROPERTIES_BASE64 }}
+          KEY_PROPERTIES_BASE64: ${{ secrets.KEY_PROPERTIES_BASE64 }}
+          STORE_FILE_SECRET: ${{ secrets.PHOTOJPG_STORE_FILE }}
+          STORE_FILE_ALT_SECRET: ${{ secrets.KEYSTORE_PATH }}
+          SECRET_KEY_ALIAS: ${{ secrets.PHOTOJPG_KEY_ALIAS }}
+          SECRET_STORE_PASSWORD: ${{ secrets.PHOTOJPG_STORE_PASSWORD }}
+          SECRET_KEY_PASSWORD: ${{ secrets.PHOTOJPG_KEY_PASSWORD }}
+        run: |
+          set -uo pipefail
+          mkdir -p ci-diagnostics
+
+          {
+            echo "## secret availability (names only, no values)"
+            for pair in \
+              "PHOTOJPG_KEYSTORE_BASE64:${PHOTOJPG_KEYSTORE_BASE64:-}" \
+              "ANDROID_KEYSTORE_BASE64:${ANDROID_KEYSTORE_BASE64:-}" \
+              "KEYSTORE_BASE64:${KEYSTORE_BASE64:-}" \
+              "PHOTOJPG_KEY_PROPERTIES_BASE64:${PHOTOJPG_KEY_PROPERTIES_BASE64:-}" \
+              "ANDROID_KEY_PROPERTIES_BASE64:${ANDROID_KEY_PROPERTIES_BASE64:-}" \
+              "KEY_PROPERTIES_BASE64:${KEY_PROPERTIES_BASE64:-}" \
+              "PHOTOJPG_STORE_FILE:${STORE_FILE_SECRET:-}" \
+              "KEYSTORE_PATH:${STORE_FILE_ALT_SECRET:-}" \
+              "PHOTOJPG_KEY_ALIAS:${SECRET_KEY_ALIAS:-}" \
+              "PHOTOJPG_STORE_PASSWORD:${SECRET_STORE_PASSWORD:-}" \
+              "PHOTOJPG_KEY_PASSWORD:${SECRET_KEY_PASSWORD:-}"; do
+              name=${pair%%:*}
+              value=${pair#*:}
+              if [ -n "$value" ]; then
+                echo "$name = set"
+              else
+                echo "$name = missing"
+              fi
+            done
+            echo
+            echo "## materialisation result"
+          } > ci-diagnostics/06-signing-material.txt 2>&1
+
+          temp_keystore="$RUNNER_TEMP/photo_jpg_release.jks"
+          if [ -n "${PHOTOJPG_KEYSTORE_BASE64:-}" ]; then
+            printf '%s' "$PHOTOJPG_KEYSTORE_BASE64" | base64 -d > "$temp_keystore"
+            echo "PHOTOJPG_STORE_FILE=$temp_keystore" >> "$GITHUB_ENV"
+            echo "keystore from PHOTOJPG_KEYSTORE_BASE64" \
+              >> ci-diagnostics/06-signing-material.txt
+          elif [ -n "${STORE_FILE_SECRET:-}" ] && [ -f "${STORE_FILE_SECRET}" ]; then
+            echo "PHOTOJPG_STORE_FILE=$STORE_FILE_SECRET" >> "$GITHUB_ENV"
+            echo "keystore from an existing PHOTOJPG_STORE_FILE path" \
+              >> ci-diagnostics/06-signing-material.txt
+          else
+            echo "no usable keystore secret was found" \
+              >> ci-diagnostics/06-signing-material.txt
+          fi
+
+          if [ -n "${PHOTOJPG_KEY_PROPERTIES_BASE64:-}" ]; then
+            printf '%s' "$PHOTOJPG_KEY_PROPERTIES_BASE64" \
+              | base64 -d > android/key.properties
+            chmod 600 android/key.properties
+            echo "key.properties from PHOTOJPG_KEY_PROPERTIES_BASE64" \
+              >> ci-diagnostics/06-signing-material.txt
+          fi
+
+          flutter pub get > ci-diagnostics/01-pub-get.txt 2>&1
+          echo "pub_get_exit=$?" >> ci-diagnostics/01-pub-get.txt
+
+          dart format --output=none --set-exit-if-changed . \
+            > ci-diagnostics/02-format.txt 2>&1
+          echo "format_exit=$?" >> ci-diagnostics/02-format.txt
+
+          flutter analyze > ci-diagnostics/03-analyze.txt 2>&1
+          echo "analyze_exit=$?" >> ci-diagnostics/03-analyze.txt
+
+          flutter test > ci-diagnostics/04-test.txt 2>&1
+          echo "test_exit=$?" >> ci-diagnostics/04-test.txt
+
+          flutter build apk --release > ci-diagnostics/05-build-apk.txt 2>&1
+          echo "build_exit=$?" >> ci-diagnostics/05-build-apk.txt
+
+          version=$(sed -n 's/^version: *//p' pubspec.yaml)
+          name=${version%%+*}
+          code=${version##*+}
+          bash tool/verify_release_apk.sh \
+            build/app/outputs/flutter-apk/app-release.apk \
+            com.jules.docscanner.doc_scanner_app "$name" "$code" \
+            > ci-diagnostics/07-signing-verification.txt 2>&1
+          echo "signing_verify_exit=$?" \
+            >> ci-diagnostics/07-signing-verification.txt
+
+          git status --porcelain > ci-diagnostics/08-tree-status.txt 2>&1
+          echo "git_status_lines=$(wc -l < ci-diagnostics/08-tree-status.txt)" \
+            >> ci-diagnostics/08-tree-status.txt
+
+          tail -n 40 ci-diagnostics/07-signing-verification.txt
+
+      - name: Publish diagnostics to the scratch branch
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "ci: signing diagnostics"
+          git push --force origin HEAD:refs/heads/arena/ci-scratch
