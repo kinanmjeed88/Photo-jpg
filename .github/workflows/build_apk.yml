@@ -51,16 +51,128 @@ jobs:
       - name: Unit and widget tests
         run: flutter test
 
+      - name: Materialise release signing material
+        # The keystore and its passwords live in repository secrets only. They
+        # are written to ignored/limited paths for the duration of the job and
+        # are never echoed: this step reports the *names* that are configured,
+        # never any value. Several spellings are accepted so that an existing
+        # secret keeps working without renaming anything.
+        env:
+          PHOTOJPG_KEYSTORE_BASE64: ${{ secrets.PHOTOJPG_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          PHOTOJPG_KEY_PROPERTIES_BASE64: ${{ secrets.PHOTOJPG_KEY_PROPERTIES_BASE64 }}
+          ANDROID_KEY_PROPERTIES_BASE64: ${{ secrets.ANDROID_KEY_PROPERTIES_BASE64 }}
+          KEY_PROPERTIES_BASE64: ${{ secrets.KEY_PROPERTIES_BASE64 }}
+          STORE_FILE_SECRET: ${{ secrets.PHOTOJPG_STORE_FILE }}
+          STORE_FILE_ALT_SECRET: ${{ secrets.KEYSTORE_PATH }}
+          SECRET_KEY_ALIAS: ${{ secrets.PHOTOJPG_KEY_ALIAS }}
+          SECRET_STORE_PASSWORD: ${{ secrets.PHOTOJPG_STORE_PASSWORD }}
+          SECRET_KEY_PASSWORD: ${{ secrets.PHOTOJPG_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          temp_keystore="$RUNNER_TEMP/photo_jpg_release.jks"
+
+          report() {  # report <name> <present|missing>
+            printf '%-28s %s\n' "$1" "$2"
+          }
+
+          # Availability report by name only; no value is ever printed.
+          for pair in \
+            "PHOTOJPG_KEYSTORE_BASE64:${PHOTOJPG_KEYSTORE_BASE64:-}" \
+            "ANDROID_KEYSTORE_BASE64:${ANDROID_KEYSTORE_BASE64:-}" \
+            "KEYSTORE_BASE64:${KEYSTORE_BASE64:-}" \
+            "PHOTOJPG_KEY_PROPERTIES_BASE64:${PHOTOJPG_KEY_PROPERTIES_BASE64:-}" \
+            "ANDROID_KEY_PROPERTIES_BASE64:${ANDROID_KEY_PROPERTIES_BASE64:-}" \
+            "KEY_PROPERTIES_BASE64:${KEY_PROPERTIES_BASE64:-}" \
+            "PHOTOJPG_STORE_FILE:${STORE_FILE_SECRET:-}" \
+            "KEYSTORE_PATH:${STORE_FILE_ALT_SECRET:-}" \
+            "PHOTOJPG_KEY_ALIAS:${SECRET_KEY_ALIAS:-}" \
+            "PHOTOJPG_STORE_PASSWORD:${SECRET_STORE_PASSWORD:-}" \
+            "PHOTOJPG_KEY_PASSWORD:${SECRET_KEY_PASSWORD:-}"; do
+            name=${pair%%:*}
+            value=${pair#*:}
+            if [ -n "$value" ]; then report "$name" "set"; else report "$name" "missing"; fi
+          done
+
+          keystore_source=""
+          for pair in \
+            "PHOTOJPG_KEYSTORE_BASE64:${PHOTOJPG_KEYSTORE_BASE64:-}" \
+            "ANDROID_KEYSTORE_BASE64:${ANDROID_KEYSTORE_BASE64:-}" \
+            "KEYSTORE_BASE64:${KEYSTORE_BASE64:-}"; do
+            value=${pair#*:}
+            if [ -n "$value" ]; then
+              printf '%s' "$value" | base64 -d > "$temp_keystore"
+              keystore_source=${pair%%:*}
+              break
+            fi
+          done
+
+          if [ -n "$keystore_source" ]; then
+            chmod 600 "$temp_keystore"
+            echo "PHOTOJPG_STORE_FILE=$temp_keystore" >> "$GITHUB_ENV"
+            echo "keystore: decoded from $keystore_source"
+          elif [ -n "${STORE_FILE_SECRET:-}" ] && [ -f "${STORE_FILE_SECRET}" ]; then
+            echo "PHOTOJPG_STORE_FILE=$STORE_FILE_SECRET" >> "$GITHUB_ENV"
+            echo "keystore: PHOTOJPG_STORE_FILE points at a file on the runner"
+          elif [ -n "${STORE_FILE_SECRET:-}" ] \
+            && printf '%s' "$STORE_FILE_SECRET" | base64 -d \
+              > "$temp_keystore" 2>/dev/null; then
+            chmod 600 "$temp_keystore"
+            echo "PHOTOJPG_STORE_FILE=$temp_keystore" >> "$GITHUB_ENV"
+            echo "keystore: PHOTOJPG_STORE_FILE holds the base64 content"
+          elif [ -n "${STORE_FILE_ALT_SECRET:-}" ] \
+            && [ -f "${STORE_FILE_ALT_SECRET}" ]; then
+            echo "PHOTOJPG_STORE_FILE=$STORE_FILE_ALT_SECRET" >> "$GITHUB_ENV"
+            echo "keystore: KEYSTORE_PATH points at a file on the runner"
+          else
+            echo "keystore: no usable keystore secret found"
+          fi
+
+          properties_source=""
+          for pair in \
+            "PHOTOJPG_KEY_PROPERTIES_BASE64:${PHOTOJPG_KEY_PROPERTIES_BASE64:-}" \
+            "ANDROID_KEY_PROPERTIES_BASE64:${ANDROID_KEY_PROPERTIES_BASE64:-}" \
+            "KEY_PROPERTIES_BASE64:${KEY_PROPERTIES_BASE64:-}"; do
+            value=${pair#*:}
+            if [ -n "$value" ]; then
+              printf '%s' "$value" | base64 -d > android/key.properties
+              properties_source=${pair%%:*}
+              break
+            fi
+          done
+
+          if [ -n "$properties_source" ]; then
+            chmod 600 android/key.properties
+            echo "key.properties: materialised from $properties_source"
+          else
+            echo "key.properties: not provided (scalar secrets are used instead)"
+          fi
+
       - name: Build release APK
         env:
-          # Optional: configure these secrets to sign a distributable build.
-          # Without them Gradle falls back to the debug key and the warning is
-          # visible in the log.
-          PHOTOJPG_STORE_FILE: ${{ secrets.PHOTOJPG_STORE_FILE }}
+          # Optional: without any of these Gradle falls back to the debug key,
+          # and the "Release signing verification" step below fails on purpose.
           PHOTOJPG_STORE_PASSWORD: ${{ secrets.PHOTOJPG_STORE_PASSWORD }}
           PHOTOJPG_KEY_ALIAS: ${{ secrets.PHOTOJPG_KEY_ALIAS }}
           PHOTOJPG_KEY_PASSWORD: ${{ secrets.PHOTOJPG_KEY_PASSWORD }}
         run: flutter build apk --release
+
+      - name: Release signing verification
+        # Not a formality: the APK must be signed with the project's release
+        # identity, must not be debug-signed, and must keep the same
+        # applicationId / versionName / versionCode.
+        env:
+          PHOTOJPG_STORE_PASSWORD: ${{ secrets.PHOTOJPG_STORE_PASSWORD }}
+          PHOTOJPG_KEY_ALIAS: ${{ secrets.PHOTOJPG_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version: *//p' pubspec.yaml)
+          name=${version%%+*}
+          code=${version##*+}
+          bash tool/verify_release_apk.sh \
+            build/app/outputs/flutter-apk/app-release.apk \
+            com.jules.docscanner.doc_scanner_app "$name" "$code"
 
       - name: Upload APK artifact
         if: success() && github.event_name != 'pull_request'
