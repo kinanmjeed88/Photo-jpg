@@ -662,7 +662,7 @@ API ≤ 29، و`hasAccess()` في `gal` يتجاهل أي إذن آخر. **ال�
 | البند | القيمة |
 | --- | --- |
 | سير العمل المستخدم للتسليم | `.github/workflows/build_apk.yml` — **قراءة فقط**: لا يعدّل شيفرة ولا يدفع، ويرفع الـ APK كأثر فقط في الدفعات غير الخاصة بـ PR |
-| سير عمل تشخيصي مؤقت | `ci_scratch.yml` (مُقيَّد بـ push يحمل علامة، يكتب المخرجات الخمس كاملة إلى فرع منفصل `arena/ci-scratch` لقراءتها) — **يُحذف قبل التسليم** |
+| سير عمل تشخيصي مؤقت | `ci_scratch.yml` (مُقيَّد بـ push يحمل علامة، يكتب المخرجات الخمس كاملة إلى فرع منفصل `arena/ci-scratch` لقراءتها) — **حُذف فعلاً من شجرة التسليم (مُثبَّت بـ commit)، ولم يبقَ تحت `.github/workflows/` إلا `build_apk.yml`**، وحُذف الفرع المساعد من المستودع |
 | نظام التشغيل | `ubuntu-latest` + Java 17 (Temurin) + `subosito/flutter-action` (قناة stable) |
 | Flutter | **3.47.6** (stable، المراجعة `5fc346839b`) |
 | Dart | **3.13.5** |
@@ -691,7 +691,7 @@ API ≤ 29، و`hasAccess()` في `gal` يتجاهل أي إذن آخر. **ال�
 
 | الحدث | الرابط |
 | --- | --- |
-| سير العمل الحقيقي (pub get/format/analyze/test/build) على شجرة التسليم **بعد إزالة الملف المؤقت** | `https://github.com/kinanmjeed88/Photo-jpg/actions/runs/37351640946` (نجح: «Install packages» ✅ «Verify formatting» ✅ «Static analysis» ✅ «Unit and widget tests» ✅ «Build release APK» ✅) |
+| سير العمل الحقيقي (pub get/format/analyze/test/build) بعد إزالة الملف المؤقت | `https://github.com/kinanmjeed88/Photo-jpg/actions/runs/37351640946` (نجح: «Install packages» ✅ «Verify formatting» ✅ «Static analysis» ✅ «Unit and widget tests» ✅ «Build release APK» ✅)، وأُعيد تشغيله بعد كل دفعة تالية على هذا التقرير وكان ناجحاً في كل مرة |
 | سير العمل الحقيقي قبل خطوة التنظيف الأخيرة | `https://github.com/kinanmjeed88/Photo-jpg/actions/runs/37348686017` (نجح، 11m 0s) |
 | **جمع المخرجات الخمس كاملة للنص الحرفي أعلاه** | `https://github.com/kinanmjeed88/Photo-jpg/actions/runs/37350356813` (نجح) |
 | التشخيص الأول (قبل الإصلاحات) | `https://github.com/kinanmjeed88/Photo-jpg/actions/runs/37345474546` |
