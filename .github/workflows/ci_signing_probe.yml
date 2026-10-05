@@ -52,7 +52,10 @@ jobs:
           SECRET_STORE_PASSWORD: ${{ secrets.PHOTOJPG_STORE_PASSWORD }}
           SECRET_KEY_PASSWORD: ${{ secrets.PHOTOJPG_KEY_PASSWORD }}
         run: |
+          # GitHub runs `run:` blocks with `bash -e`; disable that here so that
+          # every command's exit code is captured instead of aborting the step.
           set -uo pipefail
+          set +e
           mkdir -p ci-diagnostics
 
           {
@@ -135,6 +138,7 @@ jobs:
             >> ci-diagnostics/08-tree-status.txt
 
           tail -n 40 ci-diagnostics/07-signing-verification.txt
+          exit 0
 
       - name: Publish diagnostics to the scratch branch
         run: |
