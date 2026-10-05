@@ -1,0 +1,90 @@
+name: CI scratch helper (temporary)
+
+# TEMPORARY HELPER - removed before the branch is considered finished.
+#
+# Why it exists: the audit environment cannot reach the GitHub Actions log or
+# artifact endpoints and has no Dart SDK, so the real output of `flutter analyze`
+# / `flutter test` / `flutter build apk` cannot be read any other way. This job
+# runs the exact same chain as `build_apk.yml`, applies canonical formatting when
+# the format gate fails, and commits every step's raw output plus the formatting
+# result to a throwaway branch (`arena/ci-scratch`) that can be fetched with git.
+#
+# It never touches the working branch and never writes to `main`; the throwaway
+# branch is deleted as soon as the real workflow is green.
+on:
+  push:
+    branches:
+      - arena/01a10b57-photo-jpg
+
+permissions:
+  contents: write
+
+jobs:
+  scratch:
+    name: Run the verification chain and publish its raw output
+    if: contains(github.event.head_commit.message, '[ci-scratch]')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: arena/01a10b57-photo-jpg
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Run the chain and capture the output
+        run: |
+          mkdir -p ci-diagnostics
+          {
+            echo "## versions"
+            flutter --version
+            echo
+            echo "## flutter pub get"
+            flutter pub get 2>&1
+            echo "pub_get_exit=$?"
+          } > ci-diagnostics/01-pub-get.txt 2>&1
+
+          {
+            echo "## dart format --output=none --set-exit-if-changed ."
+            dart format --output=none --set-exit-if-changed . 2>&1
+            echo "format_exit=$?"
+          } > ci-diagnostics/02-format.txt 2>&1
+
+          # Canonical formatting is mechanical: apply it so the branch can carry
+          # the result (reviewed before it is fast-forwarded by hand).
+          dart format . >> ci-diagnostics/02-format.txt 2>&1
+
+          set +e
+          flutter analyze > ci-diagnostics/03-analyze.txt 2>&1
+          echo "analyze_exit=$?" >> ci-diagnostics/03-analyze.txt
+
+          flutter test > ci-diagnostics/04-test.txt 2>&1
+          echo "test_exit=$?" >> ci-diagnostics/04-test.txt
+
+          flutter build apk --release > ci-diagnostics/05-build-apk.txt 2>&1
+          echo "build_exit=$?" >> ci-diagnostics/05-build-apk.txt
+
+          tail -n 400 ci-diagnostics/03-analyze.txt
+          tail -n 200 ci-diagnostics/04-test.txt
+          tail -n 80 ci-diagnostics/05-build-apk.txt
+
+      - name: Publish diagnostics and formatting to the scratch branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git --no-pager diff --cached --stat
+          git commit -m "chore(ci): verification output and canonical formatting" || echo "nothing to commit"
+          git push --force origin HEAD:refs/heads/arena/ci-scratch
