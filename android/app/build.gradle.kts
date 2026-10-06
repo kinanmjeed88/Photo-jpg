@@ -96,6 +96,13 @@ android {
                 storePassword = releaseStorePassword
                 keyAlias = releaseKeyAlias
                 keyPassword = releaseKeyPassword
+                // PKCS#12 keystores must be read as such; classic .jks files
+                // keep the default (JKS) handling. Keeps both formats usable
+                // without touching any of the signing values.
+                val name = resolvedKeystore?.name?.lowercase().orEmpty()
+                if (name.endsWith(".p12") || name.endsWith(".pfx")) {
+                    storeType = "PKCS12"
+                }
             }
         }
     }

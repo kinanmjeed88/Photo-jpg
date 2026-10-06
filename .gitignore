@@ -53,5 +53,7 @@ build/
 # that file and any keystore under the app module stay out of version control.
 android/key.properties
 **/*.jks
+**/*.p12
+**/*.pfx
 **/*.keystore
 android/app/signing/
