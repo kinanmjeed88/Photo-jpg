@@ -829,7 +829,9 @@ printf '%s' '<store password>'   | gh secret set PHOTOJPG_STORE_PASSWORD
 printf '%s' '<key alias>'        | gh secret set PHOTOJPG_KEY_ALIAS
 printf '%s' '<key password>'     | gh secret set PHOTOJPG_KEY_PASSWORD
 ```
-(بديل مقبول: `PHOTOJPG_KEY_PROPERTIES_BASE64` = نسخة base64 من `android/key.properties` كاملاً.
+(الأسماء البديلة المقبولة أيضاً بلا أي تعديل: `KEYSTORE_BASE64` للمفتاح، و`STORE_PASSWORD`،
+`KEY_ALIAS`، `KEY_PASSWORD` — سير العمل يقرأ الاسمين ويتحقق من التوقيع في الحالتين.
+بديل آخر مقبول: `PHOTOJPG_KEY_PROPERTIES_BASE64` = نسخة base64 من `android/key.properties` كاملاً.
 الأسماء المذكورة هنا ليست قيماً سرية، والقيم الحقيقية لا تُكتب ولا تُطبع في أي سجل.)
 
 **ملاحظة بنية تحتية (حالة تشغيل الـ commit النهائي):** بعد التشغيل الناجح `37365640586`،
