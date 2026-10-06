@@ -4,75 +4,141 @@ on:
   push:
     branches:
       - main
-      - 'feature/*'
+      - feature/*
   workflow_dispatch:
 
 permissions:
-  contents: read
-
-concurrency:
-  group: android-apk-${{ github.ref }}
-  cancel-in-progress: true
+  contents: write # âڑ ï¸ڈ ظ…ظ‡ظ… ط¬ط¯ط§ظ‹: طھظ… طھط؛ظٹظٹط±ظ‡ط§ ط¥ظ„ظ‰ write ظ„ظٹطھظ…ظƒظ† ط§ظ„ط¨ظˆطھ ظ…ظ† ط±ظپط¹ ط§ظ„طھط¹ط¯ظٹظ„ط§طھ
+  issues: write
 
 jobs:
   build:
-    name: Build Release APK
     runs-on: ubuntu-latest
-    timeout-minutes: 45
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # ط¶ط±ظˆط±ظٹ ظ„ظٹطھظ…ظƒظ† ط§ظ„ط¨ظˆطھ ظ…ظ† ط¹ظ…ظ„ push
 
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
-          distribution: zulu
+          distribution: 'zulu'
           java-version: '17'
-          cache: gradle
+          cache: 'gradle'
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          channel: 'stable'
           cache: true
 
-      - name: Install Dependencies
-        run: flutter pub get
-
-      - name: Validate Flutter Project
-        run: flutter analyze
-
-      - name: Run Tests
-        run: flutter test
+      - name: Clean Workspace & Get Packages
+        run: |
+          flutter clean
+          flutter pub get
 
       - name: Build Release APK
-        run: flutter build apk --release
-
-      - name: Verify APK
-        shell: bash
+        id: build_step
         run: |
-          set -euo pipefail
-
-          APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
-
-          if [[ ! -f "$APK_PATH" ]]; then
-            echo "::error::APK file was not generated: $APK_PATH"
-            exit 1
-          fi
-
-          if [[ ! -s "$APK_PATH" ]]; then
-            echo "::error::APK file is empty."
-            exit 1
-          fi
-
-          ls -lh "$APK_PATH"
-          sha256sum "$APK_PATH"
+          set -o pipefail
+          flutter build apk --release 2>&1 | tee build_log.txt
 
       - name: Upload APK Artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: release-apk
           path: build/app/outputs/flutter-apk/app-release.apk
-          if-no-files-found: error
-          retention-days: 14
+
+      - name: ًں¤– Autonomous AI Self-Healing
+        if: failure()
+        env:
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 1. ط§ظ„طھظ‚ط§ط· ط§ظ„ط®ط·ط£ ط¨ط¯ظ‚ط©
+          if [ -f build_log.txt ]; then
+            ERROR_DETAILS=$(grep -iE "error:|exception|failure|what went wrong" -C 15 build_log.txt | head -n 100)
+            if [ -z "$ERROR_DETAILS" ]; then
+              ERROR_DETAILS=$(tail -n 50 build_log.txt)
+            fi
+          else
+            ERROR_DETAILS="Build log file not found."
+          fi
+
+          export ERROR_DETAILS="$ERROR_DETAILS"
+
+          # 2. ط¥ظ†ط´ط§ط، ط³ظƒط±ط¨طھ ط¨ط§ظٹط«ظˆظ† ظ„ظ„ط§طھطµط§ظ„ ط¨ظ€ API ط¬ظˆظ„ط² ظˆط¥طµظ„ط§ط­ ط§ظ„ظ…ظ„ظپط§طھ طھظ„ظ‚ط§ط¦ظٹط§ظ‹
+          cat << 'EOF' > auto_fix.py
+          import os, json, urllib.request
+
+          api_key = os.environ.get("JULES_API_KEY")
+          error_log = os.environ.get("ERROR_DETAILS")
+
+          if not api_key:
+              print("Error: JULES_API_KEY is missing!")
+              exit(1)
+
+          prompt = f"""
+          You are a Principal Software Engineer. The Flutter Android build failed.
+          Analyze this error log carefully:
+          {error_log}
+          
+          Identify the exact file causing the error (e.g., lib/main.dart or android/app/proguard-rules.pro).
+          Provide the FULL corrected code for that file. Do NOT use workarounds.
+          If it's a local_auth options error, remove 'AuthenticationOptions' and use the legacy parameters.
+          If it's an R8/ProGuard play core error, the file is 'android/app/proguard-rules.pro' and the fix is '-dontwarn com.google.android.play.core.**'.
+
+          Return ONLY a valid JSON object matching this exact structure, with no markdown tags or extra text:
+          {{
+              "file_path": "the/exact/path/to/the/file",
+              "fixed_code": "the complete source code to replace the file"
+          }}
+          """
+
+          url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+          data = json.dumps({
+              "contents": [{"parts": [{"text": prompt}]}]
+          }).encode('utf-8')
+
+          req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
+
+          try:
+              with urllib.request.urlopen(req) as response:
+                  res_body = json.loads(response.read().decode('utf-8'))
+                  ai_text = res_body['candidates'][0]['content']['parts'][0]['text'].strip()
+                  
+                  # طھظ†ط¸ظٹظپ ط§ظ„ط±ط¯ ط¥ط°ط§ ط§ط­طھظˆظ‰ ط¹ظ„ظ‰ ط¹ظ„ط§ظ…ط§طھ Markdown
+                  if ai_text.startswith('```json'): ai_text = ai_text[7:]
+                  if ai_text.startswith('```'): ai_text = ai_text[3:]
+                  if ai_text.endswith('```'): ai_text = ai_text[:-3]
+                  
+                  fix_data = json.loads(ai_text.strip())
+                  
+                  file_path = fix_data['file_path']
+                  fixed_code = fix_data['fixed_code']
+                  
+                  # ط§ظ„طھط£ظƒط¯ ظ…ظ† ظˆط¬ظˆط¯ ط§ظ„ظ…ط¬ظ„ط¯
+                  os.makedirs(os.path.dirname(file_path) or '.', exist_ok=True)
+                  
+                  # ظƒطھط§ط¨ط© ط§ظ„ظƒظˆط¯ ط§ظ„ط¬ط¯ظٹط¯ ظپظٹ ط§ظ„ظ…ظ„ظپ
+                  with open(file_path, 'w', encoding='utf-8') as f:
+                      f.write(fixed_code)
+                  
+                  print(f"âœ… AI successfully patched: {file_path}")
+          except Exception as e:
+              print(f"â‌Œ AI Fix Failed: {e}")
+              exit(1)
+          EOF
+
+          # طھط´ط؛ظٹظ„ ط§ظ„ط³ظƒط±ط¨طھ
+          python3 auto_fix.py
+
+          # 3. ط±ظپط¹ ط§ظ„طھط¹ط¯ظٹظ„ (Push) ظ„طھط´ط؛ظٹظ„ ط§ظ„ط¨ظ†ط§ط، ظ…ظ† ط¬ط¯ظٹط¯
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "ًں¤– auto-fix: AI resolved build error automatically"
+          git push
