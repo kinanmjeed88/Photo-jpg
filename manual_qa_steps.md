@@ -1,23 +1,69 @@
-# Manual QA Steps: Pure Flutter Crop Integration
+# دليل الفحص اليدوي (Manual QA) — ماسح المستمسكات الذكي
 
-1.  **Preparation**
-    *   Open the application.
-    *   Tap the floating action button to add a document (e.g., via Camera).
-2.  **Verify Crop Screen Trigger**
-    *   After capturing/selecting a single image, verify that the application navigates directly to the new `SingleCropScreen` instead of using the native cropper.
-    *   Verify the title in the AppBar is exactly `تعديل الصورة`.
-3.  **Verify Aspect Ratio Functionality**
-    *   Observe the aspect ratio chips at the bottom: 'Original', 'square', '3x2', '4x3', '16x9'.
-    *   Tap 'square'. Verify the crop box immediately forces a 1:1 ratio.
-    *   Tap '3x2'. Verify the crop box adjusts to a 3:2 ratio.
-    *   Tap the selected chip again to deselect it. The crop box should become "custom" (free-form).
-4.  **Verify Hitbox Slop (The 48x48 Touch Targets)**
-    *   Attempt to grab a corner handle. You should NOT have to place your finger exactly on the visible pixels of the corner. Try grabbing slightly outside the visual boundary of the corner handle. It should reliably pick up the drag action due to the expanded `24.0` radius (`48px` diameter) hitboxes.
-    *   Verify this behavior for all 4 corners and 4 edges.
-5.  **Verify 48px Minimum Crop Size Constraint**
-    *   While in free-form mode (no aspect ratio chip selected), grab a corner and shrink the crop box as small as possible.
-    *   Verify that the crop box stops shrinking when it reaches roughly 48x48 pixels on the screen (the size of a standard floating action button). It should not allow you to shrink it to a 0x0 or near-invisible dot.
-6.  **Verify Submission Integration**
-    *   Adjust the crop box to frame the document.
-    *   Tap the checkmark icon in the AppBar.
-    *   Verify that the cropped image is successfully applied to the canvas/workspace.
+> **الحالة: `Manual QA Pending` — لم يُنفَّذ أي بند من هذا الدليل بعد.**
+> الأتمتة المنجزة (71 اختباراً + analyze + build على GitHub Actions) **لا تغطي** ما يلي:
+> الكاميرا والأذونات الحقيقية، تطبيق المعرض، مشاركة/فتح PDF، الأرشيف على جهاز حقيقي،
+> سلوك البصمة، وإعادة التشغيل. لا يجوز اعتبار أي بند هنا ناجحاً حتى يُنفَّذ على جهاز.
+>
+> حدِّث هذا الدليل عند أي تغيير في الواجهة. آخر مطابقة: بعد جولة الإصلاحات الموثّقة في
+> [`docs/AUDIT_REPORT_AR.md`](docs/AUDIT_REPORT_AR.md) (انظر §7.6 لخطوات إعادة الفحص مختصرة).
+
+## 1. الإقلاع والمصادقة
+1. افتح التطبيق: تظهر شاشة تحميل ثم يُطلب قفل الجهاز/البصمة.
+2. ألغِ المصادقة: تظهر شاشة «المصادقة مطلوبة لحماية مستمسكاتك» مع زر «إعادة المحاولة»
+   وخيار «المتابعة بدون قفل الجهاز»، ولا يوجد طريق مسدود.
+3. أنشئ مستنداً ثم أغلِق التطبيق وافتحه: الإعدادات (الأنواع، طريقة العرض، الإطار، اسم الملف)
+   باقية كما تركتها.
+
+## 2. تسجيل الدخول إلى الكاميرا وإضافة مستند
+1. اضغط «إضافة مستند» ثم «الكاميرا».
+2. بعد التصوير تظهر شاشة «تعديل الصورة» مع شرائح النسبة **بالعربية**:
+   `الأصلي`، `مربع`، `3 : 2`، `4 : 3`، `16 : 9`، `حر`.
+3. اختر `مربع`: يجب أن يتحول إطار القص إلى نسبة 1:1 فوراً.
+4. اختر `حر`: يعود الإطار حرّاً بلا إعادة تحجيم قسرية.
+5. اضغط ✓ ثم تحقق من ظهور المستند في اللوحة وبنسبة أبعاد صحيحة.
+
+## 3. إضافة من المعرض (متعددة)
+1. اضغط «إضافة مستند» ثم «المعرض» واختر 3 صور.
+2. مع تفعيل «التعرف الذكي» يظهر تقدّم «معالجة n من m» مع إمكانية الإلغاء.
+3. عند وجود مناطق غير مؤكدة، يُفتح شاشة «تحديد متعدد للمستندات» مع الاقتراحات.
+
+## 4. حدود القص اليدوي
+1. في شاشة القص المتعدد اسحب الإطار نحو حافة الصورة: يجب ألا يتجاوزها.
+2. صغّر الإطار إلى أصغر حجم ممكن: لا يقل عن مسافة لمس مريحة، ويظل قابلاً للإمساك.
+3. أضف إطاراً جديداً بزر «إضافة إطار قص»: يظهر في وسط الصورة داخل الحدود.
+
+## 5. أدوات اللوحة
+1. اختر مستنداً ثم «تدوير» عدة مرات: يجب أن يحافظ على مركزه وأن يبقى داخل الإطار،
+   وأن يعمل حتى لو أصبح حجمه أكبر من إطار A4 (بدون توقف أو خطأ).
+2. «ملء الصفحة»: يملأ المستند الصفحة مع احترام نسبته الأصلية (بما في ذلك بعد التدوير).
+3. اسحب المستند خارج حافة الصفحة نحو اليسار/الأسفل: ينتقل إلى الصفحة التالية،
+   ونحو اليمين/الأعلى: يعود للصفحة السابقة.
+
+## 6. المحرر (تعديل)
+1. اختر مستنداً ثم «تعديل».
+2. حرّك شرائح السطوع/التباين/الحدّة: المعاينة تتغير بسلاسة.
+3. اضغط ✓ «تطبيق التعديلات»: افتح الملف الناتج وتأكد أن المظهر **مطابق للمعاينة**.
+
+## 7. الحفظ في المعرض
+1. «حفظ» من اللوحة، و«حفظ في المعرض» من المحرر.
+2. عند أول استخدام يظهر طلب الإذن من النظام نفسه.
+3. عند رفض الإذن تظهر رسالة عربية محددة (لا رسالة عامة)، وعند نفاد المساحة كذلك.
+
+## 8. تصدير PDF والأرشيف
+1. أضف مستندين على صفحتين واضغط أيقونة PDF.
+2. تظهر رسالة «تم إنشاء ملف PDF (n مستند في m صفحة)».
+3. يُفتح الأرشيف: افتح الملف، شارك، أعد التسمية (اسم فارغ/رموز غير مسموحة تُرفض برسالة)،
+   ثم احذف مع تأكيد.
+4. افتح PDF على الحاسوب: يجب أن تطابق الصفحة ما تراه على اللوحة (الموضع/الدوران/الإطار).
+
+## 9. الخصوصية
+1. على Android: جرّب لقطة شاشة داخل التطبيق — يجب أن تفشل (FLAG_SECURE)،
+   وأن يظهر التطبيق معتماً في مبدّل التطبيقات.
+2. على iOS: تأكد من ظهور رسائل أذونات الكاميرا/الصور/Face ID عند الطلب (لا إنهاء مفاجئ).
+
+## 10. حالات حدّية يجب اختبارها
+- صورة صغيرة (< 1080 بكسل) وصورة كبيرة (12MP) وصورة ذات وسم EXIF للاتجاه.
+- صورة تالفة (0 بايت) — يجب أن تظهر رسالة «تعذر تحميل ملف تالف» بلا انهيار.
+- إلغاء المسح الذكي في منتصف العملية — تُعالج الصور المكتملة فقط ويظهر إشعار بذلك.
+- حذف المستند المحدد ثم محاولة استخدام أدوات اللوحة — تُعطَّل الأزرار تلقائياً.

@@ -26,6 +26,17 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- Usage descriptions are required by iOS: the app is terminated while the
+	     corresponding API is called if one is missing. Text is written for the
+	     user and matches the app language. -->
+	<key>NSCameraUsageDescription</key>
+	<string>يحتاج التطبيق إلى الكاميرا لتصوير المستمسكات ومسحها ضوئياً.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>يحتاج التطبيق إلى الوصول إلى الصور لاختيار مستمسكات محفوظة مسبقاً.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>يحتاج التطبيق إلى حفظ الصور المعدّلة في معرض الصور.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>يُستخدم Face ID لحماية مستمسكاتك من الوصول غير المصرّح به.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

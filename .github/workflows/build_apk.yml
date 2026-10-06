@@ -1,25 +1,30 @@
-name: Build Android APK
+name: Build & Verify Android
 
 on:
   push:
     branches:
       - main
-      - feature/*
+      - 'feature/**'
+  pull_request:
   workflow_dispatch:
 
+# Least privilege: the workflow only reads the repository. It never pushes.
+# Automated commits from a build machine are intentionally not part of CI:
+# every change must be reviewed by a human before it reaches a branch.
 permissions:
-  contents: write # âڑ ï¸ڈ ظ…ظ‡ظ… ط¬ط¯ط§ظ‹: طھظ… طھط؛ظٹظٹط±ظ‡ط§ ط¥ظ„ظ‰ write ظ„ظٹطھظ…ظƒظ† ط§ظ„ط¨ظˆطھ ظ…ظ† ط±ظپط¹ ط§ظ„طھط¹ط¯ظٹظ„ط§طھ
-  issues: write
+  contents: read
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  verify:
+    name: Analyze, test and build
+    # Pinned on purpose: `ubuntu-latest` is migrating and jobs were repeatedly
+    # left unacquired on it ("The job was not acquired by Runner of type hosted
+    # even after multiple attempts"), while a pinned image is reproducible.
+    runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # ط¶ط±ظˆط±ظٹ ظ„ظٹطھظ…ظƒظ† ط§ظ„ط¨ظˆطھ ظ…ظ† ط¹ظ…ظ„ push
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -34,111 +39,125 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Clean Workspace & Get Packages
-        run: |
-          flutter clean
-          flutter pub get
+      - name: Install packages
+        run: flutter pub get
 
-      - name: Build Release APK
-        id: build_step
-        run: |
-          set -o pipefail
-          flutter build apk --release 2>&1 | tee build_log.txt
+      - name: Verify formatting
+        # Canonical formatting is part of the gate: a diff here means the file
+        # would be rewritten by `dart format`, so the fix is to format the
+        # source rather than to skip the check.
+        run: dart format --output=none --set-exit-if-changed .
 
-      - name: Upload APK Artifact
-        if: success()
+      - name: Static analysis
+        run: flutter analyze
+
+      - name: Unit and widget tests
+        run: flutter test
+
+      - name: Materialise release signing material
+        # The keystore and its passwords live in repository secrets only. They
+        # are written to ignored/limited paths for the duration of the job and
+        # are never echoed: this step reports which *names* are configured,
+        # never any value.
+        #
+        # Each canonical value below takes the project's PHOTOJPG_* name first
+        # and falls back to the plain name, so any of these spellings works:
+        #   keystore  PHOTOJPG_KEYSTORE_BASE64 | ANDROID_KEYSTORE_BASE64 | KEYSTORE_BASE64
+        #   properties PHOTOJPG_KEY_PROPERTIES_BASE64 | ANDROID_KEY_PROPERTIES_BASE64 | KEY_PROPERTIES_BASE64
+        #   path      PHOTOJPG_STORE_FILE | KEYSTORE_PATH
+        #   passwords PHOTOJPG_STORE_PASSWORD | STORE_PASSWORD
+        #             PHOTOJPG_KEY_ALIAS | KEY_ALIAS
+        #             PHOTOJPG_KEY_PASSWORD | KEY_PASSWORD
+        env:
+          KEYSTORE_B64: ${{ secrets.PHOTOJPG_KEYSTORE_BASE64 || secrets.ANDROID_KEYSTORE_BASE64 || secrets.KEYSTORE_BASE64 }}
+          KEY_PROPERTIES_B64: ${{ secrets.PHOTOJPG_KEY_PROPERTIES_BASE64 || secrets.ANDROID_KEY_PROPERTIES_BASE64 || secrets.KEY_PROPERTIES_BASE64 }}
+          STORE_FILE_VALUE: ${{ secrets.PHOTOJPG_STORE_FILE || secrets.KEYSTORE_PATH }}
+          STORE_PASSWORD_VALUE: ${{ secrets.PHOTOJPG_STORE_PASSWORD || secrets.STORE_PASSWORD }}
+          KEY_ALIAS_VALUE: ${{ secrets.PHOTOJPG_KEY_ALIAS || secrets.KEY_ALIAS }}
+          KEY_PASSWORD_VALUE: ${{ secrets.PHOTOJPG_KEY_PASSWORD || secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          temp_keystore="$RUNNER_TEMP/photo_jpg_release.jks"
+
+          report() {  # report <name> <set|missing>
+            printf '%-30s %s\n' "$1" "$2"
+          }
+          present() { [ -n "$1" ] && echo set || echo missing; }
+
+          # Availability report: names and set/missing only, never values.
+          echo "## signing secrets (names only)"
+          report "keystore secret group" "$(present "${KEYSTORE_B64:-}")"
+          report "key.properties secret group" "$(present "${KEY_PROPERTIES_B64:-}")"
+          report "STORE_FILE / KEYSTORE_PATH" "$(present "${STORE_FILE_VALUE:-}")"
+          report "STORE_PASSWORD" "$(present "${STORE_PASSWORD_VALUE:-}")"
+          report "KEY_ALIAS" "$(present "${KEY_ALIAS_VALUE:-}")"
+          report "KEY_PASSWORD" "$(present "${KEY_PASSWORD_VALUE:-}")"
+
+          if [ -n "${KEYSTORE_B64:-}" ]; then
+            printf '%s' "$KEYSTORE_B64" | base64 -d > "$temp_keystore"
+            chmod 600 "$temp_keystore"
+            echo "PHOTOJPG_STORE_FILE=$temp_keystore" >> "$GITHUB_ENV"
+            echo "keystore: decoded from the keystore secret group"
+          elif [ -n "${STORE_FILE_VALUE:-}" ] && [ -f "${STORE_FILE_VALUE}" ]; then
+            echo "PHOTOJPG_STORE_FILE=$STORE_FILE_VALUE" >> "$GITHUB_ENV"
+            echo "keystore: the configured path exists on the runner"
+          else
+            echo "keystore: no usable keystore secret"
+          fi
+
+          if [ -n "${KEY_PROPERTIES_B64:-}" ]; then
+            printf '%s' "$KEY_PROPERTIES_B64" | base64 -d > android/key.properties
+            chmod 600 android/key.properties
+            echo "key.properties: materialised from the key.properties secret group"
+          fi
+
+      - name: Build release APK
+        env:
+          # Optional: without any of these Gradle falls back to the debug key,
+          # and the "Release signing verification" step below fails on purpose.
+          PHOTOJPG_STORE_PASSWORD: ${{ secrets.PHOTOJPG_STORE_PASSWORD || secrets.STORE_PASSWORD }}
+          PHOTOJPG_KEY_ALIAS: ${{ secrets.PHOTOJPG_KEY_ALIAS || secrets.KEY_ALIAS }}
+          PHOTOJPG_KEY_PASSWORD: ${{ secrets.PHOTOJPG_KEY_PASSWORD || secrets.KEY_PASSWORD }}
+        run: flutter build apk --release
+
+      - name: Release signing verification
+        # Not a formality: the APK must be signed with the project's release
+        # identity, must not be debug-signed, and must keep the same
+        # applicationId / versionName / versionCode.
+        #
+        # An invalid signature, a signing-identity mismatch or changed identity
+        # metadata always fail. The remaining case - the build fell back to the
+        # debug key because no release signing material is configured - is fatal
+        # for a release (push to main / manual run) and is reported loudly on
+        # pull requests, where contributors cannot hold the release key: a PR
+        # build is not a release and never uploads an artifact.
+        env:
+          PHOTOJPG_STORE_PASSWORD: ${{ secrets.PHOTOJPG_STORE_PASSWORD || secrets.STORE_PASSWORD }}
+          PHOTOJPG_KEY_ALIAS: ${{ secrets.PHOTOJPG_KEY_ALIAS || secrets.KEY_ALIAS }}
+          RELEASE_GATE_REQUIRED: ${{ github.event_name != 'pull_request' }}
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version: *//p' pubspec.yaml)
+          name=${version%%+*}
+          code=${version##*+}
+          set +e
+          bash tool/verify_release_apk.sh \
+            build/app/outputs/flutter-apk/app-release.apk \
+            com.jules.docscanner.doc_scanner_app "$name" "$code"
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            exit 0
+          fi
+          if [ "$status" -eq 3 ] && [ "${RELEASE_GATE_REQUIRED}" != "true" ]; then
+            echo "::warning title=Release signing::this pull-request build is signed with the debug key because no release signing material is configured; it is not a distributable artifact."
+            exit 0
+          fi
+          exit "$status"
+      - name: Upload APK artifact
+        if: success() && github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: release-apk
           path: build/app/outputs/flutter-apk/app-release.apk
-
-      - name: ًں¤– Autonomous AI Self-Healing
-        if: failure()
-        env:
-          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # 1. ط§ظ„طھظ‚ط§ط· ط§ظ„ط®ط·ط£ ط¨ط¯ظ‚ط©
-          if [ -f build_log.txt ]; then
-            ERROR_DETAILS=$(grep -iE "error:|exception|failure|what went wrong" -C 15 build_log.txt | head -n 100)
-            if [ -z "$ERROR_DETAILS" ]; then
-              ERROR_DETAILS=$(tail -n 50 build_log.txt)
-            fi
-          else
-            ERROR_DETAILS="Build log file not found."
-          fi
-
-          export ERROR_DETAILS="$ERROR_DETAILS"
-
-          # 2. ط¥ظ†ط´ط§ط، ط³ظƒط±ط¨طھ ط¨ط§ظٹط«ظˆظ† ظ„ظ„ط§طھطµط§ظ„ ط¨ظ€ API ط¬ظˆظ„ط² ظˆط¥طµظ„ط§ط­ ط§ظ„ظ…ظ„ظپط§طھ طھظ„ظ‚ط§ط¦ظٹط§ظ‹
-          cat << 'EOF' > auto_fix.py
-          import os, json, urllib.request
-
-          api_key = os.environ.get("JULES_API_KEY")
-          error_log = os.environ.get("ERROR_DETAILS")
-
-          if not api_key:
-              print("Error: JULES_API_KEY is missing!")
-              exit(1)
-
-          prompt = f"""
-          You are a Principal Software Engineer. The Flutter Android build failed.
-          Analyze this error log carefully:
-          {error_log}
-          
-          Identify the exact file causing the error (e.g., lib/main.dart or android/app/proguard-rules.pro).
-          Provide the FULL corrected code for that file. Do NOT use workarounds.
-          If it's a local_auth options error, remove 'AuthenticationOptions' and use the legacy parameters.
-          If it's an R8/ProGuard play core error, the file is 'android/app/proguard-rules.pro' and the fix is '-dontwarn com.google.android.play.core.**'.
-
-          Return ONLY a valid JSON object matching this exact structure, with no markdown tags or extra text:
-          {{
-              "file_path": "the/exact/path/to/the/file",
-              "fixed_code": "the complete source code to replace the file"
-          }}
-          """
-
-          url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
-          data = json.dumps({
-              "contents": [{"parts": [{"text": prompt}]}]
-          }).encode('utf-8')
-
-          req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
-
-          try:
-              with urllib.request.urlopen(req) as response:
-                  res_body = json.loads(response.read().decode('utf-8'))
-                  ai_text = res_body['candidates'][0]['content']['parts'][0]['text'].strip()
-                  
-                  # طھظ†ط¸ظٹظپ ط§ظ„ط±ط¯ ط¥ط°ط§ ط§ط­طھظˆظ‰ ط¹ظ„ظ‰ ط¹ظ„ط§ظ…ط§طھ Markdown
-                  if ai_text.startswith('```json'): ai_text = ai_text[7:]
-                  if ai_text.startswith('```'): ai_text = ai_text[3:]
-                  if ai_text.endswith('```'): ai_text = ai_text[:-3]
-                  
-                  fix_data = json.loads(ai_text.strip())
-                  
-                  file_path = fix_data['file_path']
-                  fixed_code = fix_data['fixed_code']
-                  
-                  # ط§ظ„طھط£ظƒط¯ ظ…ظ† ظˆط¬ظˆط¯ ط§ظ„ظ…ط¬ظ„ط¯
-                  os.makedirs(os.path.dirname(file_path) or '.', exist_ok=True)
-                  
-                  # ظƒطھط§ط¨ط© ط§ظ„ظƒظˆط¯ ط§ظ„ط¬ط¯ظٹط¯ ظپظٹ ط§ظ„ظ…ظ„ظپ
-                  with open(file_path, 'w', encoding='utf-8') as f:
-                      f.write(fixed_code)
-                  
-                  print(f"âœ… AI successfully patched: {file_path}")
-          except Exception as e:
-              print(f"â‌Œ AI Fix Failed: {e}")
-              exit(1)
-          EOF
-
-          # طھط´ط؛ظٹظ„ ط§ظ„ط³ظƒط±ط¨طھ
-          python3 auto_fix.py
-
-          # 3. ط±ظپط¹ ط§ظ„طھط¹ط¯ظٹظ„ (Push) ظ„طھط´ط؛ظٹظ„ ط§ظ„ط¨ظ†ط§ط، ظ…ظ† ط¬ط¯ظٹط¯
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add .
-          git commit -m "ًں¤– auto-fix: AI resolved build error automatically"
-          git push
+          if-no-files-found: warn

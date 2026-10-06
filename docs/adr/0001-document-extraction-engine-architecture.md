@@ -1,3 +1,8 @@
+> **⚠️ وثيقة تاريخية (Superseded):** يصف هذا الملف مراجعة/بنية إصدار سابق من التطبيق
+> ولم يعد مطابقاً للكود الحالي. التقرير المعتمد والحديث هو
+> [`docs/AUDIT_REPORT_AR.md`](docs/AUDIT_REPORT_AR.md).
+> تم الاحتفاظ به للمرجعية التاريخية فقط.
+
 # ADR 0001: Document Extraction Engine Architecture
 
 ## Status

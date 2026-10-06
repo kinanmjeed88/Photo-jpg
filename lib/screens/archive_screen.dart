@@ -25,52 +25,82 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
 
   Future<Directory> _archiveDirectory() => getApplicationDocumentsDirectory();
 
+  /// Guards every destructive or sharing action: a path handed back by the
+  /// platform (or a stale list entry) must never point outside the archive root.
   Future<bool> _isManagedPdf(File file) async {
     final root = path.normalize((await _archiveDirectory()).absolute.path);
-    final parent = path.normalize(file.parent.absolute.path);
-    return path.equals(root, parent) &&
-        path.extension(file.path).toLowerCase() == '.pdf';
+    return _isManagedPdfPath(file.path, root);
   }
 
   Future<void> _loadFiles() async {
     try {
       final directory = await _archiveDirectory();
-      final files = <File>[];
+      final root = path.normalize(directory.absolute.path);
+      // The archive only ever contains PDFs directly inside the application
+      // documents directory. Sorting uses the asynchronous stat result: the
+      // synchronous variant blocks the UI isolate and throws when a file is
+      // removed between listing and sorting.
+      final entries = <({File file, DateTime modified})>[];
       await for (final entity in directory.list(followLinks: false)) {
-        if (entity is File &&
-            path.extension(entity.path).toLowerCase() == '.pdf' &&
-            await _isManagedPdf(entity)) {
-          files.add(entity);
+        if (entity is! File || !_isManagedPdfPath(entity.path, root)) continue;
+        try {
+          entries.add((file: entity, modified: await entity.lastModified()));
+        } on FileSystemException {
+          // A file that vanished mid-listing is simply not part of the archive.
         }
       }
-      files.sort(
-        (first, second) =>
-            second.lastModifiedSync().compareTo(first.lastModifiedSync()),
+      entries.sort(
+        (first, second) => second.modified.compareTo(first.modified),
       );
-      if (mounted) {
-        setState(() {
-          _files = files;
-          _isLoading = false;
-        });
-      }
+      if (!mounted) return;
+      setState(() {
+        _files = entries.map((entry) => entry.file).toList(growable: false);
+        _isLoading = false;
+      });
     } on FileSystemException {
-      if (mounted) {
-        setState(() => _isLoading = false);
-        _showMessage('تعذر قراءة الأرشيف.');
-      }
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      _showMessage('تعذر قراءة الأرشيف.');
     }
   }
 
+  /// True when [filePath] is a PDF stored directly inside the archive root.
+  bool _isManagedPdfPath(String filePath, String normalizedRoot) {
+    if (path.extension(filePath).toLowerCase() != '.pdf') return false;
+    final normalized = path.normalize(File(filePath).absolute.path);
+    return path.dirname(normalized) == normalizedRoot;
+  }
+
   Future<void> _openFile(File file) async {
-    if (!await _isManagedPdf(file)) return;
-    await OpenFilex.open(file.path);
+    if (!await _isManagedPdf(file)) {
+      _showMessage('هذا الملف خارج نطاق الأرشيف.');
+      return;
+    }
+    try {
+      final result = await OpenFilex.open(file.path);
+      if (result.type != ResultType.done && mounted) {
+        _showMessage('لا يوجد تطبيق قادر على فتح هذا الملف.');
+      }
+    } catch (_) {
+      if (mounted) _showMessage('تعذر فتح الملف.');
+    }
   }
 
   Future<void> _shareFile(File file) async {
-    if (!await _isManagedPdf(file)) return;
-    await SharePlus.instance.share(
-      ShareParams(files: <XFile>[XFile(file.path)], text: 'مشاركة المستمسكات'),
-    );
+    if (!await _isManagedPdf(file)) {
+      _showMessage('هذا الملف خارج نطاق الأرشيف.');
+      return;
+    }
+    try {
+      await SharePlus.instance.share(
+        ShareParams(
+          files: <XFile>[XFile(file.path)],
+          text: 'مشاركة المستمسكات',
+        ),
+      );
+    } catch (_) {
+      if (mounted) _showMessage('تعذر مشاركة الملف.');
+    }
   }
 
   Future<void> _deleteFile(File file) async {

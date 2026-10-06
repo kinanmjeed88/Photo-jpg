@@ -109,6 +109,16 @@ layout: null
 
 <hr style="border: 1px solid #e1e4e8; margin: 30px 0;">
 
+<h2>📚 التوثيق التقني</h2>
+
+<ul>
+  <li><b>تقرير الفحص والمراجعة الشاملة (مشاكل + طريقة العمل + الإصلاحات):</b>
+      <a href="docs/AUDIT_REPORT_AR.md">docs/AUDIT_REPORT_AR.md</a></li>
+  <li><b>دليل الفحص اليدوي:</b> <a href="manual_qa_steps.md">manual_qa_steps.md</a></li>
+</ul>
+
+<hr style="border: 1px solid #e1e4e8; margin: 30px 0;">
+
 <h2>🛠️ التقنيات الأساسية</h2>
 
 <p>بُني التطبيق باستخدام هندسة برمجية متقدمة لضمان أداء استثنائي وقابلية عالية للتوسع:</p>

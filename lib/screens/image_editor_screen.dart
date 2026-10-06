@@ -2,205 +2,69 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
+
 import 'package:extended_image/extended_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:gal/gal.dart';
-import 'package:image/image.dart' as img;
-import 'package:permission_handler/permission_handler.dart';
 
 import '../providers/app_state.dart';
+import '../services/gallery_service.dart';
+import '../services/image_pipeline.dart';
 import '../services/temporary_image_store.dart';
 
-Future<Map<String, dynamic>> _runProxyIsolate(Map<String, dynamic> args) {
-  return Isolate.run(() => _generateProxy(args));
-}
-
-Uint8List _encodeJpeg(img.Image image, {int quality = 90}) {
-  final encoded = img.encodeJpg(image, quality: quality);
-  if (encoded.isEmpty) throw StateError('تعذر ترميز معاينة JPEG.');
-  return Uint8List.fromList(encoded);
-}
-
-Map<String, dynamic> _generateProxy(Map<String, dynamic> args) {
+/// Builds the editing proxy and reports the source dimensions in one pass.
+///
+/// Runs inside an isolate: it only receives and returns sendable values, so it
+/// never touches the widget tree or a `GlobalKey`.
+Map<String, Object> _generateProxyInIsolate(Map<String, dynamic> args) {
   final bytes = args['bytes'] as Uint8List;
-  final source = img.decodeImage(bytes);
-  if (source == null) {
-    throw StateError('ملف الصورة غير صالح للمعاينة.');
-  }
-  final maximumDimension = source.width > source.height
-      ? source.width
-      : source.height;
-  if (maximumDimension <= 1080) {
-    return <String, dynamic>{'bytes': bytes, 'scale': 1.0};
-  }
-  final scale = 1080 / maximumDimension;
-  final proxy = img.copyResize(
-    source,
-    width: (source.width * scale).round(),
-    height: (source.height * scale).round(),
-    interpolation: img.Interpolation.average,
-  );
-  return <String, dynamic>{'bytes': _encodeJpeg(proxy), 'scale': scale};
-}
-
-class _CropBounds {
-  const _CropBounds({
-    required this.left,
-    required this.top,
-    required this.width,
-    required this.height,
-  });
-
-  final int left;
-  final int top;
-  final int width;
-  final int height;
-
-  Map<String, int> toMap() => <String, int>{
-    'left': left,
-    'top': top,
-    'width': width,
-    'height': height,
+  // Reports the upright dimensions, so the crop rectangle taken from the editor
+  // (which is expressed in the pixels the editor actually displays) maps onto
+  // the same pixel grid the export crops from.
+  final oriented = createOrientedProxy(bytes);
+  return <String, Object>{
+    'bytes': oriented.proxy.bytes,
+    'scale': oriented.proxy.scale,
+    'width': oriented.width,
+    'height': oriented.height,
   };
+}
 
-  static _CropBounds? fromProxyRect({
-    required Rect? rect,
-    required double proxyScale,
-    required int sourceWidth,
-    required int sourceHeight,
-  }) {
-    if (rect == null || sourceWidth <= 0 || sourceHeight <= 0) return null;
-    final safeScale = proxyScale <= 0 ? 1.0 : proxyScale;
-    final left = (rect.left / safeScale)
-        .floor()
-        .clamp(0, sourceWidth - 1)
-        .toInt();
-    final top = (rect.top / safeScale)
-        .floor()
-        .clamp(0, sourceHeight - 1)
-        .toInt();
-    final right = (rect.right / safeScale)
-        .ceil()
-        .clamp(left + 1, sourceWidth)
-        .toInt();
-    final bottom = (rect.bottom / safeScale)
-        .ceil()
-        .clamp(top + 1, sourceHeight)
-        .toInt();
-    final width = right - left;
-    final height = bottom - top;
-    if (width <= 0 || height <= 0) return null;
-    return _CropBounds(left: left, top: top, width: width, height: height);
+/// Applies the unsharp mask to the proxy for the live preview.
+///
+/// The tone curve is rendered by the GPU through [ImageAdjustments.colorMatrix],
+/// which is the same gain/offset pair used by the export path, so only the
+/// sharpen pass has to run here.
+Uint8List _renderPreview(Map<String, dynamic> args) {
+  final source = decodeImageOrNull(args['bytes'] as Uint8List);
+  if (source == null) {
+    throw StateError('ملف معاينة غير صالح.');
   }
-}
-
-img.Image _applyAdjustments(
-  img.Image source, {
-  required double contrast,
-  required double brightness,
-  required double sharpness,
-}) {
-  final adjusted = img.Image.from(source);
-  if (contrast != 1 || brightness != 0) {
-    img.adjustColor(
-      adjusted,
-      contrast: contrast,
-      brightness: 1 + (brightness / 100),
-    );
+  final adjustments = ImageAdjustments(sharpness: args['sharpness'] as double);
+  if (adjustments.normalized.sharpness > 0) {
+    sharpenInPlace(source, adjustments);
   }
-  if (sharpness > 0) _applyUnsharpMask(adjusted, sharpness);
-  return adjusted;
+  return encodeJpeg(source);
 }
 
-void _applyUnsharpMask(img.Image image, double sharpness) {
-  final amount = (sharpness / 5).clamp(0.0, 1.0).toDouble();
-  if (amount == 0) return;
-  final blurred = img.gaussianBlur(
-    img.Image.from(image),
-    radius: (sharpness / 2).round().clamp(1, 3),
-  );
-  for (var y = 0; y < image.height; y++) {
-    for (var x = 0; x < image.width; x++) {
-      final original = image.getPixel(x, y);
-      final softened = blurred.getPixel(x, y);
-      num channel(num base, num blur) =>
-          (base + ((base - blur) * amount)).clamp(0, 255);
-      image.setPixelRgba(
-        x,
-        y,
-        channel(original.r, softened.r),
-        channel(original.g, softened.g),
-        channel(original.b, softened.b),
-        original.a,
-      );
-    }
-  }
-}
-
-img.Image _cropIfRequested(img.Image image, Map<String, int>? bounds) {
-  if (bounds == null || image.width <= 0 || image.height <= 0) return image;
-
-  final left = (bounds['left'] ?? 0).clamp(0, image.width - 1).toInt();
-  final top = (bounds['top'] ?? 0).clamp(0, image.height - 1).toInt();
-  final width = (bounds['width'] ?? image.width - left)
-      .clamp(1, image.width - left)
-      .toInt();
-  final height = (bounds['height'] ?? image.height - top)
-      .clamp(1, image.height - top)
-      .toInt();
-
-  return img.copyCrop(image, x: left, y: top, width: width, height: height);
-}
-
-Uint8List _processForGallery(Map<String, dynamic> args) {
-  final bytes = args['bytes'] as Uint8List;
-  final source = img.decodeImage(bytes);
-  if (source == null) throw StateError('ملف الصورة غير صالح.');
-  final processed = _applyAdjustments(
-    source,
+/// Renders the final image at full resolution: sharpness, tone and crop.
+Map<String, Object> _renderExport(Map<String, dynamic> args) {
+  // Both the proxy and the editor's crop rectangle live in upright pixel space,
+  // so the orientation tag has to be baked before those coordinates are used.
+  final source = decodeOriented(args['bytes'] as Uint8List);
+  final adjustments = ImageAdjustments(
     contrast: args['contrast'] as double,
     brightness: args['brightness'] as double,
     sharpness: args['sharpness'] as double,
   );
-  return _encodeJpeg(
-    _cropIfRequested(processed, args['bounds'] as Map<String, int>?),
-  );
-}
-
-Map<String, dynamic> _processForPreview(Map<String, dynamic> args) {
-  final bytes = args['bytes'] as Uint8List;
-  final version = args['version'] as int;
-  final source = img.decodeImage(bytes);
-  if (source == null) throw StateError('ملف معاينة غير صالح.');
-
-  // Brightness and contrast are rendered synchronously by the Flutter layer so
-  // slider changes are visible on the same frame. Only the expensive raster
-  // operation is delegated to the isolate.
-  final processed = _applyAdjustments(
-    source,
-    contrast: 1,
-    brightness: 0,
-    sharpness: args['sharpness'] as double,
-  );
-  return <String, dynamic>{'bytes': _encodeJpeg(processed), 'version': version};
-}
-
-Uint8List _processEditedBytes(Map<String, dynamic> args) {
-  final bytes = args['bytes'] as Uint8List;
-  final source = img.decodeImage(bytes);
-  if (source == null) throw StateError('ملف الصورة غير صالح.');
-  final processed = _applyAdjustments(
-    source,
-    contrast: args['contrast'] as double,
-    brightness: args['brightness'] as double,
-    sharpness: args['sharpness'] as double,
-  );
-  final output = _cropIfRequested(
-    processed,
-    args['bounds'] as Map<String, int>?,
-  );
-  return _encodeJpeg(output);
+  final processed = applyAdjustments(source, adjustments);
+  final bounds = CropBounds.fromMap(args['bounds']);
+  final output = bounds == null ? processed : bounds.crop(processed);
+  return <String, Object>{
+    'bytes': encodeJpeg(output),
+    'width': output.width,
+    'height': output.height,
+  };
 }
 
 class ImageEditorScreen extends ConsumerStatefulWidget {
@@ -225,18 +89,17 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
   );
 
   Timer? _debounce;
-  Uint8List? _originalBytes;
+  Uint8List? _sourceBytes;
   Uint8List? _proxyBytes;
   int _sourceWidth = 0;
   int _sourceHeight = 0;
   double _proxyScale = 1;
-  double _brightness = 0;
-  double _contrast = 1;
-  double _sharpness = 0;
+  ImageAdjustments _adjustments = const ImageAdjustments();
   int _previewVersion = 0;
   bool _isPreviewTaskRunning = false;
   bool _isLoadingPreview = true;
   bool _isProcessing = false;
+  String? _loadError;
 
   @override
   void initState() {
@@ -265,32 +128,28 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
         final originalFile = File(location.document.originalImagePath!);
         if (await originalFile.exists()) sourceFile = originalFile;
       }
-      _originalBytes = await sourceFile.readAsBytes();
-      final decodedSource = img.decodeImage(_originalBytes!);
-      if (decodedSource == null) {
-        throw StateError('ملف الصورة غير صالح للتحرير.');
+      if (!await sourceFile.exists()) {
+        throw StateError('الصورة الأصلية غير متوفرة.');
       }
-      _sourceWidth = decodedSource.width;
-      _sourceHeight = decodedSource.height;
-      final result = await _runProxyIsolate(<String, dynamic>{
-        'bytes': _originalBytes!,
-      });
-      _proxyBytes = result['bytes'] as Uint8List;
-      _proxyScale = result['scale'] as double;
-      final protectedPaths = ref
-          .read(scannedDocumentsProvider)
-          .values
-          .expand((documents) => documents)
-          .map((document) => document.file.path)
-          .toSet();
-      await TemporaryImageStore.cleanupStale(protectedPaths: protectedPaths);
+      final bytes = await sourceFile.readAsBytes();
+      final proxy = await Isolate.run(
+        () => _generateProxyInIsolate(<String, dynamic>{'bytes': bytes}),
+      );
+      if (!mounted) return;
+      _sourceBytes = bytes;
+      _proxyBytes = proxy['bytes']! as Uint8List;
+      _proxyScale = (proxy['scale']! as num).toDouble();
+      _sourceWidth = (proxy['width']! as num).toInt();
+      _sourceHeight = (proxy['height']! as num).toInt();
       await _generatePreview();
-    } catch (_) {
-      // A valid source still remains editable even if its downscaled proxy could
-      // not be generated. The UI deliberately keeps this fallback silent.
-      _proxyBytes ??= _originalBytes;
-      if (_proxyBytes != null) _previewBytes.value = _proxyBytes!;
-      if (mounted) setState(() => _isLoadingPreview = false);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _isLoadingPreview = false;
+        _loadError = error is StateError
+            ? error.message
+            : 'تعذر تحميل الصورة للتحرير.';
+      });
     }
   }
 
@@ -301,12 +160,20 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
   }
 
   Future<void> _generatePreview() async {
-    if (_proxyBytes == null) {
+    final proxyBytes = _proxyBytes;
+    if (proxyBytes == null) {
       if (mounted) setState(() => _isLoadingPreview = false);
       return;
     }
-    // Slider changes may be more frequent than image processing. Run at most
-    // one isolate at a time and immediately process only the newest values.
+    if (_adjustments.normalized.sharpness <= 0) {
+      // Nothing to sharpen: the proxy itself is the preview, so no isolate is
+      // started and the original quality is shown untouched.
+      _previewBytes.value = proxyBytes;
+      if (mounted) setState(() => _isLoadingPreview = false);
+      return;
+    }
+    // Slider changes can be more frequent than image processing. Run at most
+    // one isolate at a time and always converge on the newest values.
     if (_isPreviewTaskRunning) return;
     _isPreviewTaskRunning = true;
     try {
@@ -314,29 +181,24 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
       do {
         final version = _previewVersion;
         processedVersion = version;
-        final bytes = _proxyBytes!;
-        final contrast = _contrast;
-        final brightness = _brightness;
-        final sharpness = _sharpness;
+        final bytes = proxyBytes;
+        final sharpness = _adjustments.sharpness;
         final result = await Isolate.run(
-          () => _processForPreview(<String, dynamic>{
+          () => _renderPreview(<String, dynamic>{
             'bytes': bytes,
-            'contrast': contrast,
-            'brightness': brightness,
             'sharpness': sharpness,
-            'version': version,
           }),
         );
         if (!mounted) return;
-        if (result['version'] == _previewVersion) {
-          _previewBytes.value = result['bytes'] as Uint8List;
+        if (version == _previewVersion) {
+          _previewBytes.value = result;
         }
       } while (mounted && processedVersion != _previewVersion);
     } catch (_) {
       // Never interrupt an editing gesture with an error banner. The previous
       // valid preview remains on screen; the next slider change retries.
       if (mounted && _previewBytes.value == null) {
-        _previewBytes.value = _proxyBytes;
+        _previewBytes.value = proxyBytes;
       }
     } finally {
       _isPreviewTaskRunning = false;
@@ -344,8 +206,13 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
     }
   }
 
-  _CropBounds? _currentBounds() {
-    return _CropBounds.fromProxyRect(
+  /// Reads the crop rectangle from the editor state.
+  ///
+  /// Must run on the UI isolate: `getCropRect()` walks the live render tree and
+  /// returns proxy-pixel coordinates, which are then mapped to the
+  /// full-resolution source by [CropBounds.fromProxyRect].
+  CropBounds? _currentBounds() {
+    return CropBounds.fromProxyRect(
       rect: _editorKey.currentState?.getCropRect(),
       proxyScale: _proxyScale,
       sourceWidth: _sourceWidth,
@@ -355,25 +222,26 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
 
   Future<void> _saveToGallery() async {
     final location = _location;
-    if (location == null || _originalBytes == null) return;
+    final sourceBytes = _sourceBytes;
+    if (location == null || sourceBytes == null) return;
+    final bounds = _currentBounds();
+    final adjustments = _adjustments;
     setState(() => _isProcessing = true);
     try {
-      final storage = await Permission.storage.request();
-      final photos = await Permission.photos.request();
-      if (!storage.isGranted && !photos.isGranted) {
-        throw StateError('لم تمنح صلاحية حفظ الصور.');
-      }
-      final bytes = await Isolate.run(
-        () => _processForGallery(<String, dynamic>{
-          'bytes': _originalBytes!,
-          'bounds': _currentBounds()?.toMap(),
-          'contrast': _contrast,
-          'brightness': _brightness,
-          'sharpness': _sharpness,
+      // The export is rendered first: permission prompts are only shown once the
+      // user has something to save, and the render result is never discarded
+      // because a dialog was dismissed.
+      final result = await Isolate.run(
+        () => _renderExport(<String, dynamic>{
+          'bytes': sourceBytes,
+          'bounds': bounds?.toMap(),
+          'contrast': adjustments.contrast,
+          'brightness': adjustments.brightness,
+          'sharpness': adjustments.sharpness,
         }),
       );
-      await Gal.putImageBytes(
-        bytes,
+      await GalleryService.saveBytes(
+        result['bytes']! as Uint8List,
         name: 'scanned_${DateTime.now().microsecondsSinceEpoch}',
       );
       if (mounted) {
@@ -381,8 +249,8 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
           context,
         ).showSnackBar(const SnackBar(content: Text('تم الحفظ في المعرض.')));
       }
-    } catch (_) {
-      if (mounted) _showError('تعذر حفظ الصورة في المعرض.');
+    } catch (error) {
+      if (mounted) _showError(GalleryService.describe(error));
     } finally {
       if (mounted) setState(() => _isProcessing = false);
     }
@@ -390,38 +258,41 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
 
   Future<void> _applyChanges() async {
     final location = _location;
-    if (location == null || _originalBytes == null) return;
+    final sourceBytes = _sourceBytes;
+    if (location == null || sourceBytes == null) return;
+    final bounds = _currentBounds();
+    final adjustments = _adjustments;
     setState(() => _isProcessing = true);
     File? outputFile;
     try {
       final outputPath = await TemporaryImageStore.createPath('edited_');
       outputFile = File(outputPath);
-      final encoded = await Isolate.run(
-        () => _processEditedBytes(<String, dynamic>{
-          'bytes': _originalBytes!,
-          'bounds': _currentBounds()?.toMap(),
-          'contrast': _contrast,
-          'brightness': _brightness,
-          'sharpness': _sharpness,
+      final result = await Isolate.run(
+        () => _renderExport(<String, dynamic>{
+          'bytes': sourceBytes,
+          'bounds': bounds?.toMap(),
+          'contrast': adjustments.contrast,
+          'brightness': adjustments.brightness,
+          'sharpness': adjustments.sharpness,
         }),
       );
-      if (encoded.isEmpty) throw StateError('تعذر إنشاء ملف التعديل.');
+      final encoded = result['bytes']! as Uint8List;
+      final width = (result['width']! as num).toDouble();
+      final height = (result['height']! as num).toDouble();
+      if (encoded.isEmpty || width <= 0 || height <= 0) {
+        throw StateError('تعذر إنشاء ملف التعديل.');
+      }
       await outputFile.writeAsBytes(encoded, flush: true);
       if (!await outputFile.exists() || await outputFile.length() == 0) {
         throw StateError('تعذر إنشاء ملف التعديل.');
       }
-      final dimensions = img.decodeImage(await outputFile.readAsBytes());
-      if (dimensions == null) throw StateError('ملف التعديل غير صالح.');
-      final width = dimensions.width.toDouble();
-      final height = dimensions.height.toDouble();
-      if (width <= 0 || height <= 0) {
-        throw StateError('ملف التعديل غير صالح.');
-      }
 
       final oldFile = location.document.file;
+      // The crop changes the pixel dimensions, so the layout box is re-fitted
+      // to the new aspect ratio inside the same state transaction.
       ref
           .read(scannedDocumentsProvider.notifier)
-          .updateDocument(
+          .replaceDocumentImage(
             widget.documentId,
             file: outputFile,
             originalWidth: width,
@@ -464,6 +335,7 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
         body: Center(child: Text('لم تعد هذه الوثيقة متاحة.')),
       );
     }
+    final canApply = _sourceBytes != null && !_isProcessing;
     return Scaffold(
       appBar: AppBar(
         title: Text(
@@ -482,17 +354,19 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
           IconButton(
             icon: const Icon(Icons.save_alt),
             tooltip: 'حفظ في المعرض',
-            onPressed: _isProcessing ? null : _saveToGallery,
+            onPressed: canApply ? _saveToGallery : null,
           ),
           IconButton(
             icon: const Icon(Icons.check),
             tooltip: 'تطبيق التعديلات',
-            onPressed: _isProcessing ? null : _applyChanges,
+            onPressed: canApply ? _applyChanges : null,
           ),
         ],
       ),
       body: _isProcessing
           ? const Center(child: CircularProgressIndicator())
+          : _loadError != null
+          ? _buildLoadError(_loadError!)
           : Column(
               children: <Widget>[
                 Expanded(
@@ -508,29 +382,35 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
                 ),
                 _slider(
                   label: 'السطوع',
-                  value: _brightness,
-                  min: -100,
-                  max: 100,
+                  value: _adjustments.brightness,
+                  min: ImageAdjustments.minimumBrightness,
+                  max: ImageAdjustments.maximumBrightness,
                   onChanged: (value) {
-                    setState(() => _brightness = value);
+                    setState(() {
+                      _adjustments = _adjustments.copyWith(brightness: value);
+                    });
                   },
                 ),
                 _slider(
                   label: 'التباين',
-                  value: _contrast,
-                  min: 0.5,
-                  max: 2,
+                  value: _adjustments.contrast,
+                  min: ImageAdjustments.minimumContrast,
+                  max: ImageAdjustments.maximumContrast,
                   onChanged: (value) {
-                    setState(() => _contrast = value);
+                    setState(() {
+                      _adjustments = _adjustments.copyWith(contrast: value);
+                    });
                   },
                 ),
                 _slider(
                   label: 'الحدّة',
-                  value: _sharpness,
-                  min: 0,
-                  max: 5,
+                  value: _adjustments.sharpness,
+                  min: ImageAdjustments.minimumSharpness,
+                  max: ImageAdjustments.maximumSharpness,
                   onChanged: (value) {
-                    setState(() => _sharpness = value);
+                    setState(() {
+                      _adjustments = _adjustments.copyWith(sharpness: value);
+                    });
                     _schedulePreview();
                   },
                 ),
@@ -539,37 +419,28 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
     );
   }
 
-  List<double> _previewColorMatrix() {
-    final brightnessScale = 1 + (_brightness / 100);
-    final effectiveContrast = _contrast * brightnessScale;
-    final intercept = 127.5 * (1 - _contrast);
-    return <double>[
-      effectiveContrast,
-      0,
-      0,
-      0,
-      intercept,
-      0,
-      effectiveContrast,
-      0,
-      0,
-      intercept,
-      0,
-      0,
-      effectiveContrast,
-      0,
-      intercept,
-      0,
-      0,
-      0,
-      1,
-      0,
-    ];
+  Widget _buildLoadError(String message) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            const Icon(Icons.broken_image_outlined, size: 56),
+            const SizedBox(height: 12),
+            Text(message, textAlign: TextAlign.center),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildPreview(Uint8List preview) {
+    // The tone curve is rendered by the GPU through the exact same gain/offset
+    // pair the export path uses, so the preview faithfully represents the file
+    // that will be written.
     return ColorFiltered(
-      colorFilter: ColorFilter.matrix(_previewColorMatrix()),
+      colorFilter: ColorFilter.matrix(_adjustments.colorMatrix),
       child: ExtendedImage.memory(
         preview,
         fit: BoxFit.contain,
@@ -580,6 +451,10 @@ class _ImageEditorScreenState extends ConsumerState<ImageEditorScreen> {
           cropRectPadding: const EdgeInsets.all(20),
           hitTestSize: 32,
           initCropRectType: InitCropRectType.imageRect,
+          // Fixed handle colours keep the crop layer readable even when the
+          // tone curve pushes the underlying image to black or white.
+          cornerColor: Colors.white,
+          lineColor: Colors.white70,
         ),
       ),
     );

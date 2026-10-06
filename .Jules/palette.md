@@ -1,3 +1,8 @@
+> **⚠️ وثيقة تاريخية (Superseded):** يصف هذا الملف مراجعة/بنية إصدار سابق من التطبيق
+> ولم يعد مطابقاً للكود الحالي. التقرير المعتمد والحديث هو
+> [`docs/AUDIT_REPORT_AR.md`](../docs/AUDIT_REPORT_AR.md).
+> تم الاحتفاظ به للمرجعية التاريخية فقط.
+
 ## $(date +%Y-%m-%d) - Scale Animation on Interactive Buttons
 - **Constraint**: When using `AnimatedScale` wrapped around a Flutter interactive button (e.g., `ElevatedButton`, `TextButton`, `IconButton`) to create a tap-down effect, a wrapper `GestureDetector` mapping `onTapDown`/`onTapUp` will often fail to trigger the scale visual because the inner button's internal `InkWell` captures the gesture focus in the gesture arena, leading to immediate `onTapCancel` on the outer `GestureDetector`.
 - **Solution**: Use `Listener` with `onPointerDown`/`onPointerUp`/`onPointerCancel` instead of `GestureDetector` to wrap the `ElevatedButton`. `Listener` operates on raw pointer events outside the gesture arena, allowing both the tactile scale animation and the button's standard `onPressed` logic (like ripples and function calls) to execute simultaneously. Extracting the scale state into a dedicated `StatefulWidget` wrapper (`_ScalingButton`) ensures reusability and isolated state updates.

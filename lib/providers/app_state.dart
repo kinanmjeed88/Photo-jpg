@@ -3,10 +3,11 @@ import 'dart:math' as math;
 import 'dart:ui' show Offset;
 
 import 'package:flutter/foundation.dart';
-import 'package:image/image.dart' as img;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../constants/app_constants.dart';
+import '../services/app_settings_store.dart';
+import '../services/image_pipeline.dart';
 
 enum DisplayMethod { onePage, twoPages, frontOnly }
 
@@ -38,12 +39,20 @@ class DocumentInput {
 class BatchAddResult {
   const BatchAddResult({
     this.addedDocuments = const <ScannedDocument>[],
+    this.overflowInputs = const <DocumentInput>[],
     this.overflowFiles = const <File>[],
     this.failedFiles = const <File>[],
     this.skippedFiles = const <File>[],
   });
 
   final List<ScannedDocument> addedDocuments;
+
+  /// Inputs that did not fit on the current page, kept as full [DocumentInput]
+  /// values so a follow-up placement on a new page preserves the detected type
+  /// and the original source path instead of falling back to a guessed type.
+  final List<DocumentInput> overflowInputs;
+
+  /// Convenience projection of [overflowInputs] used by the UI for messaging.
   final List<File> overflowFiles;
   final List<File> failedFiles;
   final List<File> skippedFiles;
@@ -182,7 +191,7 @@ class ScannedDocumentsNotifier
   ) async {
     final working = _copyState(state);
     final added = <ScannedDocument>[];
-    final overflow = <File>[];
+    final overflow = <DocumentInput>[];
     final failed = <File>[];
     final skipped = <File>[];
 
@@ -226,7 +235,7 @@ class ScannedDocumentsNotifier
         if (outcome == _PlacementOutcome.added) {
           added.add(document);
         } else {
-          overflow.add(input.file);
+          overflow.add(input);
         }
       } catch (_) {
         failed.add(input.file);
@@ -236,7 +245,8 @@ class ScannedDocumentsNotifier
     state = _freeze(working);
     return BatchAddResult(
       addedDocuments: List.unmodifiable(added),
-      overflowFiles: List.unmodifiable(overflow),
+      overflowInputs: List.unmodifiable(overflow),
+      overflowFiles: List.unmodifiable(overflow.map((input) => input.file)),
       failedFiles: List.unmodifiable(failed),
       skippedFiles: List.unmodifiable(skipped),
     );
@@ -332,6 +342,78 @@ class ScannedDocumentsNotifier
       rotationAngle: rotationAngle,
       scale: scale,
     );
+  }
+
+  /// Swaps the image behind an existing document and re-fits its layout box.
+  ///
+  /// A crop or an edit changes the pixel dimensions, so the box has to follow
+  /// the new aspect ratio: the canvas draws the frame around the *box*, so
+  /// keeping an outdated box would letterbox the image inside a frame that no
+  /// longer matches it (and the PDF would place that oversized box too).
+  ///
+  /// The refit is area preserving and keeps the document's centre, so a
+  /// document the user scaled or placed by hand stays where it was; the result
+  /// is always inside the A4 guide. [rotationAngle] is respected, because a
+  /// quarter turn swaps the box's width and height.
+  void replaceDocumentImage(
+    String documentId, {
+    required File file,
+    required double originalWidth,
+    required double originalHeight,
+  }) {
+    final location = findDocument(documentId);
+    if (location == null) return;
+    final document = location.document;
+
+    final safeWidth = originalWidth > 0 ? originalWidth : 1.0;
+    final safeHeight = originalHeight > 0 ? originalHeight : 1.0;
+    final naturalAspect = safeWidth / safeHeight;
+    final rotated = document.rotationAngle % 180 != 0;
+    final aspect = rotated ? 1 / naturalAspect : naturalAspect;
+
+    final isA4 = document.type == DocumentType.a4Document;
+    final displayedWidth = document.width * document.scale;
+    final displayedHeight = document.height * document.scale;
+    final displayedArea = displayedWidth * displayedHeight;
+
+    final maxFit = _fitSize(
+      aspectRatio: aspect,
+      maxWidth: isA4 ? AppConstants.kA4GuideWidth : _gridCellWidth,
+      maxHeight: isA4 ? AppConstants.kA4GuideHeight : _gridCellHeight,
+    );
+    final maxArea = maxFit.$1 * maxFit.$2;
+    final factor = (maxArea <= 0 || displayedArea <= 0)
+        ? 1.0
+        : math.sqrt(displayedArea / maxArea).clamp(0.15, 1.0).toDouble();
+    final targetWidth = maxFit.$1 * factor;
+    final targetHeight = maxFit.$2 * factor;
+
+    final centerX = document.dx + (displayedWidth / 2);
+    final centerY = document.dy + (displayedHeight / 2);
+
+    final updated = document.copyWith(
+      file: file,
+      originalWidth: safeWidth,
+      originalHeight: safeHeight,
+      dx: AppConstants.clampToGuideX(centerX - (targetWidth / 2), targetWidth),
+      dy: AppConstants.clampToGuideY(
+        centerY - (targetHeight / 2),
+        targetHeight,
+      ),
+      width: targetWidth,
+      height: targetHeight,
+      rotationAngle: document.rotationAngle,
+      scale: 1,
+    );
+
+    // One state write: the canvas never renders the new box with the old image.
+    final working = _copyState(state);
+    final page = working[location.pageIndex];
+    if (page == null) return;
+    final index = page.indexWhere((candidate) => candidate.id == documentId);
+    if (index < 0) return;
+    page[index] = updated;
+    state = _freeze(working);
   }
 
   void moveDocumentToTop(String documentId) {
@@ -510,12 +592,14 @@ class ScannedDocumentsNotifier
     state = _freeze(_copyState(documents));
   }
 
-  Future<(double, double)?> _readImageDimensions(File file) async {
-    final image = img.decodeImage(await file.readAsBytes());
-    return image == null
-        ? null
-        : (image.width.toDouble(), image.height.toDouble());
-  }
+  /// Reads the *displayed* pixel dimensions of [file].
+  ///
+  /// Decoding a full-resolution photo on the UI isolate is what made adding a
+  /// batch of images stutter, so the work happens in a background isolate and
+  /// EXIF orientation is baked in first: an un-oriented measurement would give
+  /// every rotated photo the wrong aspect box.
+  Future<(double, double)?> _readImageDimensions(File file) =>
+      readOrientedDimensions(file);
 
   bool _hasAnyDocument(Map<int, List<ScannedDocument>> pages) {
     return pages.values.any((documents) => documents.isNotEmpty);
@@ -569,9 +653,12 @@ class AppState {
     this.hasA4Document = false,
     this.displayMethod = DisplayMethod.onePage,
     this.addFrame = false,
-    this.fileName = 'مستمسكاتي',
+    this.fileName = defaultFileName,
     this.smartRecognition = false,
   });
+
+  /// Used when the user never renamed the output file.
+  static const String defaultFileName = 'مستمسكاتي';
 
   final bool hasNationalId;
   final bool hasHousingCard;
@@ -605,6 +692,68 @@ class AppState {
       fileName: fileName ?? this.fileName,
       smartRecognition: smartRecognition ?? this.smartRecognition,
     );
+  }
+
+  /// The name to use for a generated file.
+  ///
+  /// The settings field stores exactly what the user typed (rewriting it under
+  /// the cursor was the old bug), so the documented default is applied here at
+  /// the moment the name is actually consumed.
+  String get effectiveFileName {
+    final trimmed = fileName.trim();
+    return trimmed.isEmpty ? defaultFileName : trimmed;
+  }
+
+  /// Serialises the user's scanning preferences.
+  ///
+  /// Layout and scanned pages are intentionally not part of this payload: the
+  /// work images live in the platform cache directory, so persisting a layout
+  /// that points at them would restore broken documents after a cache purge.
+  Map<String, Object?> toJson() => <String, Object?>{
+    'hasNationalId': hasNationalId,
+    'hasHousingCard': hasHousingCard,
+    'hasRationCard': hasRationCard,
+    'hasPassport': hasPassport,
+    'hasA4Document': hasA4Document,
+    'displayMethod': displayMethod.name,
+    'addFrame': addFrame,
+    'fileName': fileName,
+    'smartRecognition': smartRecognition,
+  };
+
+  /// Rebuilds a state from [json], falling back per field for anything that is
+  /// missing or of the wrong type (an older or partially written payload must
+  /// never throw during start-up).
+  factory AppState.fromJson(Map<String, Object?> json) {
+    final storedName = json['fileName'];
+    final fileName = storedName is String && storedName.trim().isNotEmpty
+        ? storedName.trim()
+        : defaultFileName;
+    final storedMethod = json['displayMethod'];
+    return AppState(
+      hasNationalId: _boolValue(json['hasNationalId']),
+      hasHousingCard: _boolValue(json['hasHousingCard']),
+      hasRationCard: _boolValue(json['hasRationCard']),
+      hasPassport: _boolValue(json['hasPassport']),
+      hasA4Document: _boolValue(json['hasA4Document']),
+      displayMethod: _displayMethodFromName(
+        storedMethod is String ? storedMethod : null,
+      ),
+      addFrame: _boolValue(json['addFrame']),
+      fileName: fileName,
+      smartRecognition: _boolValue(json['smartRecognition']),
+    );
+  }
+
+  /// Reads a stored boolean, treating anything unexpected as `false` instead of
+  /// throwing a cast error.
+  static bool _boolValue(Object? value) => value is bool ? value : false;
+
+  static DisplayMethod _displayMethodFromName(String? name) {
+    for (final method in DisplayMethod.values) {
+      if (method.name == name) return method;
+    }
+    return DisplayMethod.onePage;
   }
 
   /// Returns the exact detector selection without collapsing mixed choices.
@@ -643,29 +792,65 @@ class AppState {
 }
 
 class AppStateNotifier extends Notifier<AppState> {
+  final AppSettingsStore _store = AppSettingsStore();
+
+  /// True once the user changed something in this session.
+  ///
+  /// Needed to settle the start-up race: the preferences are read
+  /// asynchronously, and a change made before that read finishes must not be
+  /// overwritten by the older stored value.
+  bool _hasLocalChanges = false;
+
   @override
-  AppState build() => const AppState();
+  AppState build() {
+    ref.onDispose(_store.dispose);
+    // Persistence stays disabled until [restorePersistedState] runs, so unit
+    // tests and headless callers never touch a platform channel.
+    return const AppState();
+  }
+
+  /// Loads the preferences that were persisted by a previous launch.
+  Future<void> restorePersistedState() async {
+    final payload = await _store.loadPayload();
+    if (_hasLocalChanges) {
+      // The user interacted while the stored values were loading: their choice
+      // is authoritative, so it is written instead of being replaced.
+      await _store.flush();
+      return;
+    }
+    if (payload == null) return;
+    state = AppState.fromJson(payload);
+  }
+
+  /// Persists everything that is waiting to be written.
+  Future<void> flushPersistedState() => _store.flush();
+
+  void _update(AppState next) {
+    _hasLocalChanges = true;
+    state = next;
+    _store.save(next.toJson());
+  }
 
   void toggleNationalId(bool? value) =>
-      state = state.copyWith(hasNationalId: value ?? false);
+      _update(state.copyWith(hasNationalId: value ?? false));
   void toggleHousingCard(bool? value) =>
-      state = state.copyWith(hasHousingCard: value ?? false);
+      _update(state.copyWith(hasHousingCard: value ?? false));
   void toggleRationCard(bool? value) =>
-      state = state.copyWith(hasRationCard: value ?? false);
+      _update(state.copyWith(hasRationCard: value ?? false));
   void togglePassport(bool? value) =>
-      state = state.copyWith(hasPassport: value ?? false);
+      _update(state.copyWith(hasPassport: value ?? false));
   void toggleA4Document(bool? value) =>
-      state = state.copyWith(hasA4Document: value ?? false);
+      _update(state.copyWith(hasA4Document: value ?? false));
 
   void updateDisplayMethod(DisplayMethod method) =>
-      state = state.copyWith(displayMethod: method);
+      _update(state.copyWith(displayMethod: method));
 
-  void toggleAddFrame(bool value) => state = state.copyWith(addFrame: value);
+  void toggleAddFrame(bool value) => _update(state.copyWith(addFrame: value));
 
-  void updateFileName(String name) => state = state.copyWith(fileName: name);
+  void updateFileName(String name) => _update(state.copyWith(fileName: name));
 
   void toggleSmartRecognition(bool value) =>
-      state = state.copyWith(smartRecognition: value);
+      _update(state.copyWith(smartRecognition: value));
 }
 
 final appStateProvider = NotifierProvider<AppStateNotifier, AppState>(

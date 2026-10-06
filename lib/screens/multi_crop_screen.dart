@@ -1,15 +1,26 @@
 import 'dart:io';
 import 'dart:isolate';
-import 'package:flutter/material.dart';
-import 'package:opencv_dart/opencv_dart.dart' as cv;
 import 'dart:math' as math;
 
+import 'package:flutter/material.dart';
+import 'package:opencv_dart/opencv_dart.dart' as cv;
+
+import '../services/image_pipeline.dart';
 import '../services/scanner_service.dart';
 import '../services/temporary_image_store.dart';
 
+/// Minimum crop box edge in layout pixels. Matches the documented 48 px touch
+/// target, so a box always stays big enough to grab and never collapses into an
+/// invisible dot.
+const double _minimumCropBoxSize = 48;
+
 class CropRect {
-  double left, top, width, height;
   CropRect(this.left, this.top, this.width, this.height);
+
+  double left;
+  double top;
+  double width;
+  double height;
 }
 
 Future<List<File>> _runMultiCropIsolate(Map<String, dynamic> args) {
@@ -104,19 +115,56 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
   }
 
   Future<void> _loadImageSize() async {
-    final decodedImage = await decodeImageFromList(
-      await widget.imageFile.readAsBytes(),
-    );
+    // Measured off the UI isolate. The file was normalised at intake, so its
+    // pixel grid matches what `Image` paints and what OpenCV decodes.
+    final dimensions = await readOrientedDimensions(widget.imageFile);
     if (!mounted) return;
-    setState(() {
-      _imageSize = Size(
-        decodedImage.width.toDouble(),
-        decodedImage.height.toDouble(),
-      );
-    });
+    if (dimensions != null) {
+      setState(() {
+        _imageSize = Size(dimensions.$1, dimensions.$2);
+      });
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _seedSuggestedRegions();
     });
+  }
+
+  /// Size of the drawn image in layout coordinates, or `null` before layout.
+  Size? get _displayedSize {
+    final box = _imageKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return null;
+    final size = box.size;
+    return size.width > 0 && size.height > 0 ? size : null;
+  }
+
+  /// Keeps a crop box inside the drawn image.
+  void _moveCropBox(CropRect rect, Offset delta) {
+    final bounds = _displayedSize;
+    if (bounds == null) return;
+    final maxLeft = math.max(0.0, bounds.width - rect.width);
+    final maxTop = math.max(0.0, bounds.height - rect.height);
+    rect.left = (rect.left + delta.dx).clamp(0.0, maxLeft).toDouble();
+    rect.top = (rect.top + delta.dy).clamp(0.0, maxTop).toDouble();
+  }
+
+  /// Resizes a crop box without letting it leave the image or collapse.
+  void _resizeCropBox(CropRect rect, Offset delta) {
+    final bounds = _displayedSize;
+    if (bounds == null) return;
+    final availableWidth = math.max(
+      _minimumCropBoxSize,
+      bounds.width - rect.left,
+    );
+    final availableHeight = math.max(
+      _minimumCropBoxSize,
+      bounds.height - rect.top,
+    );
+    rect.width = (rect.width + delta.dx)
+        .clamp(_minimumCropBoxSize, availableWidth)
+        .toDouble();
+    rect.height = (rect.height + delta.dy)
+        .clamp(_minimumCropBoxSize, availableHeight)
+        .toDouble();
   }
 
   void _seedSuggestedRegions() {
@@ -134,16 +182,35 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
       });
       return;
     }
-    final scaleX = imageBox.size.width / _imageSize!.width;
-    final scaleY = imageBox.size.height / _imageSize!.height;
+    final displayWidth = imageBox.size.width;
+    final displayHeight = imageBox.size.height;
+    final scaleX = displayWidth / _imageSize!.width;
+    final scaleY = displayHeight / _imageSize!.height;
     final seeded = _suggestedRegions
         .take(_maxCropBoxes)
         .map((region) {
+          // Every clamp has a provably valid range: the origin leaves room for
+          // the minimum box, and each size keeps that minimum while stopping at
+          // the image edge. `num.clamp` throws when its bounds are inverted.
+          final maxLeft = math.max(0.0, displayWidth - _minimumCropBoxSize);
+          final maxTop = math.max(0.0, displayHeight - _minimumCropBoxSize);
+          final left = (region.left * scaleX).clamp(0.0, maxLeft).toDouble();
+          final top = (region.top * scaleY).clamp(0.0, maxTop).toDouble();
           return CropRect(
-            region.left * scaleX,
-            region.top * scaleY,
-            region.width * scaleX,
-            region.height * scaleY,
+            left,
+            top,
+            (region.width * scaleX)
+                .clamp(
+                  _minimumCropBoxSize,
+                  math.max(_minimumCropBoxSize, displayWidth - left),
+                )
+                .toDouble(),
+            (region.height * scaleY)
+                .clamp(
+                  _minimumCropBoxSize,
+                  math.max(_minimumCropBoxSize, displayHeight - top),
+                )
+                .toDouble(),
           );
         })
         .toList(growable: false);
@@ -159,10 +226,44 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
       );
       return;
     }
+    final bounds = _displayedSize;
     setState(() {
-      // Default to center 200x200
-      _cropRects.add(CropRect(50, 50, 200, 200));
+      if (bounds == null) {
+        _cropRects.add(
+          CropRect(
+            _minimumCropBoxSize * 2,
+            _minimumCropBoxSize * 2,
+            _minimumCropBoxSize * 4,
+            _minimumCropBoxSize * 4,
+          ),
+        );
+        return;
+      }
+      // A centred box is what the user almost always wants as a starting point.
+      final width = math.max(_minimumCropBoxSize, bounds.width * 0.5);
+      final height = math.max(_minimumCropBoxSize, bounds.height * 0.5);
+      _cropRects.add(
+        CropRect(
+          ((bounds.width - width) / 2)
+              .clamp(0.0, math.max(0.0, bounds.width - width))
+              .toDouble(),
+          ((bounds.height - height) / 2)
+              .clamp(0.0, math.max(0.0, bounds.height - height))
+              .toDouble(),
+          width,
+          height,
+        ),
+      );
     });
+  }
+
+  /// Repaints after a resize drag.
+  ///
+  /// The crop boxes are plain mutable state owned by this screen, so the overlay
+  /// only follows a drag through `setState`; keeping the callback named also
+  /// avoids a deeply nested inline closure on the marker widget.
+  void _onResize(CropRect rect, Offset delta) {
+    setState(() => _resizeCropBox(rect, delta));
   }
 
   void _removeCropBox(int index) {
@@ -367,12 +468,12 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
                               left: rect.left,
                               top: rect.top,
                               child: GestureDetector(
-                                onPanUpdate: (details) {
-                                  setState(() {
-                                    rect.left += details.delta.dx;
-                                    rect.top += details.delta.dy;
-                                  });
-                                },
+                                // The box is moved through the clamped helper
+                                // instead of raw deltas, so it can never be
+                                // dragged off the image.
+                                onPanUpdate: (details) => setState(
+                                  () => _moveCropBox(rect, details.delta),
+                                ),
                                 child: Container(
                                   width: rect.width,
                                   height: rect.height,
@@ -415,18 +516,11 @@ class _MultiCropScreenState extends State<MultiCropScreen> {
                                         right: -30,
                                         child: GestureDetector(
                                           behavior: HitTestBehavior.opaque,
-                                          onPanUpdate: (details) {
-                                            setState(() {
-                                              rect.width = math.max(
-                                                10,
-                                                rect.width + details.delta.dx,
-                                              );
-                                              rect.height = math.max(
-                                                10,
-                                                rect.height + details.delta.dy,
-                                              );
-                                            });
-                                          },
+                                          // Resizing keeps the documented
+                                          // 48 px minimum and stops at the
+                                          // image edge.
+                                          onPanUpdate: (details) =>
+                                              _onResize(rect, details.delta),
                                           child: Container(
                                             width: 60,
                                             height: 60,

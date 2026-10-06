@@ -8,6 +8,31 @@ import '../providers/app_state.dart';
 
 enum CrossPageDirection { left, right, up, down }
 
+/// Shown when a document image can no longer be read from disk.
+class _MissingImagePlaceholder extends StatelessWidget {
+  const _MissingImagePlaceholder();
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: const Color(0xFFE2E8F0),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: const <Widget>[
+            Icon(Icons.image_not_supported_outlined, color: Colors.blueGrey),
+            SizedBox(height: 4),
+            Text(
+              'الصورة غير متوفرة',
+              style: TextStyle(fontSize: 11, color: Colors.blueGrey),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class DraggableResizableDocument extends StatefulWidget {
   const DraggableResizableDocument({
     super.key,
@@ -224,6 +249,19 @@ class _DraggableResizableDocumentState
         ? 1.0
         : widget.document.originalWidth / widget.document.originalHeight;
 
+    // Decode size for the on-screen thumbnail. A 12 MP phone capture occupies
+    // roughly 48 MB as a decoded bitmap, so placing four of them would exhaust
+    // the heap on a mid-range device. The decode is capped to what the canvas
+    // can display. Only one axis is handed to `Image.file` so the decoder keeps
+    // the source aspect ratio.
+    final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
+    final cacheTarget = (math.max(scaledWidth, scaledHeight) * devicePixelRatio)
+        .round()
+        .clamp(240, 3200)
+        .toInt();
+    final isSourceLandscape =
+        widget.document.originalWidth >= widget.document.originalHeight;
+
     return Positioned(
       left: _dx,
       top: _dy,
@@ -255,6 +293,13 @@ class _DraggableResizableDocumentState
                     child: Image.file(
                       widget.document.file,
                       fit: BoxFit.contain,
+                      cacheWidth: isSourceLandscape ? cacheTarget : null,
+                      cacheHeight: isSourceLandscape ? null : cacheTarget,
+                      // A managed work file can be gone (cleanup, process
+                      // restore). Show a placeholder instead of a red error box
+                      // so the rest of the page stays usable.
+                      errorBuilder: (context, error, stackTrace) =>
+                          const _MissingImagePlaceholder(),
                     ),
                   ),
                 ),
